@@ -1,0 +1,154 @@
+// src/features/documents/documents.controller.ts
+import { Request, Response } from 'express';
+import { asyncHandler } from '../../utils/asyncHandler';
+import { AppError, sendSuccess } from '../../utils/response';
+import { DocumentService } from './documents.service';
+import {
+  createComposedDocumentSchema,
+  createUploadDocumentSchema,
+  updateDocumentSchema,
+  documentFiltersSchema,
+  documentIdSchema,
+  annotationIdSchema,
+  createAnnotationSchema,
+  markDocumentSchema,
+} from './documents.validator';
+
+export const documentController = {
+
+  // ── Create ────────────────────────────────────────────────────────────────────
+
+  createComposed: asyncHandler(async (req: Request, res: Response) => {
+    const result = createComposedDocumentSchema.safeParse({ body: req.body });
+    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
+    const doc = await DocumentService.createComposed(result.data.body, req.user!.id);
+    return sendSuccess(res, doc, 'Document created successfully', 201);
+  }),
+
+  createUpload: asyncHandler(async (req: Request, res: Response) => {
+    const file = req.file;
+    if (!file) throw new AppError(400, 'A file is required for this document type');
+    const result = createUploadDocumentSchema.safeParse({ body: req.body });
+    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
+    const doc = await DocumentService.createUpload(result.data.body, file, req.user!.id);
+    return sendSuccess(res, doc, 'Document uploaded successfully', 201);
+  }),
+
+  // ── Read ──────────────────────────────────────────────────────────────────────
+
+  getAll: asyncHandler(async (req: Request, res: Response) => {
+    const result = documentFiltersSchema.safeParse({ query: req.query });
+    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid filters');
+    const docs = await DocumentService.findAll(result.data.query, req.user!.id);
+    return sendSuccess(res, docs, 'Documents retrieved successfully');
+  }),
+
+  getById: asyncHandler(async (req: Request, res: Response) => {
+    const result = documentIdSchema.safeParse({ params: req.params });
+    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    const doc = await DocumentService.findByIdWithAnnotations(result.data.params.id);
+    if (!doc) throw new AppError(404, 'Document not found');
+    return sendSuccess(res, doc, 'Document retrieved successfully');
+  }),
+
+  getMyMarked: asyncHandler(async (req: Request, res: Response) => {
+    const docs = await DocumentService.getMyMarked(req.user!.id);
+    return sendSuccess(res, docs, 'Marked documents retrieved');
+  }),
+
+  getMarkHistory: asyncHandler(async (req: Request, res: Response) => {
+    const result = documentIdSchema.safeParse({ params: req.params });
+    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    const history = await DocumentService.getMarkHistory(result.data.params.id);
+    return sendSuccess(res, history, 'Mark history retrieved');
+  }),
+
+  // ── Update ────────────────────────────────────────────────────────────────────
+
+  update: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = documentIdSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    const bodyResult = updateDocumentSchema.safeParse({ body: req.body });
+    if (!bodyResult.success) throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+    const doc = await DocumentService.update(paramsResult.data.params.id, bodyResult.data.body);
+    return sendSuccess(res, doc, 'Document updated successfully');
+  }),
+
+  // ── Lifecycle ─────────────────────────────────────────────────────────────────
+
+  sign: asyncHandler(async (req: Request, res: Response) => {
+    const result = documentIdSchema.safeParse({ params: req.params });
+    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    const doc = await DocumentService.sign(result.data.params.id, req.user!.id);
+    return sendSuccess(res, doc, 'Document signed successfully');
+  }),
+
+  send: asyncHandler(async (req: Request, res: Response) => {
+    const result = documentIdSchema.safeParse({ params: req.params });
+    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    const doc = await DocumentService.send(result.data.params.id);
+    return sendSuccess(res, doc, 'Document sent and filed successfully');
+  }),
+
+  delete: asyncHandler(async (req: Request, res: Response) => {
+    const result = documentIdSchema.safeParse({ params: req.params });
+    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    await DocumentService.softDelete(result.data.params.id);
+    return sendSuccess(res, null, 'Document deleted successfully');
+  }),
+
+  // ── Marking to Departments ─────────────────────────────────────────────────
+
+  markDocument: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = documentIdSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    const bodyResult = markDocumentSchema.safeParse({ body: req.body });
+    if (!bodyResult.success) throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid mark data');
+    const doc = await DocumentService.markDocument(
+      paramsResult.data.params.id,
+      bodyResult.data.body,
+      req.user!.id
+    );
+    return sendSuccess(res, doc, 'Document marked successfully');
+  }),
+
+  acknowledgeMark: asyncHandler(async (req: Request, res: Response) => {
+    const result = documentIdSchema.safeParse({ params: req.params });
+    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    const doc = await DocumentService.acknowledgeMark(result.data.params.id, req.user!.id);
+    return sendSuccess(res, doc, 'Document acknowledged');
+  }),
+
+  completeMark: asyncHandler(async (req: Request, res: Response) => {
+    const result = documentIdSchema.safeParse({ params: req.params });
+    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    const doc = await DocumentService.completeMark(result.data.params.id, req.user!.id);
+    return sendSuccess(res, doc, 'Document marked as completed');
+  }),
+
+  // ── Annotations ───────────────────────────────────────────────────────────────
+
+  addAnnotation: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = documentIdSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    const bodyResult = createAnnotationSchema.safeParse({ body: req.body });
+    if (!bodyResult.success) throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid annotation');
+    const annotation = await DocumentService.addAnnotation(
+      paramsResult.data.params.id,
+      bodyResult.data.body,
+      req.user!.id
+    );
+    return sendSuccess(res, annotation, 'Annotation added successfully', 201);
+  }),
+
+  deleteAnnotation: asyncHandler(async (req: Request, res: Response) => {
+    const result = annotationIdSchema.safeParse({ params: req.params });
+    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    await DocumentService.deleteAnnotation(
+      result.data.params.id,
+      result.data.params.annotationId,
+      req.user!.id
+    );
+    return sendSuccess(res, null, 'Annotation deleted successfully');
+  }),
+};

@@ -86,25 +86,32 @@ export const calendarController = {
   // ── Google OAuth Callback (no auth middleware — browser redirect from Google) ──
 
   googleCallback: asyncHandler(async (req: Request, res: Response) => {
-    const { code, state } = req.query;
+  const { code, state } = req.query;
 
-    if (!code || typeof code !== 'string') {
-      throw new AppError(400, 'Authorization code is required');
-    }
-    if (!state || typeof state !== 'string') {
-      throw new AppError(400, 'Missing state parameter — cannot identify user');
-    }
+  console.log('📥 Google callback received');
+  console.log('   code:', code ? '✅ present' : '❌ missing');
+  console.log('   state:', state);
 
-    // Decode userId from state
-    const userId = googleCalendarService.decodeState(state);
+  if (!code || typeof code !== 'string') {
+    throw new AppError(400, 'Authorization code is required');
+  }
+  if (!state || typeof state !== 'string') {
+    throw new AppError(400, 'Missing state parameter');
+  }
 
-    const tokens = await googleCalendarService.getTokens(code);
-    await googleCalendarService.saveUserSettings(userId, tokens);
+  const userId = googleCalendarService.decodeState(state);
+  console.log('   decoded userId:', userId);
 
-    // Redirect user back to the frontend calendar page
-    const frontendUrl = process.env.CLIENT_URL || 'http://localhost:5173';
-    res.redirect(`${frontendUrl}/calendar?connected=true`);
-  }),
+  const tokens = await googleCalendarService.getTokens(code);
+  console.log('   tokens received:', !!tokens.access_token, !!tokens.refresh_token);
+
+  await googleCalendarService.saveUserSettings(userId, tokens);
+  console.log('   ✅ settings saved for user:', userId);
+
+  const frontendUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+  console.log('   redirecting to:', `${frontendUrl}/calendar?connected=true`);
+  res.redirect(`${frontendUrl}/calendar?connected=true`);
+}),
 
   // ── Disconnect Google Calendar ────────────────────────────────────────────────
 

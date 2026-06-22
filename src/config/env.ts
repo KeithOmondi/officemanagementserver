@@ -11,11 +11,12 @@ const envSchema = z.object({
   PORT:     z.coerce.number().default(8000),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
 
+  // URLs
+  API_URL:    z.string().min(1, { message: 'API_URL is required (e.g. http://localhost:8000)' }),
+  CLIENT_URL: z.string().min(1, { message: 'CLIENT_URL is required (e.g. http://localhost:5173)' }),
+
   // Database
   DATABASE_URL: z.string().url({ message: 'DATABASE_URL must be a valid connection string' }),
-
-  // Client
-  CLIENT_URL: z.string(),
 
   // JWT
   JWT_SECRET:         z.string().min(8, { message: 'JWT_SECRET must be at least 8 characters long' }),
@@ -32,9 +33,9 @@ const envSchema = z.object({
   CLOUDINARY_API_SECRET:  z.string().min(1, { message: 'CLOUDINARY_API_SECRET is required' }),
 
   // Google Calendar
-  GOOGLE_CLIENT_ID:     z.string().min(1,  { message: 'GOOGLE_CLIENT_ID is required for Google Calendar integration' }),
-  GOOGLE_CLIENT_SECRET: z.string().min(1,  { message: 'GOOGLE_CLIENT_SECRET is required for Google Calendar integration' }),
-  GOOGLE_REDIRECT_URI:  z.string().min(1,  { message: 'GOOGLE_REDIRECT_URI is required (e.g. http://localhost:8000/api/calendar/google/callback)' }),
+  GOOGLE_CLIENT_ID:     z.string().min(1, { message: 'GOOGLE_CLIENT_ID is required for Google Calendar integration' }),
+  GOOGLE_CLIENT_SECRET: z.string().min(1, { message: 'GOOGLE_CLIENT_SECRET is required for Google Calendar integration' }),
+  GOOGLE_REDIRECT_URI:  z.string().min(1, { message: 'GOOGLE_REDIRECT_URI is required (e.g. http://localhost:8000/api/v1/calendar/google/callback)' }),
 });
 
 const parseEnv = () => {

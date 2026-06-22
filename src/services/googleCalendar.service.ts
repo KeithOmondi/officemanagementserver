@@ -158,19 +158,20 @@ export class GoogleCalendarService {
     userId: string,
     data: { access_token: string; refresh_token: string; expiry_date: number }
   ): Promise<void> {
-    await pool.query(
-      `INSERT INTO user_calendar_settings
-         (user_id, google_access_token, google_refresh_token, google_token_expiry, is_connected)
-       VALUES ($1, $2, $3, $4, true)
-       ON CONFLICT (user_id)
-       DO UPDATE SET
-         google_access_token  = $2,
-         google_refresh_token = $3,
-         google_token_expiry  = $4,
-         is_connected         = true,
-         updated_at           = NOW()`,
-      [userId, data.access_token, data.refresh_token, new Date(data.expiry_date)]
-    );
+     await pool.query(
+  `INSERT INTO user_calendar_settings
+     (user_id, google_access_token, google_refresh_token, google_token_expiry, is_connected, sync_enabled)
+   VALUES ($1, $2, $3, $4, true, true)
+   ON CONFLICT (user_id)
+   DO UPDATE SET
+     google_access_token  = $2,
+     google_refresh_token = $3,
+     google_token_expiry  = $4,
+     is_connected         = true,
+     sync_enabled         = true,
+     updated_at           = NOW()`,
+  [userId, data.access_token, data.refresh_token, new Date(data.expiry_date)]
+);
   }
 
   // ── Disconnect ───────────────────────────────────────────────────────────────
@@ -297,28 +298,44 @@ export class GoogleCalendarService {
   // ── Sync from Google ─────────────────────────────────────────────────────────
 
   async syncEventsFromGoogle(
-    userId: string,
-    calendarId: string = 'primary',
-    timeMin?: Date,
-    timeMax?: Date
-  ): Promise<CalendarEvent[]> {
+  userId: string,
+  calendarId: string = 'primary',
+  timeMin?: Date,
+  timeMax?: Date
+): Promise<CalendarEvent[]> {
+  try {
     await this.setCredentials(userId);
-    const calendar = this.getCalendar();
+    console.log('✅ Credentials set for user:', userId);
+  } catch (err: any) {
+    console.error('❌ setCredentials failed:', err.message);
+    throw err;
+  }
 
-    const response = await calendar.events.list({
+  const calendar = this.getCalendar();
+
+  let response;
+  try {
+    response = await calendar.events.list({
       calendarId,
-      timeMin:       timeMin?.toISOString() || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-      timeMax:       timeMax?.toISOString() || new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
-      singleEvents:  true,
-      orderBy:       'startTime',
+      timeMin:      timeMin?.toISOString() || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
+      timeMax:      timeMax?.toISOString() || new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
+      singleEvents: true,
+      orderBy:      'startTime',
     });
+    console.log('✅ Google events fetched:', response.data.items?.length ?? 0);
+  } catch (err: any) {
+    console.error('❌ Google API call failed:', err.message);
+    console.error('   Response:', JSON.stringify(err.response?.data, null, 2));
+    throw err;
+  }
 
-    const events       = response.data.items || [];
-    const syncedEvents: CalendarEvent[] = [];
+  const events = response.data.items || [];
+  const syncedEvents: CalendarEvent[] = [];
 
-    for (const googleEvent of events) {
-      if (!googleEvent.id || !googleEvent.summary) continue;
+  for (const googleEvent of events) {
+    if (!googleEvent.id || !googleEvent.summary) continue;
 
+    try {
       const { rows } = await pool.query(
         `SELECT id FROM calendar_events WHERE google_event_id = $1`,
         [googleEvent.id]
@@ -359,15 +376,20 @@ export class GoogleCalendarService {
       }
 
       syncedEvents.push(eventData);
+    } catch (err: any) {
+      console.error('❌ DB insert/update failed for event:', googleEvent.id, err.message);
+      throw err;
     }
-
-    await pool.query(
-      `UPDATE user_calendar_settings SET last_sync_at = NOW(), updated_at = NOW() WHERE user_id = $1`,
-      [userId]
-    );
-
-    return syncedEvents;
   }
+
+  await pool.query(
+    `UPDATE user_calendar_settings SET last_sync_at = NOW(), updated_at = NOW() WHERE user_id = $1`,
+    [userId]
+  );
+
+  console.log('✅ Sync complete. Total synced:', syncedEvents.length);
+  return syncedEvents;
+}
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
 

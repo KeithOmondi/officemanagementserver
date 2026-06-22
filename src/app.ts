@@ -1,31 +1,32 @@
 import express, { Express, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
-import authRoutes from './features/auth/auth.routes'; // ◄ Imported your new routes
+import authRoutes from './features/auth/auth.routes';
 import userRoutes from './features/users/users.routes';
 import { errorMiddleware } from './middleware/error.middleware';
 import { env } from './config/env';
 import departmentRoutes from './features/departments/departments.routes';
-import documentRoutes from "./features/documents/documents.routes"
+import documentRoutes from './features/documents/documents.routes';
 import streamRouter from './features/stream/stream.route';
 import stationRoutes from './features/stations/stations.routes';
 import registryRoutes from './features/registry/registry.routes';
-import calendarRoutes from "./features/calendar/calendar.routes"
+import calendarRoutes from './features/calendar/calendar.routes';
 
 const app: Express = express();
 
-// Global Middlewares
+// ── Global Middlewares ────────────────────────────────────────────────────────
+
 app.use(
   cors({
     origin: env.CLIENT_URL,
     credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "X-Requested-With",
-      "Accept",
-      "idempotency-key",  
+      'Content-Type',
+      'Authorization',
+      'X-Requested-With',
+      'Accept',
+      'idempotency-key',
     ],
   })
 );
@@ -33,27 +34,50 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-// Core API Routes
-app.get('/', (req: Request, res: Response) => {
+// ── Health check (used by keep-alive ping + uptime monitors) ─────────────────
+
+app.get('/api/v1/health', (_req: Request, res: Response) => {
+  res.json({ status: 'ok', timestamp: new Date() });
+});
+
+// ── Root ──────────────────────────────────────────────────────────────────────
+
+app.get('/', (_req: Request, res: Response) => {
   res.json({ status: 'healthy', message: 'API is running smoothly.' });
 });
 
-// Mount Feature Routers
-app.use('/api/v1/auth', authRoutes); // ◄ Mounted auth endpoints here
-app.use('/api/v1/users', userRoutes);
-app.use('/api/v1/departments', departmentRoutes);
-app.use('/api/v1/documents', documentRoutes);
-app.use('/api/v1/stream', streamRouter);
-app.use('/api/v1/stations', stationRoutes);
-app.use('/api/v1/registry', registryRoutes);
-app.use('/api/v1/calendar', calendarRoutes);
+// ── Feature Routes ────────────────────────────────────────────────────────────
 
-// Fallback for 404/Not Found routes (Must stay below valid routes)
-app.use((req: Request, res: Response, next: NextFunction) => {
+app.use('/api/v1/auth',        authRoutes);
+app.use('/api/v1/users',       userRoutes);
+app.use('/api/v1/departments', departmentRoutes);
+app.use('/api/v1/documents',   documentRoutes);
+app.use('/api/v1/stream',      streamRouter);
+app.use('/api/v1/stations',    stationRoutes);
+app.use('/api/v1/registry',    registryRoutes);
+app.use('/api/v1/calendar',    calendarRoutes);
+
+// ── 404 ───────────────────────────────────────────────────────────────────────
+
+app.use((_req: Request, res: Response, _next: NextFunction) => {
   res.status(404).json({ error: 'Route Not Found' });
 });
 
-// Global error capture tool (Handles AppError, validation errors, etc.)
+// ── Global error handler ──────────────────────────────────────────────────────
+
 app.use(errorMiddleware);
+
+// ── Keep-alive ping (prevents Render free tier from sleeping) ─────────────────
+
+if (env.NODE_ENV === 'production') {
+  setInterval(async () => {
+    try {
+      await fetch(`${env.API_URL}/api/v1/health`);
+      console.log('🏓 Keep-alive ping sent');
+    } catch (err) {
+      console.warn('⚠️ Keep-alive ping failed:', err);
+    }
+  }, 10 * 60 * 1000); // every 10 minutes
+}
 
 export default app;

@@ -11,6 +11,8 @@ import streamRouter from './features/stream/stream.route';
 import stationRoutes from './features/stations/stations.routes';
 import registryRoutes from './features/registry/registry.routes';
 import calendarRoutes from './features/calendar/calendar.routes';
+import dsaRoutes from './features/dsa/dsa.routes';
+import taskRoutes from './features/tasks/task.routes';
 
 const app: Express = express();
 
@@ -56,6 +58,8 @@ app.use('/api/v1/stream',      streamRouter);
 app.use('/api/v1/stations',    stationRoutes);
 app.use('/api/v1/registry',    registryRoutes);
 app.use('/api/v1/calendar',    calendarRoutes);
+app.use('/api/v1/dsa',         dsaRoutes);
+app.use('/api/v1/tasks',       taskRoutes);
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
 

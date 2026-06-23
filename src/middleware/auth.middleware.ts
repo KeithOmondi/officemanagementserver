@@ -56,41 +56,69 @@ export const protect = (req: Request, res: Response, next: NextFunction): void =
 };
 
 /**
- * requireRole — gates a route to users at or above the specified role level.
- * super_admin always passes regardless of the required role.
- *
- * Usage: router.delete('/users/:id', protect, requireRole('dept_head'), ...)
+ * requireRole — gates a route to users with one of the specified roles OR 
+ * users with a role rank higher than the minimum required.
+ * 
+ * @param allowedRoles - Array of roles that are allowed, or a single role
+ * @param requireMinimumRank - If true (default), users with higher rank also pass
+ * 
+ * Usage examples:
+ *   requireRole(['dept_head', 'super_admin'])  // Only these roles
+ *   requireRole('dept_head')                   // Single role
+ *   requireRole(['dept_head'], false)          // Only dept_head, not super_admin
  */
-export const requireRole = (minRole: UserRole) => {
+export const requireRole = (
+  allowedRoles: UserRole | UserRole[], 
+  requireMinimumRank: boolean = true
+) => {
   return (req: Request, res: Response, next: NextFunction): void => {
-    if (!req.user) return next(new AppError(401, 'Authentication required.'));
+    if (!req.user) {
+      return next(new AppError(401, 'Authentication required.'));
+    }
 
     const userRole = req.user.role as UserRole;
-
+    
+    // Check if user role exists in the rank system
     if (!(userRole in ROLE_RANK)) {
       return next(new AppError(403, 'Unrecognised role. Access denied.'));
     }
 
-    if (ROLE_RANK[userRole] < ROLE_RANK[minRole]) {
-      return next(
-        new AppError(403, `This action requires '${minRole}' privileges or above.`)
-      );
+    // Convert to array for consistent handling
+    const roles = Array.isArray(allowedRoles) ? allowedRoles : [allowedRoles];
+
+    // Check if the user's role is explicitly allowed
+    if (roles.includes(userRole)) {
+      return next();
     }
 
-    next();
+    // If requireMinimumRank is true, check if user has a higher rank
+    if (requireMinimumRank) {
+      // Find the minimum rank among allowed roles
+      const minRank = Math.min(...roles.map(role => ROLE_RANK[role]));
+      
+      if (ROLE_RANK[userRole] >= minRank) {
+        return next();
+      }
+    }
+
+    // Access denied
+    const roleNames = roles.join(' or ');
+    return next(
+      new AppError(403, `This action requires ${roleNames} privileges or above.`)
+    );
   };
 };
+
 /**
  * requireSameDept — ensures the acting user belongs to the same department
- * as the resource they are accessing (passed as req.params.departmentId or
- * resolved from a prior middleware into req.resourceDepartmentId).
- *
+ * as the resource they are accessing.
+ * 
  * super_admin bypasses this check entirely.
- *
- * Usage: router.get('/dept/:departmentId/records', protect, requireSameDept, ...)
  */
 export const requireSameDept = (req: Request, res: Response, next: NextFunction): void => {
-  if (!req.user) return next(new AppError(401, 'Authentication required.'));
+  if (!req.user) {
+    return next(new AppError(401, 'Authentication required.'));
+  }
 
   // super_admin sees everything
   if (req.user.role === 'super_admin') return next();
@@ -110,12 +138,11 @@ export const requireSameDept = (req: Request, res: Response, next: NextFunction)
 
 /**
  * requireSuperAdmin — hard gate for system-level operations only.
- * (user creation, role changes, cross-dept reports, audit logs)
- *
- * Usage: router.post('/admin/register', protect, requireSuperAdmin, ...)
  */
 export const requireSuperAdmin = (req: Request, res: Response, next: NextFunction): void => {
-  if (!req.user) return next(new AppError(401, 'Authentication required.'));
+  if (!req.user) {
+    return next(new AppError(401, 'Authentication required.'));
+  }
 
   if (req.user.role !== 'super_admin') {
     return next(new AppError(403, 'Restricted to superadministrators only.'));

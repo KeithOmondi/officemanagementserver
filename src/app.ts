@@ -19,6 +19,8 @@ import signatureRoutes from './features/signature/signature.routes'
 import messagesRoutes from './features/messages/messages.routes';
 import helpDeskRoutes from './features/helpdesk/helpdesk.routes';
 import noticesRoutes from "./features/notices/notices.routes"
+import notificationsRoutes from './features/notifications/notifications.routes';
+import externalLinksRoutes from './features/links/links.routes';
 
 const app: Express = express();
 
@@ -72,6 +74,8 @@ app.use('/api/v1/signature', signatureRoutes);
 app.use('/api/v1/messages', messagesRoutes);
 app.use('/api/v1/helpdesk', helpDeskRoutes);
 app.use('/api/v1/notices', noticesRoutes);
+app.use('/api/v1/notifications', notificationsRoutes);
+app.use('/api/v1/links', externalLinksRoutes);
 
 
 

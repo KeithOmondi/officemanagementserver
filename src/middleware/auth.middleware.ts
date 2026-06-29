@@ -67,48 +67,29 @@ export const protect = (req: Request, res: Response, next: NextFunction): void =
  *   requireRole('dept_head')                   // Single role
  *   requireRole(['dept_head'], false)          // Only dept_head, not super_admin
  */
-export const requireRole = (
-  allowedRoles: UserRole | UserRole[], 
-  requireMinimumRank: boolean = true
-) => {
+export const requireRole = (...allowedRoles: UserRole[]) => {
   return (req: Request, res: Response, next: NextFunction): void => {
     if (!req.user) {
       return next(new AppError(401, 'Authentication required.'));
     }
 
     const userRole = req.user.role as UserRole;
-    
-    // Check if user role exists in the rank system
+
     if (!(userRole in ROLE_RANK)) {
       return next(new AppError(403, 'Unrecognised role. Access denied.'));
     }
 
-    // Convert to array for consistent handling
-    const roles = Array.isArray(allowedRoles) ? allowedRoles : [allowedRoles];
+    // Explicit match
+    if (allowedRoles.includes(userRole)) return next();
 
-    // Check if the user's role is explicitly allowed
-    if (roles.includes(userRole)) {
-      return next();
-    }
+    // Higher rank always passes
+    const minRank = Math.min(...allowedRoles.map(role => ROLE_RANK[role]));
+    if (ROLE_RANK[userRole] >= minRank) return next();
 
-    // If requireMinimumRank is true, check if user has a higher rank
-    if (requireMinimumRank) {
-      // Find the minimum rank among allowed roles
-      const minRank = Math.min(...roles.map(role => ROLE_RANK[role]));
-      
-      if (ROLE_RANK[userRole] >= minRank) {
-        return next();
-      }
-    }
-
-    // Access denied
-    const roleNames = roles.join(' or ');
-    return next(
-      new AppError(403, `This action requires ${roleNames} privileges or above.`)
-    );
+    const roleNames = allowedRoles.join(' or ');
+    return next(new AppError(403, `This action requires ${roleNames} privileges or above.`));
   };
 };
-
 /**
  * requireSameDept — ensures the acting user belongs to the same department
  * as the resource they are accessing.

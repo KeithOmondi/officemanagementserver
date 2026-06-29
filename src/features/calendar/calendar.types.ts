@@ -1,4 +1,5 @@
 // src/features/calendar/calendar.types.ts
+
 export type EventType = 'hearing' | 'meeting' | 'deadline' | 'other';
 
 export interface CalendarEvent {
@@ -18,7 +19,7 @@ export interface CalendarEvent {
   notify_team: boolean;
   notification_sent: boolean;
   is_active: boolean;
-  created_by?: string;
+  created_by: string;
   created_at: Date;
   updated_at: Date;
   synced_at?: Date;
@@ -27,8 +28,8 @@ export interface CalendarEvent {
 export interface CalendarEventInput {
   title: string;
   description?: string;
-  event_date: string; // YYYY-MM-DD
-  start_time?: string; // HH:MM:SS
+  event_date: string;   // YYYY-MM-DD
+  start_time?: string;  // HH:MM:SS
   end_time?: string;
   location?: string;
   event_type: EventType;

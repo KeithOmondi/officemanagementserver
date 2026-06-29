@@ -8,7 +8,7 @@ import { cloudinary } from '../../config/cloudinary';
 import { pool } from '../../config/db';
 import type { UserRole } from '../../middleware/auth.middleware';
 
-const PRIVILEGED_ROLES: UserRole[] = ['super_admin', 'dept_head'];
+const PRIVILEGED_ROLES: UserRole[] = ['super_admin', 'dept_head', 'staff'];
 
 const MIME_MAP: Record<string, string> = {
   pdf:  'application/pdf',

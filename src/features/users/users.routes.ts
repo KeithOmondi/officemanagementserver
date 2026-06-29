@@ -15,7 +15,7 @@ router.put('/me',  validate(updateUserSchema), userController.updateCurrentUser)
 
 // dept_head and above can view stats and list users
 router.get('/stats', requireRole('dept_head'), userController.getUserStats);
-router.get('/',      requireRole('dept_head'), validate(userFiltersSchema), userController.getAllUsers);
+router.get('/',      requireRole('dept_head', 'staff'), validate(userFiltersSchema), userController.getAllUsers);
 
 // super_admin only — create, modify, delete
 router.post('/',     requireSuperAdmin, validate(createUserSchema),   userController.createUser);

@@ -68,59 +68,100 @@ const TASK_JOIN = `
 
 export class TaskService {
 
-    // ── Statistics ──────────────────────────────────────────────────────────
+    // ── Statistics (scoped to user) ──────────────────────────────────────────
 
-    static async getTaskStats(): Promise<TaskStats> {
+    static async getTaskStats(userId: string): Promise<TaskStats> {
+        // Tasks where user created it OR is the assignee
         const { rows } = await pool.query(`
             SELECT
-                COUNT(CASE WHEN status = 'todo' AND due_date >= CURRENT_DATE THEN 1 END)::int AS todo,
-                COUNT(CASE WHEN status = 'in_progress' THEN 1 END)::int AS in_progress,
-                COUNT(CASE WHEN status = 'done' THEN 1 END)::int AS done,
-                COUNT(CASE WHEN status != 'done' AND due_date < CURRENT_DATE THEN 1 END)::int AS overdue
+                COUNT(CASE WHEN status = 'todo'        AND due_date >= CURRENT_DATE THEN 1 END)::int AS todo,
+                COUNT(CASE WHEN status = 'in_progress'                              THEN 1 END)::int AS in_progress,
+                COUNT(CASE WHEN status = 'done'                                     THEN 1 END)::int AS done,
+                COUNT(CASE WHEN status != 'done'       AND due_date < CURRENT_DATE  THEN 1 END)::int AS overdue
             FROM tasks
             WHERE is_active = true
-        `);
+              AND (created_by = $1 OR assignee_id = $1)
+        `, [userId]);
         return rows[0];
     }
 
-    static async getProjectStats(): Promise<ProjectStats> {
+    static async getProjectStats(userId: string): Promise<ProjectStats> {
+        // Projects where user created it OR is a member
         const { rows } = await pool.query(`
             SELECT
-                COUNT(*)::int AS total,
-                COUNT(CASE WHEN status = 'active' THEN 1 END)::int AS active,
-                COUNT(CASE WHEN status = 'completed' THEN 1 END)::int AS completed,
-                COUNT(CASE WHEN status = 'archived' THEN 1 END)::int AS archived
-            FROM projects
-            WHERE is_active = true
-        `);
+                COUNT(*)::int                                              AS total,
+                COUNT(CASE WHEN p.status = 'active'    THEN 1 END)::int   AS active,
+                COUNT(CASE WHEN p.status = 'completed' THEN 1 END)::int   AS completed,
+                COUNT(CASE WHEN p.status = 'archived'  THEN 1 END)::int   AS archived
+            FROM projects p
+            WHERE p.is_active = true
+              AND (
+                p.created_by = $1
+                OR EXISTS (
+                    SELECT 1 FROM project_members pm
+                    WHERE pm.project_id = p.id
+                      AND pm.user_id    = $1
+                      AND pm.is_active  = true
+                )
+              )
+        `, [userId]);
         return rows[0];
     }
 
     // ── Projects ─────────────────────────────────────────────────────────────
 
-    static async findAllProjects(): Promise<Project[]> {
+    // User sees projects they created or are a member of
+    static async findAllProjects(userId: string): Promise<Project[]> {
         const { rows } = await pool.query(
             `SELECT ${PROJECT_SELECT} ${PROJECT_JOIN}
              WHERE p.is_active = true
+               AND (
+                 p.created_by = $1
+                 OR EXISTS (
+                     SELECT 1 FROM project_members pm
+                     WHERE pm.project_id = p.id
+                       AND pm.user_id    = $1
+                       AND pm.is_active  = true
+                 )
+               )
              GROUP BY p.id
-             ORDER BY p.created_at DESC`
+             ORDER BY p.created_at DESC`,
+            [userId]
         );
         return rows;
     }
 
-    static async findProjectById(id: string): Promise<Project | null> {
+    // Access-gated: return null if user has no business seeing this project
+    static async findProjectById(id: string, userId?: string): Promise<Project | null> {
+        const params: unknown[] = [id];
+        let accessClause = '';
+
+        if (userId) {
+            accessClause = `
+              AND (
+                p.created_by = $2
+                OR EXISTS (
+                    SELECT 1 FROM project_members pm
+                    WHERE pm.project_id = p.id
+                      AND pm.user_id    = $2
+                      AND pm.is_active  = true
+                )
+              )`;
+            params.push(userId);
+        }
+
         const { rows } = await pool.query(
             `SELECT ${PROJECT_SELECT} ${PROJECT_JOIN}
-             WHERE p.id = $1 AND p.is_active = true
+             WHERE p.id = $1 AND p.is_active = true ${accessClause}
              GROUP BY p.id`,
-            [id]
+            params
         );
         return rows[0] || null;
     }
 
     static async getProjectMembers(projectId: string): Promise<ProjectMember[]> {
         const { rows } = await pool.query(`
-            SELECT 
+            SELECT
                 pm.id,
                 pm.project_id,
                 pm.user_id,
@@ -148,7 +189,7 @@ export class TaskService {
             [
                 input.name.trim(),
                 input.description || null,
-                input.priority || 'medium',
+                input.priority    || 'medium',
                 input.deadline,
                 createdBy,
             ]
@@ -156,19 +197,28 @@ export class TaskService {
 
         const projectId = rows[0].id;
 
-        // Add members if provided
+        // Always add the creator as a member so they always see their own project
+        await pool.query(
+            `INSERT INTO project_members (project_id, user_id, role)
+             VALUES ($1, $2, 'owner')
+             ON CONFLICT (project_id, user_id) WHERE is_active = true DO NOTHING`,
+            [projectId, createdBy]
+        );
+
         if (input.member_ids && input.member_ids.length > 0) {
-            const memberValues = input.member_ids.map((userId, index) => 
-                `($${index * 2 + 1}, $${index * 2 + 2})`
-            ).join(', ');
-            
-            const flatValues = input.member_ids.flatMap(id => [projectId, id]);
-            
-            await pool.query(
-                `INSERT INTO project_members (project_id, user_id)
-                 VALUES ${memberValues}`,
-                flatValues
-            );
+            // Filter out createdBy to avoid duplicate-insert attempts
+            const others = input.member_ids.filter(id => id !== createdBy);
+            if (others.length > 0) {
+                const memberValues = others
+                    .map((_, i) => `($${i * 2 + 1}, $${i * 2 + 2})`)
+                    .join(', ');
+                await pool.query(
+                    `INSERT INTO project_members (project_id, user_id)
+                     VALUES ${memberValues}
+                     ON CONFLICT DO NOTHING`,
+                    others.flatMap(id => [projectId, id])
+                );
+            }
         }
 
         const project = await this.findProjectById(projectId);
@@ -178,51 +228,32 @@ export class TaskService {
 
     static async updateProject(
         id: string,
-        input: UpdateProjectInput
+        input: UpdateProjectInput,
+        userId: string
     ): Promise<Project> {
-        const existing = await this.findProjectById(id);
-        if (!existing) {
-            throw new AppError(404, 'Project not found');
-        }
+        // Only the project creator can update it
+        const existing = await this.findProjectById(id, userId);
+        if (!existing) throw new AppError(404, 'Project not found');
+        if (existing.created_by !== userId) throw new AppError(403, 'Only the project creator can update it');
 
         const updates: string[] = [];
         const values: unknown[] = [];
-        let paramCount = 1;
+        let p = 1;
 
-        if (input.name !== undefined) {
-            updates.push(`name = $${paramCount++}`);
-            values.push(input.name.trim());
-        }
-        if (input.description !== undefined) {
-            updates.push(`description = $${paramCount++}`);
-            values.push(input.description || null);
-        }
-        if (input.status !== undefined) {
-            updates.push(`status = $${paramCount++}`);
-            values.push(input.status);
-        }
-        if (input.priority !== undefined) {
-            updates.push(`priority = $${paramCount++}`);
-            values.push(input.priority);
-        }
-        if (input.deadline !== undefined) {
-            updates.push(`deadline = $${paramCount++}`);
-            values.push(input.deadline);
-        }
-        if (input.is_active !== undefined) {
-            updates.push(`is_active = $${paramCount++}`);
-            values.push(input.is_active);
-        }
+        if (input.name        !== undefined) { updates.push(`name = $${p++}`);        values.push(input.name.trim()); }
+        if (input.description !== undefined) { updates.push(`description = $${p++}`); values.push(input.description || null); }
+        if (input.status      !== undefined) { updates.push(`status = $${p++}`);      values.push(input.status); }
+        if (input.priority    !== undefined) { updates.push(`priority = $${p++}`);    values.push(input.priority); }
+        if (input.deadline    !== undefined) { updates.push(`deadline = $${p++}`);    values.push(input.deadline); }
+        if (input.is_active   !== undefined) { updates.push(`is_active = $${p++}`);   values.push(input.is_active); }
 
-        if (updates.length === 0) {
-            return existing;
-        }
+        if (updates.length === 0) return existing;
 
         updates.push(`updated_at = NOW()`);
         values.push(id);
 
         await pool.query(
-            `UPDATE projects SET ${updates.join(', ')} WHERE id = $${paramCount}`,
+            `UPDATE projects SET ${updates.join(', ')} WHERE id = $${p}`,
             values
         );
 
@@ -231,23 +262,23 @@ export class TaskService {
         return updated;
     }
 
-    static async deleteProject(id: string): Promise<void> {
+    static async deleteProject(id: string, userId: string): Promise<void> {
+        // Only the creator can delete
+        const existing = await this.findProjectById(id, userId);
+        if (!existing) throw new AppError(404, 'Project not found');
+        if (existing.created_by !== userId) throw new AppError(403, 'Only the project creator can delete it');
+
         const { rows } = await pool.query(
-            `UPDATE projects 
+            `UPDATE projects
              SET is_active = false, updated_at = NOW()
              WHERE id = $1 AND is_active = true
              RETURNING id`,
             [id]
         );
+        if (rows.length === 0) throw new AppError(404, 'Project not found');
 
-        if (rows.length === 0) {
-            throw new AppError(404, 'Project not found');
-        }
-
-        // Soft delete all associated tasks
         await pool.query(
-            `UPDATE tasks 
-             SET is_active = false, updated_at = NOW()
+            `UPDATE tasks SET is_active = false, updated_at = NOW()
              WHERE project_id = $1 AND is_active = true`,
             [id]
         );
@@ -257,35 +288,29 @@ export class TaskService {
 
     static async addProjectMember(
         projectId: string,
-        input: AddProjectMemberInput
+        input: AddProjectMemberInput,
+        userId: string
     ): Promise<ProjectMember> {
-        // Verify project exists
-        const project = await this.findProjectById(projectId);
-        if (!project) {
-            throw new AppError(404, 'Project not found');
-        }
+        // Only the project creator can manage members
+        const project = await this.findProjectById(projectId, userId);
+        if (!project) throw new AppError(404, 'Project not found');
+        if (project.created_by !== userId) throw new AppError(403, 'Only the project creator can manage members');
 
-        // Verify user exists
         const { rows: userCheck } = await pool.query(
             `SELECT id FROM users WHERE id = $1 AND is_active = true`,
             [input.user_id]
         );
-        if (userCheck.length === 0) {
-            throw new AppError(404, 'User not found');
-        }
+        if (userCheck.length === 0) throw new AppError(404, 'User not found');
 
         const { rows } = await pool.query(
             `INSERT INTO project_members (project_id, user_id, role)
              VALUES ($1, $2, $3)
-             ON CONFLICT (project_id, user_id) 
+             ON CONFLICT (project_id, user_id)
              WHERE is_active = true DO NOTHING
              RETURNING id`,
             [projectId, input.user_id, input.role || null]
         );
-
-        if (rows.length === 0) {
-            throw new AppError(409, 'User is already a member of this project');
-        }
+        if (rows.length === 0) throw new AppError(409, 'User is already a member of this project');
 
         const members = await this.getProjectMembers(projectId);
         return members.find(m => m.user_id === input.user_id)!;
@@ -293,8 +318,13 @@ export class TaskService {
 
     static async removeProjectMember(
         projectId: string,
-        memberId: string
+        memberId: string,
+        userId: string
     ): Promise<void> {
+        const project = await this.findProjectById(projectId, userId);
+        if (!project) throw new AppError(404, 'Project not found');
+        if (project.created_by !== userId) throw new AppError(403, 'Only the project creator can remove members');
+
         const { rows } = await pool.query(
             `UPDATE project_members
              SET is_active = false, updated_at = NOW()
@@ -302,34 +332,65 @@ export class TaskService {
              RETURNING id`,
             [memberId, projectId]
         );
-
-        if (rows.length === 0) {
-            throw new AppError(404, 'Member not found');
-        }
+        if (rows.length === 0) throw new AppError(404, 'Member not found');
     }
 
     // ── Tasks ─────────────────────────────────────────────────────────────────
 
-    static async findAllTasks(projectId?: string): Promise<Task[]> {
-        let query = `SELECT ${TASK_SELECT} ${TASK_JOIN} WHERE t.is_active = true`;
-        const params: string[] = [];
+    // User sees tasks they created, are assigned to, or that belong to a project they're on
+    static async findAllTasks(userId: string, projectId?: string): Promise<Task[]> {
+        const params: unknown[] = [userId];
+        let projectClause = '';
 
         if (projectId) {
-            query += ` AND t.project_id = $1`;
+            projectClause = ` AND t.project_id = $2`;
             params.push(projectId);
         }
 
-        query += ` ORDER BY t.due_date ASC, t.created_at DESC`;
-
-        const { rows } = await pool.query(query, params);
+        const { rows } = await pool.query(
+            `SELECT ${TASK_SELECT} ${TASK_JOIN}
+             WHERE t.is_active = true
+               AND (
+                 t.created_by  = $1
+                 OR t.assignee_id = $1
+                 OR EXISTS (
+                     SELECT 1 FROM project_members pm
+                     WHERE pm.project_id = t.project_id
+                       AND pm.user_id    = $1
+                       AND pm.is_active  = true
+                 )
+               )
+               ${projectClause}
+             ORDER BY t.due_date ASC, t.created_at DESC`,
+            params
+        );
         return rows;
     }
 
-    static async findTaskById(id: string): Promise<Task | null> {
+    // Access-gated: null if user has no relation to this task
+    static async findTaskById(id: string, userId?: string): Promise<Task | null> {
+        const params: unknown[] = [id];
+        let accessClause = '';
+
+        if (userId) {
+            accessClause = `
+              AND (
+                t.created_by  = $2
+                OR t.assignee_id = $2
+                OR EXISTS (
+                    SELECT 1 FROM project_members pm
+                    WHERE pm.project_id = t.project_id
+                      AND pm.user_id    = $2
+                      AND pm.is_active  = true
+                )
+              )`;
+            params.push(userId);
+        }
+
         const { rows } = await pool.query(
             `SELECT ${TASK_SELECT} ${TASK_JOIN}
-             WHERE t.id = $1 AND t.is_active = true`,
-            [id]
+             WHERE t.id = $1 AND t.is_active = true ${accessClause}`,
+            params
         );
         return rows[0] || null;
     }
@@ -338,44 +399,37 @@ export class TaskService {
         input: CreateTaskInput,
         createdBy: string
     ): Promise<Task> {
-        // If project_id is provided, verify it exists
         if (input.project_id) {
-            const project = await this.findProjectById(input.project_id);
-            if (!project) {
-                throw new AppError(404, 'Project not found');
-            }
-            
-            // Verify task deadline doesn't exceed project deadline
+            // User must be on the project to add a task to it
+            const project = await this.findProjectById(input.project_id, createdBy);
+            if (!project) throw new AppError(404, 'Project not found');
             if (new Date(input.due_date) > new Date(project.deadline)) {
                 throw new AppError(400, 'Task deadline cannot exceed project deadline');
             }
         }
 
-        // Verify assignee exists if provided
         if (input.assignee_id) {
             const { rows } = await pool.query(
                 `SELECT id FROM users WHERE id = $1 AND is_active = true`,
                 [input.assignee_id]
             );
-            if (rows.length === 0) {
-                throw new AppError(404, 'Assignee not found');
-            }
+            if (rows.length === 0) throw new AppError(404, 'Assignee not found');
         }
 
         const { rows } = await pool.query(
             `INSERT INTO tasks (
-                project_id, title, description, priority, 
+                project_id, title, description, priority,
                 assignee_id, due_date, start_date, created_by
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            RETURNING id`,
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+             RETURNING id`,
             [
-                input.project_id || null,
+                input.project_id   || null,
                 input.title.trim(),
-                input.description || null,
-                input.priority || 'medium',
-                input.assignee_id || null,
+                input.description  || null,
+                input.priority     || 'medium',
+                input.assignee_id  || null,
                 input.due_date,
-                input.start_date || null,
+                input.start_date   || null,
                 createdBy,
             ]
         );
@@ -387,75 +441,49 @@ export class TaskService {
 
     static async updateTask(
         id: string,
-        input: UpdateTaskInput
+        input: UpdateTaskInput,
+        userId: string
     ): Promise<Task> {
-        const existing = await this.findTaskById(id);
-        if (!existing) {
-            throw new AppError(404, 'Task not found');
-        }
+        // User must be able to see this task to update it
+        const existing = await this.findTaskById(id, userId);
+        if (!existing) throw new AppError(404, 'Task not found');
 
-        // If project_id is changing or being set, verify it exists
-        if (input.assignee_id !== undefined && input.assignee_id !== null) {
+        // Only creator or assignee can update
+        const canUpdate = existing.created_by === userId || existing.assignee_id === userId;
+        if (!canUpdate) throw new AppError(403, 'You do not have permission to update this task');
+
+        if (input.assignee_id) {
             const { rows } = await pool.query(
                 `SELECT id FROM users WHERE id = $1 AND is_active = true`,
                 [input.assignee_id]
             );
-            if (rows.length === 0) {
-                throw new AppError(404, 'Assignee not found');
-            }
+            if (rows.length === 0) throw new AppError(404, 'Assignee not found');
         }
 
         const updates: string[] = [];
         const values: unknown[] = [];
-        let paramCount = 1;
+        let p = 1;
 
-        if (input.title !== undefined) {
-            updates.push(`title = $${paramCount++}`);
-            values.push(input.title.trim());
-        }
-        if (input.description !== undefined) {
-            updates.push(`description = $${paramCount++}`);
-            values.push(input.description || null);
-        }
-        if (input.status !== undefined) {
-            updates.push(`status = $${paramCount++}`);
+        if (input.title       !== undefined) { updates.push(`title = $${p++}`);       values.push(input.title.trim()); }
+        if (input.description !== undefined) { updates.push(`description = $${p++}`); values.push(input.description || null); }
+        if (input.status      !== undefined) {
+            updates.push(`status = $${p++}`);
             values.push(input.status);
-            if (input.status === 'done') {
-                updates.push(`completed_at = NOW()`);
-            } else {
-                updates.push(`completed_at = NULL`);
-            }
+            updates.push(input.status === 'done' ? `completed_at = NOW()` : `completed_at = NULL`);
         }
-        if (input.priority !== undefined) {
-            updates.push(`priority = $${paramCount++}`);
-            values.push(input.priority);
-        }
-        if (input.assignee_id !== undefined) {
-            updates.push(`assignee_id = $${paramCount++}`);
-            values.push(input.assignee_id);
-        }
-        if (input.due_date !== undefined) {
-            updates.push(`due_date = $${paramCount++}`);
-            values.push(input.due_date);
-        }
-        if (input.start_date !== undefined) {
-            updates.push(`start_date = $${paramCount++}`);
-            values.push(input.start_date);
-        }
-        if (input.is_active !== undefined) {
-            updates.push(`is_active = $${paramCount++}`);
-            values.push(input.is_active);
-        }
+        if (input.priority    !== undefined) { updates.push(`priority = $${p++}`);    values.push(input.priority); }
+        if (input.assignee_id !== undefined) { updates.push(`assignee_id = $${p++}`); values.push(input.assignee_id); }
+        if (input.due_date    !== undefined) { updates.push(`due_date = $${p++}`);    values.push(input.due_date); }
+        if (input.start_date  !== undefined) { updates.push(`start_date = $${p++}`);  values.push(input.start_date); }
+        if (input.is_active   !== undefined) { updates.push(`is_active = $${p++}`);   values.push(input.is_active); }
 
-        if (updates.length === 0) {
-            return existing;
-        }
+        if (updates.length === 0) return existing;
 
         updates.push(`updated_at = NOW()`);
         values.push(id);
 
         await pool.query(
-            `UPDATE tasks SET ${updates.join(', ')} WHERE id = $${paramCount}`,
+            `UPDATE tasks SET ${updates.join(', ')} WHERE id = $${p}`,
             values
         );
 
@@ -464,27 +492,32 @@ export class TaskService {
         return updated;
     }
 
-    static async deleteTask(id: string): Promise<void> {
+    static async deleteTask(id: string, userId: string): Promise<void> {
+        // Only the task creator can delete
+        const existing = await this.findTaskById(id, userId);
+        if (!existing) throw new AppError(404, 'Task not found');
+        if (existing.created_by !== userId) throw new AppError(403, 'Only the task creator can delete it');
+
         const { rows } = await pool.query(
-            `UPDATE tasks 
+            `UPDATE tasks
              SET is_active = false, updated_at = NOW()
              WHERE id = $1 AND is_active = true
              RETURNING id`,
             [id]
         );
-
-        if (rows.length === 0) {
-            throw new AppError(404, 'Task not found');
-        }
+        if (rows.length === 0) throw new AppError(404, 'Task not found');
     }
 
-    // ── Standalone Tasks ─────────────────────────────────────────────────────
+    // ── Standalone Tasks (scoped) ─────────────────────────────────────────────
 
-    static async findStandaloneTasks(): Promise<Task[]> {
+    static async findStandaloneTasks(userId: string): Promise<Task[]> {
         const { rows } = await pool.query(
             `SELECT ${TASK_SELECT} ${TASK_JOIN}
-             WHERE t.is_active = true AND t.project_id IS NULL
-             ORDER BY t.due_date ASC, t.created_at DESC`
+             WHERE t.is_active = true
+               AND t.project_id IS NULL
+               AND (t.created_by = $1 OR t.assignee_id = $1)
+             ORDER BY t.due_date ASC, t.created_at DESC`,
+            [userId]
         );
         return rows;
     }

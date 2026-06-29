@@ -341,7 +341,7 @@ export class GoogleCalendarService {
         [googleEvent.id]
       );
 
-      const eventData = this.parseGoogleEvent(googleEvent);
+      const eventData = this.parseGoogleEvent(googleEvent, userId);
 
       if (rows.length > 0) {
         await pool.query(
@@ -414,7 +414,7 @@ export class GoogleCalendarService {
     return colors[eventType] || '1';
   }
 
-  private parseGoogleEvent(googleEvent: calendar_v3.Schema$Event): CalendarEvent {
+private parseGoogleEvent(googleEvent: calendar_v3.Schema$Event, userId: string): CalendarEvent {
     const start = googleEvent.start?.dateTime || googleEvent.start?.date;
     const end   = googleEvent.end?.dateTime   || googleEvent.end?.date;
 
@@ -443,6 +443,7 @@ export class GoogleCalendarService {
       notify_team:      false,
       notification_sent: false,
       is_active:        true,
+      created_by:       userId,           // ← add this
       created_at:       new Date(),
       updated_at:       new Date(),
       synced_at:        new Date(),

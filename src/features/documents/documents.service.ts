@@ -1,6 +1,7 @@
 // src/features/documents/documents.service.ts
 import { pool } from '../../config/db';
 import { AppError } from '../../utils/response';
+import crypto from 'crypto';
 import { uploadToCloudinary, deleteFromCloudinary } from '../../config/cloudinary';
 import type {
   Document,
@@ -17,6 +18,10 @@ import type {
   CreateAnnotationInput,
   MarkDocumentInput,
 } from './documents.validator';
+import { embedSignatureIntoHTML, embedSignatureIntoPDF } from '../../utils/embedSignature';
+import axios from 'axios';
+import { generateOTP } from '../../utils/SendOTP';
+import { sendMail } from '../../utils/sendMail';
 
 // ── SELECT fragments ──────────────────────────────────────────────────────────
 
@@ -350,19 +355,7 @@ export class DocumentService {
 
   // ── Sign ──────────────────────────────────────────────────────────────────────
 
-  static async sign(id: string, signedBy: string): Promise<Document> {
-    const doc = await this.findById(id);
-    if (!doc) throw new AppError(404, 'Document not found');
-    if (doc.is_signed) throw new AppError(409, 'Document is already signed');
 
-    await pool.query(
-      `UPDATE documents
-       SET is_signed = true, signed_by = $1, signed_at = NOW(), updated_at = NOW()
-       WHERE id = $2`,
-      [signedBy, id]
-    );
-    return (await this.findById(id))!;
-  }
 
   // ── Send ──────────────────────────────────────────────────────────────────────
 
@@ -623,4 +616,167 @@ export class DocumentService {
     }
     await pool.query(`DELETE FROM document_annotations WHERE id = $1`, [annotationId]);
   }
+
+
+  // ── Request sign OTP ──────────────────────────────────────────────────────────
+
+
+static async requestSignOtp(documentId: string): Promise<void> {
+  const doc = await this.findById(documentId);
+  if (!doc) throw new AppError(404, 'Document not found');
+  if (doc.is_signed) throw new AppError(409, 'Document is already signed');
+
+  // Fetch super admin
+  const { rows } = await pool.query(
+    `SELECT email, full_name FROM users
+     WHERE role = 'super_admin' AND is_active = true LIMIT 1`
+  );
+  const admin = rows[0];
+  if (!admin) throw new AppError(400, 'No active super admin found');
+
+  // Generate OTP using your utility — 5 minute expiry
+  const { rawOTP, hashedOTP, expiresAt } = generateOTP(5);
+
+  // Store hashed OTP
+  await pool.query(
+    `UPDATE documents
+     SET sign_otp = $1, sign_otp_expires_at = $2
+     WHERE id = $3`,
+    [hashedOTP, expiresAt, documentId]
+  );
+
+  // Send via Brevo using your sendMail utility
+  await sendMail({
+    to: admin.email,
+    subject: 'E-Sign OTP — Document Signing Request',
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:24px;border:1px solid #eee;border-radius:8px;">
+        <h2 style="color:#1E4620;margin-bottom:4px;">Document Signing Request</h2>
+        <p style="color:#555;font-size:14px;">A request was made to e-sign the following document:</p>
+        <p style="font-weight:bold;color:#333;font-size:14px;">"${doc.title}"</p>
+
+        <div style="background:#f4f6f9;padding:16px;text-align:center;border-radius:6px;margin:24px 0;">
+          <p style="font-size:12px;color:#888;margin:0 0 8px;">Your one-time signing PIN</p>
+          <p style="font-size:36px;font-weight:bold;letter-spacing:10px;color:#1E4620;margin:0;">${rawOTP}</p>
+        </div>
+
+        <p style="font-size:12px;color:#999;">
+          This OTP expires in <strong>5 minutes</strong>.<br/>
+          If you did not request this, ignore this email — no document will be signed.
+        </p>
+      </div>
+    `,
+  });
 }
+
+// ── Sign with OTP verification ────────────────────────────────────────────────
+
+static async sign(id: string, signedBy: string, otp: string): Promise<Document> {
+  const doc = await this.findById(id);
+  if (!doc) throw new AppError(404, 'Document not found');
+  if (doc.is_signed) throw new AppError(409, 'Document is already signed');
+
+  // Verify OTP
+  const { rows: otpRows } = await pool.query(
+    `SELECT sign_otp, sign_otp_expires_at FROM documents WHERE id = $1`,
+    [id]
+  );
+  const record = otpRows[0];
+
+  if (!record?.sign_otp) {
+    throw new AppError(400, 'No OTP was requested for this document. Please request a new one.');
+  }
+  if (new Date() > new Date(record.sign_otp_expires_at)) {
+    throw new AppError(400, 'OTP has expired. Please request a new one.');
+  }
+
+  const hashed = crypto.createHash('sha256').update(otp).digest('hex');
+  if (hashed !== record.sign_otp) {
+    throw new AppError(400, 'Invalid OTP. Please try again.');
+  }
+
+  // Clear OTP immediately after successful verify
+  await pool.query(
+    `UPDATE documents SET sign_otp = NULL, sign_otp_expires_at = NULL WHERE id = $1`,
+    [id]
+  );
+
+  // Fetch super admin signature
+  const { rows: userRows } = await pool.query(
+    `SELECT full_name, signature_url FROM users 
+     WHERE role = 'super_admin' AND is_active = true LIMIT 1`
+  );
+  const signer = userRows[0];
+  if (!signer?.signature_url) {
+    throw new AppError(400, 'No super admin signature found. Please upload a signature first.');
+  }
+
+  // ── Composed document ──────────────────────────────────────────────────────
+  if (doc.body && !doc.file_url) {
+    const signedBody = embedSignatureIntoHTML(doc.body, signer.signature_url);
+    await pool.query(
+      `UPDATE documents
+       SET body = $1, is_signed = true, signed_by = $2, signed_at = NOW(), updated_at = NOW()
+       WHERE id = $3`,
+      [signedBody, signedBy, id]
+    );
+    return (await this.findById(id))!;
+  }
+
+  // ── Uploaded PDF ───────────────────────────────────────────────────────────
+  if (doc.file_url) {
+    if (doc.mime_type !== 'application/pdf') {
+      await pool.query(
+        `UPDATE documents
+         SET is_signed = true, signed_by = $1, signed_at = NOW(), updated_at = NOW()
+         WHERE id = $2`,
+        [signedBy, id]
+      );
+      return (await this.findById(id))!;
+    }
+
+    const response = await axios.get<ArrayBuffer>(doc.file_url, { responseType: 'arraybuffer' });
+    const originalPdf = Buffer.from(response.data);
+    const signedPdf = await embedSignatureIntoPDF(originalPdf, signer.signature_url);
+
+    if (doc.file_public_id) {
+      await deleteFromCloudinary(doc.file_public_id).catch(console.error);
+    }
+
+    const multerFile: Express.Multer.File = {
+      buffer: signedPdf,
+      mimetype: 'application/pdf',
+      originalname: doc.original_name ?? 'signed-document.pdf',
+      size: signedPdf.length,
+      fieldname: 'file',
+      encoding: '7bit',
+      stream: null as any,
+      destination: '',
+      filename: '',
+      path: '',
+    };
+    const uploaded = await uploadToCloudinary(multerFile, 'registrar/documents');
+
+    await pool.query(
+      `UPDATE documents
+       SET file_url = $1, file_public_id = $2, file_size_bytes = $3,
+           is_signed = true, signed_by = $4, signed_at = NOW(), updated_at = NOW()
+       WHERE id = $5`,
+      [uploaded.secure_url, uploaded.public_id, signedPdf.length, signedBy, id]
+    );
+    return (await this.findById(id))!;
+  }
+
+  // Fallback
+  await pool.query(
+    `UPDATE documents
+     SET is_signed = true, signed_by = $1, signed_at = NOW(), updated_at = NOW()
+     WHERE id = $2`,
+    [signedBy, id]
+  );
+  return (await this.findById(id))!;
+}
+}
+
+
+

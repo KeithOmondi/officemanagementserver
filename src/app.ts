@@ -13,6 +13,12 @@ import registryRoutes from './features/registry/registry.routes';
 import calendarRoutes from './features/calendar/calendar.routes';
 import dsaRoutes from './features/dsa/dsa.routes';
 import taskRoutes from './features/tasks/task.routes';
+import inventoryRoutes from './features/inventory/inventory.routes';
+import financialRoutes from './features/finanace/financial.routes';
+import signatureRoutes from './features/signature/signature.routes'
+import messagesRoutes from './features/messages/messages.routes';
+import helpDeskRoutes from './features/helpdesk/helpdesk.routes';
+import noticesRoutes from "./features/notices/notices.routes"
 
 const app: Express = express();
 
@@ -60,6 +66,14 @@ app.use('/api/v1/registry',    registryRoutes);
 app.use('/api/v1/calendar',    calendarRoutes);
 app.use('/api/v1/dsa',         dsaRoutes);
 app.use('/api/v1/tasks',       taskRoutes);
+app.use('/api/v1/inventory', inventoryRoutes);
+app.use('/api/v1/financial', financialRoutes);
+app.use('/api/v1/signature', signatureRoutes);
+app.use('/api/v1/messages', messagesRoutes);
+app.use('/api/v1/helpdesk', helpDeskRoutes);
+app.use('/api/v1/notices', noticesRoutes);
+
+
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
 

@@ -76,12 +76,6 @@ export const documentController = {
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
-  sign: asyncHandler(async (req: Request, res: Response) => {
-    const result = documentIdSchema.safeParse({ params: req.params });
-    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
-    const doc = await DocumentService.sign(result.data.params.id, req.user!.id);
-    return sendSuccess(res, doc, 'Document signed successfully');
-  }),
 
   send: asyncHandler(async (req: Request, res: Response) => {
     const result = documentIdSchema.safeParse({ params: req.params });
@@ -151,4 +145,24 @@ export const documentController = {
     );
     return sendSuccess(res, null, 'Annotation deleted successfully');
   }),
+
+  // Add to documentController:
+
+requestSignOtp: asyncHandler(async (req: Request, res: Response) => {
+  const result = documentIdSchema.safeParse({ params: req.params });
+  if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+  await DocumentService.requestSignOtp(result.data.params.id);
+  return sendSuccess(res, null, 'OTP sent to your email');
+}),
+// Update existing sign handler to accept OTP from body:
+sign: asyncHandler(async (req: Request, res: Response) => {
+  const paramsResult = documentIdSchema.safeParse({ params: req.params });
+  if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+  
+  const otp = req.body?.otp as string | undefined;
+  if (!otp) throw new AppError(400, 'OTP is required');
+
+  const doc = await DocumentService.sign(paramsResult.data.params.id, req.user!.id, otp);
+  return sendSuccess(res, doc, 'Document signed successfully');
+}),
 };

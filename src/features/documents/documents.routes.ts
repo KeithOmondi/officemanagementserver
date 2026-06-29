@@ -21,6 +21,7 @@ router.post('/upload', requireRole('staff'), upload.single('file'), documentCont
 // ── Edit / lifecycle ──────────────────────────────────────────────────────────
 router.put('/:id', requireRole('staff'), documentController.update);
 router.delete('/:id', requireRole('dept_head'), documentController.delete);
+router.post('/:id/request-sign-otp', requireRole('super_admin'), documentController.requestSignOtp);
 router.post('/:id/sign', requireRole('dept_head'), documentController.sign);
 router.post('/:id/send', requireRole('dept_head'), documentController.send);
 

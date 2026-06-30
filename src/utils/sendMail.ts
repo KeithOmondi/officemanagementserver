@@ -28,26 +28,127 @@ export const sendMail = async ({ to, subject, html }: SendMailOptions) => {
   }
 };
 
+const LOGO_URL =
+  "https://res.cloudinary.com/do0yflasl/image/upload/v1781759596/JOB_LOGO_ubls4m.jpg";
+
 /**
  * Dispatches a formatted 6-digit login validation code
  */
-export const sendOtpMail = async (email: string, pjNumber: string, otp: string) => {
+export const sendOtpMail = async (
+  email: string,
+  pjNumber: string,
+  otp: string,
+) => {
   const subject = "Your Secure Portal Login Code";
-  const html = `
-    <div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 8px; max-width: 500px; margin: 0 auto;">
-      <h2 style="color: #333; text-align: center;">Secure Portal Access</h2>
-      <p>A login request was initiated for PJ Number: <strong>${pjNumber}</strong>.</p>
-      <p>Use the verification code below to complete your authentication. This code expires in 10 minutes:</p>
-      
-      <div style="background: #f4f6f9; padding: 15px; font-size: 28px; font-weight: bold; text-align: center; letter-spacing: 6px; color: #1a73e8; border-radius: 4px; margin: 25px 0;">
-        ${otp}
-      </div>
-      
-      <p style="color: #666; font-size: 12px; text-align: center;">
-        If you did not make this request, you can safely ignore this email.
-      </p>
-    </div>
-  `;
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Secure Portal Login Code</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f0f2f5;font-family:'Segoe UI',Arial,sans-serif;">
+
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f0f2f5;padding:40px 16px;">
+    <tr>
+      <td align="center">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:520px;">
+
+          <!-- ── Header ── -->
+          <tr>
+            <td align="center" style="background-color:#1E4620;border-radius:12px 12px 0 0;padding:32px 40px 24px;">
+
+              <img
+                src="${LOGO_URL}"
+                alt="Judiciary of Kenya"
+                width="80"
+                height="80"
+                style="display:block;margin:0 auto 16px;border-radius:50%;border:3px solid rgba(255,255,255,0.20);object-fit:cover;"
+              />
+
+              <p style="margin:0 0 2px;font-size:10px;font-weight:600;letter-spacing:3px;color:rgba(255,255,255,0.55);text-transform:uppercase;">
+                Republic of Kenya
+              </p>
+              <h1 style="margin:0;font-size:15px;font-weight:700;letter-spacing:1.5px;color:#ffffff;text-transform:uppercase;line-height:1.4;">
+                Office of the Registrar
+              </h1>
+              <p style="margin:2px 0 0;font-size:13px;font-weight:500;letter-spacing:1px;color:rgba(255,255,255,0.75);text-transform:uppercase;">
+                High Court
+              </p>
+
+              <div style="width:48px;height:2px;background:#C29B38;border-radius:1px;margin:18px auto 0;"></div>
+            </td>
+          </tr>
+
+          <!-- ── Body ── -->
+          <tr>
+            <td style="background-color:#ffffff;padding:36px 40px 32px;">
+
+              <p style="margin:0 0 6px;font-size:13px;color:#6b7280;">Login request for PJ Number</p>
+              <p style="margin:0 0 24px;font-size:15px;font-weight:700;color:#111827;letter-spacing:0.5px;">${pjNumber}</p>
+
+              <p style="margin:0 0 20px;font-size:14px;color:#374151;line-height:1.6;">
+                Use the verification code below to complete your sign-in.
+                This code expires in <strong>10 minutes</strong>.
+              </p>
+
+              <!-- OTP block -->
+              <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td align="center" style="background:linear-gradient(135deg,#f8fdf8 0%,#eef7ef 100%);border:1.5px solid #c6e0c8;border-radius:10px;padding:28px 20px;">
+                    <p style="margin:0 0 8px;font-size:10px;font-weight:700;letter-spacing:3px;color:#1E4620;text-transform:uppercase;">
+                      Verification Code
+                    </p>
+                    <p style="margin:0;font-size:38px;font-weight:800;letter-spacing:14px;color:#1E4620;font-family:'Courier New',monospace;">
+                      ${otp}
+                    </p>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Security notice -->
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:24px;">
+                <tr>
+                  <td style="background-color:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:12px 16px;">
+                    <p style="margin:0;font-size:12px;color:#92400e;line-height:1.5;">
+                      <strong>Security notice:</strong> This code is valid for a single sign-in only.
+                      Never share it with anyone. Court staff will never ask for your OTP.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin:24px 0 0;font-size:12px;color:#9ca3af;text-align:center;line-height:1.5;">
+                If you did not initiate this request, please disregard this email.<br />
+                No changes have been made to your account.
+              </p>
+            </td>
+          </tr>
+
+          <!-- ── Footer ── -->
+          <tr>
+            <td style="background-color:#1a2e1b;border-radius:0 0 12px 12px;padding:20px 40px;">
+              <p style="margin:0 0 4px;font-size:11px;color:rgba(255,255,255,0.5);text-align:center;letter-spacing:0.5px;">
+                This is an automated message from the
+              </p>
+              <p style="margin:0 0 12px;font-size:11px;font-weight:600;color:rgba(255,255,255,0.75);text-align:center;letter-spacing:1px;text-transform:uppercase;">
+                Office of the Registrar — High Court of Kenya
+              </p>
+              <div style="width:32px;height:1px;background:rgba(255,255,255,0.15);margin:0 auto 12px;"></div>
+              <p style="margin:0;font-size:10px;color:rgba(255,255,255,0.3);text-align:center;">
+                Do not reply to this email &middot; For support contact your system administrator
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>`;
 
   return await sendMail({ to: email, subject, html });
 };

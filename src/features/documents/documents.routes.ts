@@ -36,4 +36,11 @@ router.post('/:id/complete', documentController.completeMark);
 router.post('/:id/annotations', requireRole('staff'), documentController.addAnnotation);
 router.delete('/:id/annotations/:annotationId', requireRole('staff'), documentController.deleteAnnotation);
 
+
+// documents.routes.ts additions
+router.post('/upload', requireRole('staff', 'dept_head'), upload.single('file'), documentController.createUpload);
+router.post('/:id/finalize-draft', requireRole('dept_head'), documentController.finalizeDraft);
+router.post('/:id/return', requireRole('super_admin'), documentController.returnDocument);
+router.get('/:id/flow', documentController.getFlowHistory);
+
 export default router;

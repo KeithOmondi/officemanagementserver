@@ -12,6 +12,8 @@ import {
   annotationIdSchema,
   createAnnotationSchema,
   markDocumentSchema,
+  finalizeDraftSchema,
+  returnDocumentSchema,
 } from './documents.validator';
 
 export const documentController = {
@@ -30,7 +32,7 @@ export const documentController = {
     if (!file) throw new AppError(400, 'A file is required for this document type');
     const result = createUploadDocumentSchema.safeParse({ body: req.body });
     if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
-    const doc = await DocumentService.createUpload(result.data.body, file, req.user!.id);
+    const doc = await DocumentService.createUpload(result.data.body, file, req.user!.id, req.user!.role);
     return sendSuccess(res, doc, 'Document uploaded successfully', 201);
   }),
 
@@ -76,7 +78,6 @@ export const documentController = {
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
-
   send: asyncHandler(async (req: Request, res: Response) => {
     const result = documentIdSchema.safeParse({ params: req.params });
     if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
@@ -89,6 +90,43 @@ export const documentController = {
     if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
     await DocumentService.softDelete(result.data.params.id);
     return sendSuccess(res, null, 'Document deleted successfully');
+  }),
+
+  // ── Draft lifecycle ───────────────────────────────────────────────────────────
+
+  finalizeDraft: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = documentIdSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    const bodyResult = finalizeDraftSchema.safeParse({ body: req.body });
+    if (!bodyResult.success) throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+    const doc = await DocumentService.finalizeDraft(
+      paramsResult.data.params.id,
+      bodyResult.data.body,
+      req.user!.id
+    );
+    return sendSuccess(res, doc, 'Draft finalized successfully');
+  }),
+
+  // ── Document flow ──────────────────────────────────────────────────────────────
+
+  returnDocument: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = documentIdSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    const bodyResult = returnDocumentSchema.safeParse({ body: req.body });
+    if (!bodyResult.success) throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+    const doc = await DocumentService.returnDocument(
+      paramsResult.data.params.id,
+      bodyResult.data.body,
+      req.user!.id
+    );
+    return sendSuccess(res, doc, 'Document returned for action');
+  }),
+
+  getFlowHistory: asyncHandler(async (req: Request, res: Response) => {
+    const result = documentIdSchema.safeParse({ params: req.params });
+    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    const flow = await DocumentService.getFlowHistory(result.data.params.id);
+    return sendSuccess(res, flow, 'Document flow retrieved');
   }),
 
   // ── Marking to Departments ─────────────────────────────────────────────────
@@ -146,23 +184,23 @@ export const documentController = {
     return sendSuccess(res, null, 'Annotation deleted successfully');
   }),
 
-  // Add to documentController:
+  // ── E-Sign ────────────────────────────────────────────────────────────────────
 
-requestSignOtp: asyncHandler(async (req: Request, res: Response) => {
-  const result = documentIdSchema.safeParse({ params: req.params });
-  if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
-  await DocumentService.requestSignOtp(result.data.params.id);
-  return sendSuccess(res, null, 'OTP sent to your email');
-}),
-// Update existing sign handler to accept OTP from body:
-sign: asyncHandler(async (req: Request, res: Response) => {
-  const paramsResult = documentIdSchema.safeParse({ params: req.params });
-  if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
-  
-  const otp = req.body?.otp as string | undefined;
-  if (!otp) throw new AppError(400, 'OTP is required');
+  requestSignOtp: asyncHandler(async (req: Request, res: Response) => {
+    const result = documentIdSchema.safeParse({ params: req.params });
+    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    await DocumentService.requestSignOtp(result.data.params.id);
+    return sendSuccess(res, null, 'OTP sent to your email');
+  }),
 
-  const doc = await DocumentService.sign(paramsResult.data.params.id, req.user!.id, otp);
-  return sendSuccess(res, doc, 'Document signed successfully');
-}),
+  sign: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = documentIdSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+
+    const otp = req.body?.otp as string | undefined;
+    if (!otp) throw new AppError(400, 'OTP is required');
+
+    const doc = await DocumentService.sign(paramsResult.data.params.id, req.user!.id, otp);
+    return sendSuccess(res, doc, 'Document signed successfully');
+  }),
 };

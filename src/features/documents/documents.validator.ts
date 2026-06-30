@@ -13,6 +13,10 @@ export const documentCategoryEnum = z.enum([
   'judgments', 'rulings', 'correspondence', 'orders', 'drafts', 'general'
 ]);
 
+export const refTypeEnum = z.enum([
+  'for_signature', 'for_attention', 'for_information', 'direction', 'other'
+]);
+
 // ── Create composed document ────────────────────────────────────────────────
 
 export const createComposedDocumentSchema = z.object({
@@ -35,9 +39,17 @@ export const createUploadDocumentSchema = z.object({
     type:          z.enum(['judgment', 'ruling', 'order', 'correspondence', 'upload']),
     category:      documentCategoryEnum.optional(),
     reference_no:  z.string().max(100).trim().optional(),
+    ref_type:           refTypeEnum,
+    ref_other_description: z.string().max(500).trim().optional(),
     assigned_to:   z.string().uuid().optional(),
     department_id: z.string().uuid().optional(),
-  }).strict(),
+    is_draft:      z.coerce.boolean().default(false),
+  })
+  .strict()
+  .refine(
+    (b) => b.ref_type !== 'other' || !!b.ref_other_description,
+    { message: 'ref_other_description is required when ref_type is "other"', path: ['ref_other_description'] }
+  ),
 });
 
 // ── Update ──────────────────────────────────────────────────────────────────
@@ -115,6 +127,28 @@ export const createAnnotationSchema = z.object({
     is_urgent:          z.boolean().default(false),
     visible_in_summary: z.boolean().default(false),
   }).strict(),
+});
+
+
+
+
+// New schema for returning a document for action
+export const returnDocumentSchema = z.object({
+  body: z.object({
+    note: z.string().min(1, 'A reason for returning is required').max(1000).trim(),
+    requires_more_docs: z.boolean().default(false),
+  }).strict(),
+});
+
+// Saving/promoting a draft
+export const finalizeDraftSchema = z.object({
+  body: z.object({
+    assigned_to: z.string().uuid().optional(),
+    send_to_super_admin: z.boolean().default(false),
+  }).strict()
+  .refine(b => !!b.assigned_to !== !!b.send_to_super_admin, {
+    message: 'Provide either assigned_to or send_to_super_admin, not both',
+  }),
 });
 
 // ── Inferred types ──────────────────────────────────────────────────────────

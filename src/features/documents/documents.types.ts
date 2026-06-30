@@ -18,6 +18,8 @@ export type DocumentCategory =
 
 export type RoutePriority = 'low' | 'normal' | 'urgent';
 
+export type RefType = 'for_signature' | 'for_attention' | 'for_information' | 'direction' | 'other';
+
 // ── Document Mark (to Department) ──────────────────────────────────────────
 
 export interface DocumentMark {
@@ -59,6 +61,8 @@ export interface Document {
   category: DocumentCategory | null;
   status: DocumentStatus;
   reference_no: string | null;
+  ref_type: RefType | null;
+  ref_other_description: string | null;
   body: string | null;
   file_url: string | null;
   file_public_id: string | null;
@@ -77,6 +81,7 @@ export interface Document {
   signed_at: Date | null;
   is_sent: boolean;
   sent_at: Date | null;
+  is_draft: boolean;
   is_active: boolean;
   created_at: Date;
   updated_at: Date;
@@ -94,4 +99,16 @@ export interface DocumentPaginationResponse {
   page: number;
   limit: number;
   totalPages: number;
+}
+
+export interface DocumentFlowEntry {
+  id: string;
+  document_id: string;
+  action: string;
+  from_user: string | null;
+  from_user_name: string | null;
+  to_user: string | null;
+  to_user_name: string | null;
+  note: string | null;
+  created_at: Date;
 }

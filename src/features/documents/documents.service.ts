@@ -9,6 +9,7 @@ import type {
   DocumentPaginationResponse,
   DocumentAnnotation,
   DocumentMark,
+  DocumentFlowEntry,
 } from './documents.types';
 import type {
   CreateComposedDocumentInput,
@@ -34,6 +35,7 @@ const DOC_SELECT = `
   d.is_signed,
   d.signed_by,      su.full_name  AS signed_by_name,
   d.signed_at, d.is_sent, d.sent_at,
+  d.is_draft, d.ref_type, d.ref_other_description,
   d.is_active, d.created_at, d.updated_at
 `;
 
@@ -128,41 +130,42 @@ export class DocumentService {
   // ── Create upload ──────────────────────────────────────────────────────────
 
   static async createUpload(
-    input: CreateUploadDocumentInput,
-    file: Express.Multer.File,
-    createdBy: string
-  ): Promise<Document> {
-    const uploaded = await uploadToCloudinary(file, 'registrar/documents');
-
-    try {
-      const { rows } = await pool.query(
-        `INSERT INTO documents
-           (title, type, category, reference_no,
-            file_url, file_public_id, file_size_bytes, mime_type, original_name,
-            assigned_to, department_id, created_by, status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'uploaded')
-         RETURNING id`,
-        [
-          input.title.trim(),
-          input.type,
-          input.category ?? null,
-          input.reference_no?.trim() ?? null,
-          uploaded.secure_url,
-          uploaded.public_id,
-          file.size,
-          file.mimetype,
-          file.originalname,
-          input.assigned_to ?? null,
-          input.department_id ?? null,
-          createdBy,
-        ]
-      );
-      return (await this.findById(rows[0].id))!;
-    } catch (err) {
-      await deleteFromCloudinary(uploaded.public_id).catch(console.error);
-      throw err;
-    }
+  input: CreateUploadDocumentInput,
+  file: Express.Multer.File,
+  createdBy: string,
+  createdByRole: string
+): Promise<Document> {
+  if (createdByRole === 'dept_head' && input.type !== 'correspondence') {
+    throw new AppError(400, 'Department heads can only upload correspondence documents');
   }
+
+  const uploaded = await uploadToCloudinary(file, 'registrar/documents');
+  const status = input.is_draft ? 'draft' : 'uploaded';
+
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO documents
+         (title, type, category, reference_no, ref_type, ref_other_description,
+          file_url, file_public_id, file_size_bytes, mime_type, original_name,
+          assigned_to, department_id, created_by, status, is_draft)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+       RETURNING id`,
+      [
+        input.title.trim(), input.type, input.category ?? null,
+        input.reference_no?.trim() ?? null,
+        input.ref_type, input.ref_other_description?.trim() ?? null,
+        uploaded.secure_url, uploaded.public_id, file.size, file.mimetype, file.originalname,
+        input.assigned_to ?? null, input.department_id ?? null,
+        createdBy, status, input.is_draft,
+      ]
+    );
+    await this.logFlow(pool, rows[0].id, input.is_draft ? 'draft_saved' : 'created', createdBy, null);
+    return (await this.findById(rows[0].id))!;
+  } catch (err) {
+    await deleteFromCloudinary(uploaded.public_id).catch(console.error);
+    throw err;
+  }
+}
 
   // ── Find all ─────────────────────────────────────────────────────────────────
 
@@ -184,6 +187,14 @@ export class DocumentService {
     const conditions: string[] = ['d.is_active = true'];
     const values: unknown[] = [];
     let p = 1;
+
+    // Drafts are private to their creator until finalized (assigned to a user
+    // or sent to the super admin). Without this, every caller — including the
+    // super admin's own document list — would see unfinalized drafts the
+    // moment they're uploaded.
+    conditions.push(`(d.is_draft = false OR d.created_by = $${p})`);
+    values.push(requestingUserId);
+    p++;
 
     if (search) {
       conditions.push(`(d.title ILIKE $${p} OR d.reference_no ILIKE $${p} OR d.original_name ILIKE $${p})`);
@@ -222,6 +233,8 @@ export class DocumentService {
         category: row.category,
         status: row.status,
         reference_no: row.reference_no,
+        ref_type: row.ref_type,
+        ref_other_description: row.ref_other_description,
         body: row.body,
         file_url: row.file_url,
         file_public_id: row.file_public_id,
@@ -240,6 +253,7 @@ export class DocumentService {
         signed_at: row.signed_at,
         is_sent: row.is_sent,
         sent_at: row.sent_at,
+        is_draft: row.is_draft,
         is_active: row.is_active,
         created_at: row.created_at,
         updated_at: row.updated_at,
@@ -352,10 +366,6 @@ export class DocumentService {
     );
     return (await this.findById(id))!;
   }
-
-  // ── Sign ──────────────────────────────────────────────────────────────────────
-
-
 
   // ── Send ──────────────────────────────────────────────────────────────────────
 
@@ -776,7 +786,96 @@ static async sign(id: string, signedBy: string, otp: string): Promise<Document> 
   );
   return (await this.findById(id))!;
 }
+
+// documents.service.ts
+
+static async logFlow(
+  client: any, // pass the pg client when inside a transaction, or pool otherwise
+  documentId: string,
+  action: string,
+  fromUser: string | null,
+  toUser: string | null,
+  note?: string
+) {
+  await client.query(
+    `INSERT INTO document_flow (document_id, action, from_user, to_user, note)
+     VALUES ($1,$2,$3,$4,$5)`,
+    [documentId, action, fromUser, toUser, note ?? null]
+  );
 }
 
+static async getFlowHistory(documentId: string): Promise<DocumentFlowEntry[]> {
+  const { rows } = await pool.query(
+    `SELECT f.id, f.document_id, f.action,
+            f.from_user, fu.full_name AS from_user_name,
+            f.to_user,   tu.full_name AS to_user_name,
+            f.note, f.created_at
+     FROM document_flow f
+     LEFT JOIN users fu ON fu.id = f.from_user
+     LEFT JOIN users tu ON tu.id = f.to_user
+     WHERE f.document_id = $1
+     ORDER BY f.created_at ASC`,
+    [documentId]
+  );
+  return rows;
+}
 
+// Promote a draft: assign to a user, or send to super admin
+static async finalizeDraft(
+  documentId: string,
+  input: { assigned_to?: string; send_to_super_admin?: boolean },
+  actingUser: string
+): Promise<Document> {
+  const doc = await this.findById(documentId);
+  if (!doc) throw new AppError(404, 'Document not found');
+  if (!doc.is_draft) throw new AppError(409, 'Document is not a draft');
 
+  let targetUserId: string | null = null;
+  if (input.send_to_super_admin) {
+    const { rows } = await pool.query(
+      `SELECT id FROM users WHERE role = 'super_admin' AND is_active = true LIMIT 1`
+    );
+    if (!rows.length) throw new AppError(400, 'No active super admin found');
+    targetUserId = rows[0].id;
+  } else if (input.assigned_to) {
+    targetUserId = input.assigned_to;
+  }
+
+  await pool.query(
+    `UPDATE documents
+     SET is_draft = false, assigned_to = $1, status = 'pending_review', updated_at = NOW()
+     WHERE id = $2`,
+    [targetUserId, documentId]
+  );
+  await this.logFlow(
+    pool, documentId,
+    input.send_to_super_admin ? 'sent_to_admin' : 'assigned',
+    actingUser, targetUserId
+  );
+  return (await this.findById(documentId))!;
+}
+
+// Super admin returns a document for action
+static async returnDocument(
+  documentId: string,
+  input: { note: string; requires_more_docs: boolean },
+  returnedBy: string
+): Promise<Document> {
+  const doc = await this.findById(documentId);
+  if (!doc) throw new AppError(404, 'Document not found');
+  if (!doc.created_by) throw new AppError(400, 'Cannot determine original submitter');
+
+  await pool.query(
+    `UPDATE documents
+     SET status = $1, assigned_to = $2, updated_at = NOW()
+     WHERE id = $3`,
+    [input.requires_more_docs ? 'pending_review' : 'in_progress', doc.created_by, documentId]
+  );
+  await this.logFlow(
+    pool, documentId,
+    input.requires_more_docs ? 'requires_more_docs' : 'returned',
+    returnedBy, doc.created_by, input.note
+  );
+  return (await this.findById(documentId))!;
+}
+}

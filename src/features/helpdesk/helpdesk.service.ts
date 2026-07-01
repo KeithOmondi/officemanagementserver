@@ -22,6 +22,8 @@ import type {
     UpdateStatusInput,
     HelpDeskFilters,
     DSADetailInput,
+    ServiceWeek,
+    CreateServiceWeekInput,
 } from './helpdesk.types';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -1337,4 +1339,194 @@ export class HelpDeskService {
             client.release();
         }
     }
+
+    // Add to service class
+static async findAllServiceWeeks(filters: HelpDeskFilters = {}): Promise<ServiceWeek[]> {
+    let query = `SELECT id, name, week_number, year, start_date, end_date, total_dsa, status,
+                        created_by, created_at, updated_at
+                 FROM service_weeks WHERE is_active = true`;
+    const params: unknown[] = [];
+    let paramCount = 1;
+
+    if (filters.search) {
+        query += ` AND (name ILIKE $${paramCount} OR week_number ILIKE $${paramCount})`;
+        params.push(`%${filters.search}%`);
+        paramCount++;
+    }
+    if (filters.status) {
+        query += ` AND status = $${paramCount}`;
+        params.push(filters.status);
+        paramCount++;
+    }
+
+    query += ` ORDER BY created_at DESC`;
+    if (filters.limit) {
+        query += ` LIMIT $${paramCount}`;
+        params.push(filters.limit);
+        paramCount++;
+    }
+    if (filters.offset) {
+        query += ` OFFSET $${paramCount}`;
+        params.push(filters.offset);
+    }
+
+    const { rows } = await pool.query(query, params);
+
+    for (const week of rows) {
+        const { rows: dsaRows } = await pool.query(
+            `SELECT id, judge_name, pj_number, dsa_per_day, days, total, notes
+             FROM service_week_dsa_details 
+             WHERE service_week_id = $1 AND is_active = true
+             ORDER BY created_at ASC`,
+            [week.id]
+        );
+        week.dsa_details = dsaRows;
+        
+        if (dsaRows.length > 0) {
+            week.total_dsa = dsaRows.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
+        } else {
+            week.total_dsa = 0;
+        }
+    }
+
+    return rows;
+}
+
+static async findServiceWeekById(id: string): Promise<ServiceWeek | null> {
+    const { rows } = await pool.query(
+        `SELECT id, name, week_number, year, start_date, end_date, total_dsa, status,
+                created_by, created_at, updated_at
+         FROM service_weeks WHERE id = $1 AND is_active = true`,
+        [id]
+    );
+
+    if (rows.length === 0) return null;
+
+    const week = rows[0];
+    const { rows: dsaRows } = await pool.query(
+        `SELECT id, judge_name, pj_number, dsa_per_day, days, total, notes
+         FROM service_week_dsa_details 
+         WHERE service_week_id = $1 AND is_active = true
+         ORDER BY created_at ASC`,
+        [id]
+    );
+    week.dsa_details = dsaRows;
+    
+    if (dsaRows.length > 0) {
+        week.total_dsa = dsaRows.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
+    } else {
+        week.total_dsa = 0;
+    }
+
+    return week;
+}
+
+static async createServiceWeek(
+    input: CreateServiceWeekInput,
+    userId: string
+): Promise<ServiceWeek> {
+    const client = await pool.connect();
+    
+    try {
+        await client.query('BEGIN');
+
+        const { rows } = await client.query(
+            `INSERT INTO service_weeks (
+                name, week_number, year, start_date, end_date, created_by
+            ) VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id`,
+            [
+                input.name.trim(),
+                input.week_number.trim(),
+                input.year,
+                input.start_date,
+                input.end_date,
+                userId,
+            ]
+        );
+
+        const weekId = rows[0].id;
+
+        if (input.dsa_details && input.dsa_details.length > 0) {
+            for (const detail of input.dsa_details) {
+                const total = detail.dsa_per_day * detail.days;
+                await client.query(
+                    `INSERT INTO service_week_dsa_details (
+                        service_week_id, judge_name, pj_number, dsa_per_day, days, total, notes
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                    [
+                        weekId,
+                        detail.judge_name.trim(),
+                        detail.pj_number.trim(),
+                        detail.dsa_per_day,
+                        detail.days,
+                        total,
+                        detail.notes || null,
+                    ]
+                );
+            }
+        }
+
+        await client.query('COMMIT');
+
+        const week = await this.findServiceWeekById(weekId);
+        if (!week) throw new AppError(500, 'Failed to create service week');
+        return week;
+        
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
+static async updateServiceWeekStatus(
+    id: string,
+    input: UpdateStatusInput
+): Promise<ServiceWeek> {
+    const existing = await this.findServiceWeekById(id);
+    if (!existing) {
+        throw new AppError(404, 'Service week not found');
+    }
+
+    await pool.query(
+        `UPDATE service_weeks SET status = $1 WHERE id = $2`,
+        [input.status, id]
+    );
+
+    const updated = await this.findServiceWeekById(id);
+    if (!updated) throw new AppError(500, 'Failed to update service week status');
+    return updated;
+}
+
+static async deleteServiceWeek(id: string): Promise<void> {
+    const client = await pool.connect();
+    
+    try {
+        await client.query('BEGIN');
+
+        const { rows } = await client.query(
+            `UPDATE service_weeks SET is_active = false WHERE id = $1 RETURNING id`,
+            [id]
+        );
+        
+        if (rows.length === 0) {
+            throw new AppError(404, 'Service week not found');
+        }
+
+        await client.query(
+            `UPDATE service_week_dsa_details SET is_active = false WHERE service_week_id = $1`,
+            [id]
+        );
+
+        await client.query('COMMIT');
+        
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    } finally {
+        client.release();
+    }
+}
 }

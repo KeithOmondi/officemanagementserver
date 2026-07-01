@@ -238,3 +238,28 @@ export interface HelpDeskFilters {
     limit?: number;
     offset?: number;
 }
+
+// Add to existing types
+export interface ServiceWeek {
+    id: string;
+    name: string;
+    week_number: string;
+    year: string;
+    start_date: string;
+    end_date: string;
+    total_dsa: number;
+    status: Status;
+    dsa_details?: DSADetail[];
+    created_by: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface CreateServiceWeekInput {
+    name: string;
+    week_number: string;
+    year: string;
+    start_date: string;
+    end_date: string;
+    dsa_details?: DSADetailInput[];
+}

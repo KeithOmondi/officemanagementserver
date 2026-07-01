@@ -148,6 +148,18 @@ export const helpDeskFiltersSchema = z.object({
     }).strict(),
 });
 
+// Add to validators
+export const createServiceWeekSchema = z.object({
+    body: z.object({
+        name: z.string().min(1).max(200),
+        week_number: z.string().min(1).max(20),
+        year: z.string().min(4).max(4),
+        start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        dsa_details: z.array(dsaDetailSchema).optional(),
+    }).strict(),
+});
+
 // ─── ID Schemas ─────────────────────────────────────────────────────────────
 
 export const idSchema = z.object({

@@ -68,4 +68,11 @@ router.post('/protocol', requireRole('dept_head', 'super_admin'), helpDeskContro
 router.put('/protocol/:id/status', requireRole('dept_head', 'super_admin'), helpDeskController.updateProtocolStatus);
 router.delete('/protocol/:id', requireRole('super_admin'), helpDeskController.deleteProtocolEvent);
 
+// ─── Service Week ──────────────────────────────────────────────────────────
+router.get('/service-weeks', helpDeskController.getAllServiceWeeks);
+router.get('/service-weeks/:id', helpDeskController.getServiceWeekById);
+router.post('/service-weeks', requireRole('dept_head', 'super_admin'), helpDeskController.createServiceWeek);
+router.put('/service-weeks/:id/status', requireRole('dept_head', 'super_admin'), helpDeskController.updateServiceWeekStatus);
+router.delete('/service-weeks/:id', requireRole('super_admin'), helpDeskController.deleteServiceWeek);
+
 export default router;

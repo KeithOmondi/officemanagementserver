@@ -14,6 +14,7 @@ import {
     helpDeskFiltersSchema,
     idSchema,
     updateCircuitDSASchema,
+    createServiceWeekSchema,
 } from './helpdesk.validator';
 
 export const helpDeskController = {
@@ -504,4 +505,61 @@ export const helpDeskController = {
         await HelpDeskService.deleteProtocolEvent(result.data.params.id);
         return sendSuccess(res, null, 'Protocol event deleted');
     }),
+
+    // ─── Service Week ─────────────────────────────────────────────────────────────
+
+getAllServiceWeeks: asyncHandler(async (req: Request, res: Response) => {
+    const result = helpDeskFiltersSchema.safeParse({ query: req.query });
+    if (!result.success) {
+        throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid filters');
+    }
+    const weeks = await HelpDeskService.findAllServiceWeeks(result.data.query);
+    return sendSuccess(res, weeks, 'Service weeks retrieved');
+}),
+
+getServiceWeekById: asyncHandler(async (req: Request, res: Response) => {
+    const result = idSchema.safeParse({ params: req.params });
+    if (!result.success) {
+        throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    }
+    const week = await HelpDeskService.findServiceWeekById(result.data.params.id);
+    if (!week) {
+        throw new AppError(404, 'Service week not found');
+    }
+    return sendSuccess(res, week, 'Service week retrieved');
+}),
+
+createServiceWeek: asyncHandler(async (req: Request, res: Response) => {
+    const result = createServiceWeekSchema.safeParse({ body: req.body });
+    if (!result.success) {
+        throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
+    }
+    const week = await HelpDeskService.createServiceWeek(result.data.body, req.user!.id);
+    return sendSuccess(res, week, 'Service week created', 201);
+}),
+
+updateServiceWeekStatus: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = idSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) {
+        throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    }
+    const { status } = req.body;
+    if (!status) {
+        throw new AppError(400, 'Status is required');
+    }
+    const week = await HelpDeskService.updateServiceWeekStatus(
+        paramsResult.data.params.id,
+        { status }
+    );
+    return sendSuccess(res, week, 'Service week status updated');
+}),
+
+deleteServiceWeek: asyncHandler(async (req: Request, res: Response) => {
+    const result = idSchema.safeParse({ params: req.params });
+    if (!result.success) {
+        throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    }
+    await HelpDeskService.deleteServiceWeek(result.data.params.id);
+    return sendSuccess(res, null, 'Service week deleted');
+}),
 };

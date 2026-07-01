@@ -97,3 +97,29 @@ export const requireFiles = (
   }
   next();
 };
+
+
+// src/middleware/upload.ts — add this export alongside the existing ones
+
+const templateFileFilter = (
+  _req: Request,
+  file: Express.Multer.File,
+  cb: FileFilterCallback
+) => {
+  const allowedDocTypes = [
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.oasis.opendocument.text',
+  ];
+  if (allowedDocTypes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new AppError(400, 'Templates must be a Word document (.doc, .docx, or .odt)') as any, false);
+  }
+};
+
+export const uploadTemplate = multer({
+  storage,
+  limits: { fileSize: 15 * 1024 * 1024, files: 1 }, // 15MB is plenty for a letterhead doc
+  fileFilter: templateFileFilter,
+}).single('file');

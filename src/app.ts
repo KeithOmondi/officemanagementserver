@@ -21,6 +21,8 @@ import helpDeskRoutes from './features/helpdesk/helpdesk.routes';
 import noticesRoutes from "./features/notices/notices.routes"
 import notificationsRoutes from './features/notifications/notifications.routes';
 import externalLinksRoutes from './features/links/links.routes';
+import { protect } from './middleware/auth.middleware';
+import templateRoutes from './features/templates/templates.routes';
 
 const app: Express = express();
 
@@ -76,6 +78,7 @@ app.use('/api/v1/helpdesk', helpDeskRoutes);
 app.use('/api/v1/notices', noticesRoutes);
 app.use('/api/v1/notifications', notificationsRoutes);
 app.use('/api/v1/links', externalLinksRoutes);
+app.use('/api/v1/templates', protect, templateRoutes);
 
 
 

@@ -37,7 +37,16 @@ export interface DSADetail {
     dsa_per_day: number;
     days: number;
     total: number;
+    notes: string | null;
 }
+
+export type DSADetailInput = {
+    judge_name: string;
+    pj_number: string;
+    dsa_per_day: number;
+    days: number;
+    notes?: string;
+};
 
 export interface Circuit {
     id: string;
@@ -171,7 +180,7 @@ export interface CreateCircuitInput {
     location?: string;
     start_date: string;
     end_date: string;
-    dsa_details?: Omit<DSADetail, 'id' | 'total'>[];
+    dsa_details?: DSADetailInput[];
 }
 
 export interface CreateSpecialBenchInput {
@@ -179,7 +188,7 @@ export interface CreateSpecialBenchInput {
     case_reference?: string;
     start_date: string;
     end_date: string;
-    dsa_details?: Omit<DSADetail, 'id' | 'total'>[];
+    dsa_details?: DSADetailInput[];
 }
 
 export interface CreatePartHeardInput {
@@ -187,7 +196,7 @@ export interface CreatePartHeardInput {
     approved_by?: string;
     start_date: string;
     end_date: string;
-    dsa_details?: Omit<DSADetail, 'id' | 'total'>[];
+    dsa_details?: DSADetailInput[];
 }
 
 export interface CreateJudgeRequestInput {
@@ -211,7 +220,7 @@ export interface CreateProtocolEventInput {
     start_date: string;
     end_date: string;
     dsa_required?: boolean;
-    dsa_details?: Omit<DSADetail, 'id' | 'total'>[];
+    dsa_details?: DSADetailInput[];
     notes?: string;
 }
 

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { DSADetailInput } from './helpdesk.types';
 
 // ─── Shared ──────────────────────────────────────────────────────────────────
 
@@ -7,11 +8,13 @@ const utilityTypeEnum = z.enum(['Electricity', 'Water', 'Internet', 'Fuel', 'Oth
 const requestModeEnum = z.enum(['Letter', 'Email', 'Verbal', 'Other']);
 const visaTypeEnum = z.enum(['Official', 'Conference', 'Personal', 'Other']);
 
+// DSA Detail schema - notes is optional string only (not null)
 const dsaDetailSchema = z.object({
     judge_name: z.string().min(1).max(100),
     pj_number: z.string().min(1).max(50),
     dsa_per_day: z.number().min(0),
     days: z.number().int().min(1),
+    notes: z.string().optional(),
 });
 
 // ─── Utilities ──────────────────────────────────────────────────────────────
@@ -52,6 +55,14 @@ export const createCircuitSchema = z.object({
         start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         dsa_details: z.array(dsaDetailSchema).optional(),
+    }).strict(),
+});
+
+// ─── Update Circuit DSA Details ──────────────────────────────────────────
+
+export const updateCircuitDSASchema = z.object({
+    body: z.object({
+        dsa_details: z.array(dsaDetailSchema).min(1, 'At least one DSA detail is required'),
     }).strict(),
 });
 
@@ -156,3 +167,4 @@ export type CreateJudgeRequestInput = z.infer<typeof createJudgeRequestSchema>['
 export type CreateVisaRequestInput = z.infer<typeof createVisaRequestSchema>['body'];
 export type CreateProtocolEventInput = z.infer<typeof createProtocolEventSchema>['body'];
 export type HelpDeskFilters = z.infer<typeof helpDeskFiltersSchema>['query'];
+export type UpdateCircuitDSADetailsInput = z.infer<typeof updateCircuitDSASchema>['body'];

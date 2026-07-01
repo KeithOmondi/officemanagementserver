@@ -13,6 +13,7 @@ import {
     createProtocolEventSchema,
     helpDeskFiltersSchema,
     idSchema,
+    updateCircuitDSASchema,
 } from './helpdesk.validator';
 
 export const helpDeskController = {
@@ -190,6 +191,24 @@ export const helpDeskController = {
             { status }
         );
         return sendSuccess(res, circuit, 'Circuit status updated');
+    }),
+
+    updateCircuitDSADetails: asyncHandler(async (req: Request, res: Response) => {
+        const paramsResult = idSchema.safeParse({ params: req.params });
+        if (!paramsResult.success) {
+            throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        
+        const result = updateCircuitDSASchema.safeParse({ body: req.body });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid DSA details data');
+        }
+        
+        const circuit = await HelpDeskService.updateCircuitDSADetails(
+            paramsResult.data.params.id,
+            result.data.body.dsa_details
+        );
+        return sendSuccess(res, circuit, 'Circuit DSA details updated');
     }),
 
     deleteCircuit: asyncHandler(async (req: Request, res: Response) => {

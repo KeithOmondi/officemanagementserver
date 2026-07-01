@@ -41,6 +41,7 @@ export const createUploadDocumentSchema = z.object({
     reference_no:  z.string().max(100).trim().optional(),
     ref_type:           refTypeEnum,
     ref_other_description: z.string().max(500).trim().optional(),
+    priority:      z.enum(['low', 'normal', 'urgent']).default('normal'),
     assigned_to:   z.string().uuid().optional(),
     department_id: z.string().uuid().optional(),
     is_draft:      z.coerce.boolean().default(false),

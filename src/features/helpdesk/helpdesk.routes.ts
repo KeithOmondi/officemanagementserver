@@ -30,6 +30,7 @@ router.get('/circuits', helpDeskController.getAllCircuits);
 router.get('/circuits/:id', helpDeskController.getCircuitById);
 router.post('/circuits', requireRole('dept_head', 'super_admin'), helpDeskController.createCircuit);
 router.put('/circuits/:id/status', requireRole('dept_head', 'super_admin'), helpDeskController.updateCircuitStatus);
+router.put('/circuits/:id/dsa-details', requireRole('dept_head', 'super_admin'), helpDeskController.updateCircuitDSADetails);
 router.delete('/circuits/:id', requireRole('super_admin'), helpDeskController.deleteCircuit);
 
 // ─── Special Benches ────────────────────────────────────────────────────────

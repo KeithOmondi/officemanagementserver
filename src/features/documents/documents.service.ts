@@ -129,7 +129,7 @@ export class DocumentService {
 
   // ── Create upload ──────────────────────────────────────────────────────────
 
-  static async createUpload(
+ static async createUpload(
   input: CreateUploadDocumentInput,
   file: Express.Multer.File,
   createdBy: string,
@@ -147,8 +147,8 @@ export class DocumentService {
       `INSERT INTO documents
          (title, type, category, reference_no, ref_type, ref_other_description,
           file_url, file_public_id, file_size_bytes, mime_type, original_name,
-          assigned_to, department_id, created_by, status, is_draft)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+          assigned_to, department_id, created_by, status, is_draft, priority)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
        RETURNING id`,
       [
         input.title.trim(), input.type, input.category ?? null,
@@ -156,7 +156,7 @@ export class DocumentService {
         input.ref_type, input.ref_other_description?.trim() ?? null,
         uploaded.secure_url, uploaded.public_id, file.size, file.mimetype, file.originalname,
         input.assigned_to ?? null, input.department_id ?? null,
-        createdBy, status, input.is_draft,
+        createdBy, status, input.is_draft, input.priority,
       ]
     );
     await this.logFlow(pool, rows[0].id, input.is_draft ? 'draft_saved' : 'created', createdBy, null);

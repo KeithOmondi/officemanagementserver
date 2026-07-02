@@ -3,19 +3,89 @@ export type RequestMode = 'Letter' | 'Email' | 'Verbal' | 'Other';
 export type VisaType = 'Official' | 'Conference' | 'Personal' | 'Other';
 export type Status = 'Pending' | 'Signed' | 'Rejected' | 'In Progress' | 'Completed' | 'Active' | 'Resolved';
 
-export interface JudgeUtility {
+// ─── Judge Utilities (restructured: one judge → many utility items) ──────────
+
+export type UtilityStatus =
+    | 'Awaiting'
+    | 'Awaiting Documentation'
+    | 'Awaiting Funding'
+    | 'In Process'
+    | 'Approved'
+    | 'Paid'
+    | 'Payment NA';
+
+export interface UtilityItem {
     id: string;
-    judge_name: string;
+    request_id: string;
     utility_type: UtilityType;
     amount: number;
     period: string;
     description: string | null;
+    date_received: string | null;
+    date_forwarded_dass: string | null;
+    date_paid: string | null;
+    status: UtilityStatus;
     supporting_document_url: string | null;
-    status: Status;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface JudgeUtility {
+    id: string;
+    judge_name: string;
+    items: UtilityItem[];
     created_by: string | null;
     created_at: string;
     updated_at: string;
 }
+
+export type UtilityItemInput = {
+    utility_type: UtilityType;
+    amount: number;
+    period: string;
+    description?: string;
+    date_received?: string;
+    date_forwarded_dass?: string;
+    date_paid?: string;
+    status?: UtilityStatus;
+};
+
+export interface CreateUtilityInput {
+    judge_name: string;
+    items: UtilityItemInput[];
+}
+
+export interface AddUtilityItemInput {
+    utility_type: UtilityType;
+    amount: number;
+    period: string;
+    description?: string;
+    date_received?: string;
+    date_forwarded_dass?: string;
+    date_paid?: string;
+    status?: UtilityStatus;
+}
+
+export interface UpdateUtilityItemInput {
+    status?: UtilityStatus;
+    date_received?: string;
+    date_forwarded_dass?: string;
+    date_paid?: string;
+    amount?: number;
+    period?: string;
+    description?: string;
+    utility_type?: UtilityType; // ADDED — was silently dropped on updates before
+}
+
+export interface UtilityFilters {
+    search?: string;
+    judge_name?: string;
+    status?: UtilityStatus;
+    limit?: number;
+    offset?: number;
+}
+
+// ─── Everything below is unchanged ────────────────────────────────────────────
 
 export interface ClubMembership {
     id: string;
@@ -38,6 +108,7 @@ export interface DSADetail {
     days: number;
     total: number;
     notes: string | null;
+    designation: string | null;
 }
 
 export type DSADetailInput = {
@@ -46,6 +117,7 @@ export type DSADetailInput = {
     dsa_per_day: number;
     days: number;
     notes?: string;
+    designation?: string;
 };
 
 export interface Circuit {
@@ -160,13 +232,6 @@ export interface HelpDeskStats {
 }
 
 // Input types
-export interface CreateUtilityInput {
-    judge_name: string;
-    utility_type: UtilityType;
-    amount: number;
-    period: string;
-    description?: string;
-}
 
 export interface CreateClubMembershipInput {
     judge_name: string;

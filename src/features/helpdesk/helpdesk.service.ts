@@ -2,6 +2,7 @@ import { pool } from '../../config/db';
 import { AppError } from '../../utils/response';
 import type {
     JudgeUtility,
+    UtilityItem,
     ClubMembership,
     Circuit,
     SpecialBench,
@@ -12,6 +13,9 @@ import type {
     HelpDeskAuditEntry,
     HelpDeskStats,
     CreateUtilityInput,
+    AddUtilityItemInput,
+    UpdateUtilityItemInput,
+    UtilityFilters,
     CreateClubMembershipInput,
     CreateCircuitInput,
     CreateSpecialBenchInput,
@@ -28,9 +32,17 @@ import type {
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
-const UTILITY_SELECT = `
-    id, judge_name, utility_type, amount, period, description,
-    supporting_document_url, status, created_by, created_at, updated_at
+const UTILITY_REQUEST_SELECT = `
+    id, judge_name, created_by, created_at, updated_at
+`;
+
+// CHANGED: amount cast to float8 so pg returns a real JS number instead of a
+// string (Postgres NUMERIC columns come back as strings by default, which
+// was causing "+=" to concatenate rather than add in the frontend memo math).
+const UTILITY_ITEM_SELECT = `
+    id, request_id, utility_type, amount::float8 AS amount, period, description,
+    date_received, date_forwarded_dass, date_paid, status,
+    supporting_document_url, created_at, updated_at
 `;
 
 const CLUB_SELECT = `
@@ -53,6 +65,11 @@ const PART_HEARD_SELECT = `
     created_by, created_at, updated_at
 `;
 
+const SERVICE_WEEK_SELECT = `
+    id, name, week_number, year, start_date, end_date, total_dsa, status,
+    created_by, created_at, updated_at
+`;
+
 const REQUEST_SELECT = `
     id, judge_name, nature, mode, received_date, status, resolution_notes,
     created_by, created_at, updated_at
@@ -68,9 +85,9 @@ const PROTOCOL_SELECT = `
     created_by, created_at, updated_at
 `;
 
-// DSA detail select with all fields including notes
+// DSA detail select with all fields including notes and designation
 const DSA_DETAIL_SELECT = `
-    id, judge_name, pj_number, dsa_per_day, days, total, notes
+    id, judge_name, pj_number, designation, dsa_per_day, days, total, notes
 `;
 
 // ─── Service Class ────────────────────────────────────────────────────────────
@@ -82,13 +99,17 @@ export class HelpDeskService {
     static async getStats(): Promise<HelpDeskStats> {
         const { rows } = await pool.query(`
             SELECT
-                (SELECT COUNT(*)::int FROM judge_utilities WHERE is_active = true) +
+                (SELECT COUNT(*)::int FROM judge_utility_requests WHERE is_active = true) +
                 (SELECT COUNT(*)::int FROM club_memberships WHERE is_active = true) +
                 (SELECT COUNT(*)::int FROM circuits WHERE is_active = true) +
                 (SELECT COUNT(*)::int FROM special_benches WHERE is_active = true) +
-                (SELECT COUNT(*)::int FROM part_heards WHERE is_active = true) AS total_records,
+                (SELECT COUNT(*)::int FROM part_heards WHERE is_active = true) +
+                (SELECT COUNT(*)::int FROM service_weeks WHERE is_active = true) AS total_records,
+                (SELECT COUNT(*)::int FROM judge_utility_items WHERE status IN ('Awaiting', 'Awaiting Documentation', 'Awaiting Funding', 'In Process') AND is_active = true) +
                 (SELECT COUNT(*)::int FROM circuits WHERE status IN ('Pending', 'In Progress') AND is_active = true) +
-                (SELECT COUNT(*)::int FROM special_benches WHERE status IN ('Pending', 'In Progress') AND is_active = true) AS in_progress,
+                (SELECT COUNT(*)::int FROM special_benches WHERE status IN ('Pending', 'In Progress') AND is_active = true) +
+                (SELECT COUNT(*)::int FROM part_heards WHERE status IN ('Pending', 'In Progress') AND is_active = true) +
+                (SELECT COUNT(*)::int FROM service_weeks WHERE status IN ('Pending', 'In Progress') AND is_active = true) AS in_progress,
                 (SELECT COUNT(*)::int FROM visa_requests WHERE status = 'Active' AND is_active = true) AS visa_active,
                 (SELECT COUNT(*)::int FROM protocol_events WHERE status = 'Pending' AND is_active = true) AS protocol_pending
         `);
@@ -108,21 +129,27 @@ export class HelpDeskService {
         return rows;
     }
 
-    // ─── Judge Utilities ─────────────────────────────────────────────────────
+    // ─── Judge Utilities (one judge → many utility items) ────────────────────
 
-    static async findAllUtilities(filters: HelpDeskFilters = {}): Promise<JudgeUtility[]> {
-        let query = `SELECT ${UTILITY_SELECT} FROM judge_utilities WHERE is_active = true`;
+    private static async getUtilityItems(requestId: string): Promise<UtilityItem[]> {
+        const { rows } = await pool.query(
+            `SELECT ${UTILITY_ITEM_SELECT}
+             FROM judge_utility_items
+             WHERE request_id = $1 AND is_active = true
+             ORDER BY created_at ASC`,
+            [requestId]
+        );
+        return rows;
+    }
+
+    static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtility[]> {
+        let query = `SELECT ${UTILITY_REQUEST_SELECT} FROM judge_utility_requests WHERE is_active = true`;
         const params: unknown[] = [];
         let paramCount = 1;
 
         if (filters.search) {
-            query += ` AND (judge_name ILIKE $${paramCount} OR utility_type ILIKE $${paramCount})`;
+            query += ` AND judge_name ILIKE $${paramCount}`;
             params.push(`%${filters.search}%`);
-            paramCount++;
-        }
-        if (filters.status) {
-            query += ` AND status = $${paramCount}`;
-            params.push(filters.status);
             paramCount++;
         }
         if (filters.judge_name) {
@@ -143,67 +170,205 @@ export class HelpDeskService {
         }
 
         const { rows } = await pool.query(query, params);
-        return rows;
+
+        for (const request of rows) {
+            let items = await this.getUtilityItems(request.id);
+            if (filters.status) {
+                items = items.filter((item) => item.status === filters.status);
+            }
+            request.items = items;
+        }
+
+        // If filtering by status, drop judges with no matching items left
+        return filters.status ? rows.filter((r) => r.items.length > 0) : rows;
     }
 
     static async findUtilityById(id: string): Promise<JudgeUtility | null> {
         const { rows } = await pool.query(
-            `SELECT ${UTILITY_SELECT} FROM judge_utilities WHERE id = $1 AND is_active = true`,
+            `SELECT ${UTILITY_REQUEST_SELECT} FROM judge_utility_requests WHERE id = $1 AND is_active = true`,
             [id]
         );
-        return rows[0] || null;
+        if (rows.length === 0) return null;
+
+        const request = rows[0];
+        request.items = await this.getUtilityItems(id);
+        return request;
     }
 
     static async createUtility(
         input: CreateUtilityInput,
         userId: string
     ): Promise<JudgeUtility> {
-        const { rows } = await pool.query(
-            `INSERT INTO judge_utilities (
-                judge_name, utility_type, amount, period, description, created_by
-            ) VALUES ($1, $2, $3, $4, $5, $6)
-            RETURNING id`,
+        const client = await pool.connect();
+
+        try {
+            await client.query('BEGIN');
+
+            const { rows } = await client.query(
+                `INSERT INTO judge_utility_requests (judge_name, created_by)
+                 VALUES ($1, $2)
+                 RETURNING id`,
+                [input.judge_name.trim(), userId]
+            );
+
+            const requestId = rows[0].id;
+
+            for (const item of input.items) {
+                await client.query(
+                    `INSERT INTO judge_utility_items (
+                        request_id, utility_type, amount, period, description,
+                        date_received, date_forwarded_dass, date_paid, status
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+                    [
+                        requestId,
+                        item.utility_type,
+                        item.amount,
+                        item.period.trim(),
+                        item.description || null,
+                        item.date_received || null,
+                        item.date_forwarded_dass || null,
+                        item.date_paid || null,
+                        item.status || 'Awaiting',
+                    ]
+                );
+            }
+
+            await client.query('COMMIT');
+
+            const utility = await this.findUtilityById(requestId);
+            if (!utility) throw new AppError(500, 'Failed to create judge utility record');
+            return utility;
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    static async addUtilityItem(
+        requestId: string,
+        input: AddUtilityItemInput
+    ): Promise<JudgeUtility> {
+        const existing = await this.findUtilityById(requestId);
+        if (!existing) {
+            throw new AppError(404, 'Judge utility record not found');
+        }
+
+        await pool.query(
+            `INSERT INTO judge_utility_items (
+                request_id, utility_type, amount, period, description,
+                date_received, date_forwarded_dass, date_paid, status
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
             [
-                input.judge_name.trim(),
+                requestId,
                 input.utility_type,
                 input.amount,
                 input.period.trim(),
                 input.description || null,
-                userId,
+                input.date_received || null,
+                input.date_forwarded_dass || null,
+                input.date_paid || null,
+                input.status || 'Awaiting',
             ]
         );
 
-        const utility = await this.findUtilityById(rows[0].id);
-        if (!utility) throw new AppError(500, 'Failed to create utility entry');
-        return utility;
-    }
-
-    static async updateUtilityStatus(
-        id: string,
-        input: UpdateStatusInput
-    ): Promise<JudgeUtility> {
-        const existing = await this.findUtilityById(id);
-        if (!existing) {
-            throw new AppError(404, 'Utility entry not found');
-        }
-
-        await pool.query(
-            `UPDATE judge_utilities SET status = $1 WHERE id = $2`,
-            [input.status, id]
-        );
-
-        const updated = await this.findUtilityById(id);
-        if (!updated) throw new AppError(500, 'Failed to update utility status');
+        const updated = await this.findUtilityById(requestId);
+        if (!updated) throw new AppError(500, 'Failed to add utility item');
         return updated;
     }
 
-    static async deleteUtility(id: string): Promise<void> {
+    static async updateUtilityItem(
+        requestId: string,
+        itemId: string,
+        input: UpdateUtilityItemInput
+    ): Promise<JudgeUtility> {
+        const request = await this.findUtilityById(requestId);
+        if (!request) {
+            throw new AppError(404, 'Judge utility record not found');
+        }
+
+        const item = request.items.find((i) => i.id === itemId);
+        if (!item) {
+            throw new AppError(404, 'Utility item not found');
+        }
+
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        let paramCount = 1;
+
+        const setField = (column: string, value: unknown) => {
+            if (value !== undefined) {
+                fields.push(`${column} = $${paramCount}`);
+                values.push(value);
+                paramCount++;
+            }
+        };
+
+        setField('status', input.status);
+        setField('date_received', input.date_received);
+        setField('date_forwarded_dass', input.date_forwarded_dass);
+        setField('date_paid', input.date_paid);
+        setField('amount', input.amount);
+        setField('period', input.period?.trim());
+        setField('description', input.description);
+        setField('utility_type', input.utility_type); // ADDED — this was the missing piece causing everything to default/stay Electricity
+
+        if (fields.length === 0) {
+            return request;
+        }
+
+        fields.push(`updated_at = now()`);
+        values.push(itemId);
+
+        await pool.query(
+            `UPDATE judge_utility_items SET ${fields.join(', ')} WHERE id = $${paramCount}`,
+            values
+        );
+
+        const updated = await this.findUtilityById(requestId);
+        if (!updated) throw new AppError(500, 'Failed to update utility item');
+        return updated;
+    }
+
+    static async deleteUtilityItem(requestId: string, itemId: string): Promise<void> {
         const { rows } = await pool.query(
-            `UPDATE judge_utilities SET is_active = false WHERE id = $1 RETURNING id`,
-            [id]
+            `UPDATE judge_utility_items
+             SET is_active = false
+             WHERE id = $1 AND request_id = $2
+             RETURNING id`,
+            [itemId, requestId]
         );
         if (rows.length === 0) {
-            throw new AppError(404, 'Utility entry not found');
+            throw new AppError(404, 'Utility item not found');
+        }
+    }
+
+    static async deleteUtility(id: string): Promise<void> {
+        const client = await pool.connect();
+
+        try {
+            await client.query('BEGIN');
+
+            const { rows } = await client.query(
+                `UPDATE judge_utility_requests SET is_active = false WHERE id = $1 RETURNING id`,
+                [id]
+            );
+            if (rows.length === 0) {
+                throw new AppError(404, 'Judge utility record not found');
+            }
+
+            await client.query(
+                `UPDATE judge_utility_items SET is_active = false WHERE request_id = $1`,
+                [id]
+            );
+
+            await client.query('COMMIT');
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
         }
     }
 
@@ -305,6 +470,19 @@ export class HelpDeskService {
         }
     }
 
+    // ─── Helper: Get DSA Details ─────────────────────────────────────────────
+
+    private static async getDSADetails(table: string, foreignKey: string, id: string): Promise<any[]> {
+        const { rows } = await pool.query(
+            `SELECT ${DSA_DETAIL_SELECT} 
+             FROM ${table} 
+             WHERE ${foreignKey} = $1 AND is_active = true
+             ORDER BY created_at ASC`,
+            [id]
+        );
+        return rows;
+    }
+
     // ─── Circuits ────────────────────────────────────────────────────────────
 
     static async findAllCircuits(filters: HelpDeskFilters = {}): Promise<Circuit[]> {
@@ -336,20 +514,10 @@ export class HelpDeskService {
 
         const { rows } = await pool.query(query, params);
 
-        // Get DSA details for each circuit with all fields including notes
         for (const circuit of rows) {
-            const { rows: dsaRows } = await pool.query(
-                `SELECT ${DSA_DETAIL_SELECT} 
-                 FROM circuit_dsa_details 
-                 WHERE circuit_id = $1 AND is_active = true
-                 ORDER BY created_at ASC`,
-                [circuit.id]
-            );
-            circuit.dsa_details = dsaRows;
-            
-            // Calculate total DSA from all details
-            if (dsaRows.length > 0) {
-                circuit.total_dsa = dsaRows.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
+            circuit.dsa_details = await this.getDSADetails('circuit_dsa_details', 'circuit_id', circuit.id);
+            if (circuit.dsa_details.length > 0) {
+                circuit.total_dsa = circuit.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
             } else {
                 circuit.total_dsa = 0;
             }
@@ -367,21 +535,8 @@ export class HelpDeskService {
         if (rows.length === 0) return null;
 
         const circuit = rows[0];
-        const { rows: dsaRows } = await pool.query(
-            `SELECT ${DSA_DETAIL_SELECT} 
-             FROM circuit_dsa_details 
-             WHERE circuit_id = $1 AND is_active = true
-             ORDER BY created_at ASC`,
-            [id]
-        );
-        circuit.dsa_details = dsaRows;
-        
-        // Calculate total DSA from all details
-        if (dsaRows.length > 0) {
-            circuit.total_dsa = dsaRows.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
-        } else {
-            circuit.total_dsa = 0;
-        }
+        circuit.dsa_details = await this.getDSADetails('circuit_dsa_details', 'circuit_id', id);
+        circuit.total_dsa = circuit.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
 
         return circuit;
     }
@@ -411,18 +566,18 @@ export class HelpDeskService {
 
             const circuitId = rows[0].id;
 
-            // Insert DSA details with all fields including notes
             if (input.dsa_details && input.dsa_details.length > 0) {
                 for (const detail of input.dsa_details) {
                     const total = detail.dsa_per_day * detail.days;
                     await client.query(
                         `INSERT INTO circuit_dsa_details (
-                            circuit_id, judge_name, pj_number, dsa_per_day, days, total, notes
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                            circuit_id, judge_name, pj_number, designation, dsa_per_day, days, total, notes
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
                         [
                             circuitId,
                             detail.judge_name.trim(),
                             detail.pj_number.trim(),
+                            detail.designation || null,
                             detail.dsa_per_day,
                             detail.days,
                             total,
@@ -474,30 +629,28 @@ export class HelpDeskService {
         try {
             await client.query('BEGIN');
 
-            // Check if circuit exists
             const circuit = await this.findCircuitById(circuitId);
             if (!circuit) {
                 throw new AppError(404, 'Circuit not found');
             }
 
-            // Soft delete existing DSA details
             await client.query(
                 `UPDATE circuit_dsa_details SET is_active = false WHERE circuit_id = $1`,
                 [circuitId]
             );
 
-            // Insert new DSA details with all fields including notes
             if (dsaDetails && dsaDetails.length > 0) {
                 for (const detail of dsaDetails) {
                     const total = detail.dsa_per_day * detail.days;
                     await client.query(
                         `INSERT INTO circuit_dsa_details (
-                            circuit_id, judge_name, pj_number, dsa_per_day, days, total, notes
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                            circuit_id, judge_name, pj_number, designation, dsa_per_day, days, total, notes
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
                         [
                             circuitId,
                             detail.judge_name.trim(),
                             detail.pj_number.trim(),
+                            detail.designation || null,
                             detail.dsa_per_day,
                             detail.days,
                             total,
@@ -527,7 +680,6 @@ export class HelpDeskService {
         try {
             await client.query('BEGIN');
 
-            // Soft delete circuit
             const { rows } = await client.query(
                 `UPDATE circuits SET is_active = false WHERE id = $1 RETURNING id`,
                 [id]
@@ -537,7 +689,6 @@ export class HelpDeskService {
                 throw new AppError(404, 'Circuit not found');
             }
 
-            // Soft delete associated DSA details
             await client.query(
                 `UPDATE circuit_dsa_details SET is_active = false WHERE circuit_id = $1`,
                 [id]
@@ -585,21 +736,8 @@ export class HelpDeskService {
         const { rows } = await pool.query(query, params);
 
         for (const bench of rows) {
-            const { rows: dsaRows } = await pool.query(
-                `SELECT ${DSA_DETAIL_SELECT} 
-                 FROM special_bench_dsa_details 
-                 WHERE bench_id = $1 AND is_active = true
-                 ORDER BY created_at ASC`,
-                [bench.id]
-            );
-            bench.dsa_details = dsaRows;
-            
-            // Calculate total DSA
-            if (dsaRows.length > 0) {
-                bench.total_dsa = dsaRows.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
-            } else {
-                bench.total_dsa = 0;
-            }
+            bench.dsa_details = await this.getDSADetails('special_bench_dsa_details', 'bench_id', bench.id);
+            bench.total_dsa = bench.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
         }
 
         return rows;
@@ -614,21 +752,8 @@ export class HelpDeskService {
         if (rows.length === 0) return null;
 
         const bench = rows[0];
-        const { rows: dsaRows } = await pool.query(
-            `SELECT ${DSA_DETAIL_SELECT} 
-             FROM special_bench_dsa_details 
-             WHERE bench_id = $1 AND is_active = true
-             ORDER BY created_at ASC`,
-            [id]
-        );
-        bench.dsa_details = dsaRows;
-        
-        // Calculate total DSA
-        if (dsaRows.length > 0) {
-            bench.total_dsa = dsaRows.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
-        } else {
-            bench.total_dsa = 0;
-        }
+        bench.dsa_details = await this.getDSADetails('special_bench_dsa_details', 'bench_id', id);
+        bench.total_dsa = bench.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
 
         return bench;
     }
@@ -663,12 +788,13 @@ export class HelpDeskService {
                     const total = detail.dsa_per_day * detail.days;
                     await client.query(
                         `INSERT INTO special_bench_dsa_details (
-                            bench_id, judge_name, pj_number, dsa_per_day, days, total, notes
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                            bench_id, judge_name, pj_number, designation, dsa_per_day, days, total, notes
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
                         [
                             benchId,
                             detail.judge_name.trim(),
                             detail.pj_number.trim(),
+                            detail.designation || null,
                             detail.dsa_per_day,
                             detail.days,
                             total,
@@ -773,21 +899,8 @@ export class HelpDeskService {
         const { rows } = await pool.query(query, params);
 
         for (const ph of rows) {
-            const { rows: dsaRows } = await pool.query(
-                `SELECT ${DSA_DETAIL_SELECT} 
-                 FROM part_heard_dsa_details 
-                 WHERE part_heard_id = $1 AND is_active = true
-                 ORDER BY created_at ASC`,
-                [ph.id]
-            );
-            ph.dsa_details = dsaRows;
-            
-            // Calculate total DSA
-            if (dsaRows.length > 0) {
-                ph.total_dsa = dsaRows.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
-            } else {
-                ph.total_dsa = 0;
-            }
+            ph.dsa_details = await this.getDSADetails('part_heard_dsa_details', 'part_heard_id', ph.id);
+            ph.total_dsa = ph.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
         }
 
         return rows;
@@ -802,21 +915,8 @@ export class HelpDeskService {
         if (rows.length === 0) return null;
 
         const ph = rows[0];
-        const { rows: dsaRows } = await pool.query(
-            `SELECT ${DSA_DETAIL_SELECT} 
-             FROM part_heard_dsa_details 
-             WHERE part_heard_id = $1 AND is_active = true
-             ORDER BY created_at ASC`,
-            [id]
-        );
-        ph.dsa_details = dsaRows;
-        
-        // Calculate total DSA
-        if (dsaRows.length > 0) {
-            ph.total_dsa = dsaRows.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
-        } else {
-            ph.total_dsa = 0;
-        }
+        ph.dsa_details = await this.getDSADetails('part_heard_dsa_details', 'part_heard_id', id);
+        ph.total_dsa = ph.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
 
         return ph;
     }
@@ -851,12 +951,13 @@ export class HelpDeskService {
                     const total = detail.dsa_per_day * detail.days;
                     await client.query(
                         `INSERT INTO part_heard_dsa_details (
-                            part_heard_id, judge_name, pj_number, dsa_per_day, days, total, notes
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                            part_heard_id, judge_name, pj_number, designation, dsa_per_day, days, total, notes
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
                         [
                             phId,
                             detail.judge_name.trim(),
                             detail.pj_number.trim(),
+                            detail.designation || null,
                             detail.dsa_per_day,
                             detail.days,
                             total,
@@ -916,6 +1017,170 @@ export class HelpDeskService {
 
             await client.query(
                 `UPDATE part_heard_dsa_details SET is_active = false WHERE part_heard_id = $1`,
+                [id]
+            );
+
+            await client.query('COMMIT');
+            
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    // ─── Service Weeks ──────────────────────────────────────────────────────
+
+    static async findAllServiceWeeks(filters: HelpDeskFilters = {}): Promise<ServiceWeek[]> {
+        let query = `SELECT ${SERVICE_WEEK_SELECT} FROM service_weeks WHERE is_active = true`;
+        const params: unknown[] = [];
+        let paramCount = 1;
+
+        if (filters.search) {
+            query += ` AND (name ILIKE $${paramCount} OR week_number ILIKE $${paramCount})`;
+            params.push(`%${filters.search}%`);
+            paramCount++;
+        }
+        if (filters.status) {
+            query += ` AND status = $${paramCount}`;
+            params.push(filters.status);
+            paramCount++;
+        }
+
+        query += ` ORDER BY created_at DESC`;
+        if (filters.limit) {
+            query += ` LIMIT $${paramCount}`;
+            params.push(filters.limit);
+            paramCount++;
+        }
+        if (filters.offset) {
+            query += ` OFFSET $${paramCount}`;
+            params.push(filters.offset);
+        }
+
+        const { rows } = await pool.query(query, params);
+
+        for (const week of rows) {
+            week.dsa_details = await this.getDSADetails('service_week_dsa_details', 'service_week_id', week.id);
+            week.total_dsa = week.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
+        }
+
+        return rows;
+    }
+
+    static async findServiceWeekById(id: string): Promise<ServiceWeek | null> {
+        const { rows } = await pool.query(
+            `SELECT ${SERVICE_WEEK_SELECT} FROM service_weeks WHERE id = $1 AND is_active = true`,
+            [id]
+        );
+
+        if (rows.length === 0) return null;
+
+        const week = rows[0];
+        week.dsa_details = await this.getDSADetails('service_week_dsa_details', 'service_week_id', id);
+        week.total_dsa = week.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
+
+        return week;
+    }
+
+    static async createServiceWeek(
+        input: CreateServiceWeekInput,
+        userId: string
+    ): Promise<ServiceWeek> {
+        const client = await pool.connect();
+        
+        try {
+            await client.query('BEGIN');
+
+            const { rows } = await client.query(
+                `INSERT INTO service_weeks (
+                    name, week_number, year, start_date, end_date, created_by
+                ) VALUES ($1, $2, $3, $4, $5, $6)
+                RETURNING id`,
+                [
+                    input.name.trim(),
+                    input.week_number.trim(),
+                    input.year,
+                    input.start_date,
+                    input.end_date,
+                    userId,
+                ]
+            );
+
+            const weekId = rows[0].id;
+
+            if (input.dsa_details && input.dsa_details.length > 0) {
+                for (const detail of input.dsa_details) {
+                    const total = detail.dsa_per_day * detail.days;
+                    await client.query(
+                        `INSERT INTO service_week_dsa_details (
+                            service_week_id, judge_name, pj_number, designation, dsa_per_day, days, total, notes
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                        [
+                            weekId,
+                            detail.judge_name.trim(),
+                            detail.pj_number.trim(),
+                            detail.designation || null,
+                            detail.dsa_per_day,
+                            detail.days,
+                            total,
+                            detail.notes || null,
+                        ]
+                    );
+                }
+            }
+
+            await client.query('COMMIT');
+
+            const week = await this.findServiceWeekById(weekId);
+            if (!week) throw new AppError(500, 'Failed to create service week');
+            return week;
+            
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    static async updateServiceWeekStatus(
+        id: string,
+        input: UpdateStatusInput
+    ): Promise<ServiceWeek> {
+        const existing = await this.findServiceWeekById(id);
+        if (!existing) {
+            throw new AppError(404, 'Service week not found');
+        }
+
+        await pool.query(
+            `UPDATE service_weeks SET status = $1 WHERE id = $2`,
+            [input.status, id]
+        );
+
+        const updated = await this.findServiceWeekById(id);
+        if (!updated) throw new AppError(500, 'Failed to update service week status');
+        return updated;
+    }
+
+    static async deleteServiceWeek(id: string): Promise<void> {
+        const client = await pool.connect();
+        
+        try {
+            await client.query('BEGIN');
+
+            const { rows } = await client.query(
+                `UPDATE service_weeks SET is_active = false WHERE id = $1 RETURNING id`,
+                [id]
+            );
+            
+            if (rows.length === 0) {
+                throw new AppError(404, 'Service week not found');
+            }
+
+            await client.query(
+                `UPDATE service_week_dsa_details SET is_active = false WHERE service_week_id = $1`,
                 [id]
             );
 
@@ -1182,21 +1447,8 @@ export class HelpDeskService {
         const { rows } = await pool.query(query, params);
 
         for (const event of rows) {
-            const { rows: dsaRows } = await pool.query(
-                `SELECT ${DSA_DETAIL_SELECT} 
-                 FROM protocol_dsa_details 
-                 WHERE protocol_event_id = $1 AND is_active = true
-                 ORDER BY created_at ASC`,
-                [event.id]
-            );
-            event.dsa_details = dsaRows;
-            
-            // Calculate total DSA
-            if (dsaRows.length > 0) {
-                event.total_dsa = dsaRows.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
-            } else {
-                event.total_dsa = 0;
-            }
+            event.dsa_details = await this.getDSADetails('protocol_dsa_details', 'protocol_event_id', event.id);
+            event.total_dsa = event.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
         }
 
         return rows;
@@ -1211,84 +1463,72 @@ export class HelpDeskService {
         if (rows.length === 0) return null;
 
         const event = rows[0];
-        const { rows: dsaRows } = await pool.query(
-            `SELECT ${DSA_DETAIL_SELECT} 
-             FROM protocol_dsa_details 
-             WHERE protocol_event_id = $1 AND is_active = true
-             ORDER BY created_at ASC`,
-            [id]
-        );
-        event.dsa_details = dsaRows;
-        
-        // Calculate total DSA
-        if (dsaRows.length > 0) {
-            event.total_dsa = dsaRows.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
-        } else {
-            event.total_dsa = 0;
-        }
+        event.dsa_details = await this.getDSADetails('protocol_dsa_details', 'protocol_event_id', id);
+        event.total_dsa = event.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
 
         return event;
     }
 
     static async createProtocolEvent(
-    input: CreateProtocolEventInput,
-    userId: string
-): Promise<ProtocolEvent> {
-    const client = await pool.connect();
-    
-    try {
-        await client.query('BEGIN');
-
-        const { rows } = await client.query(
-            `INSERT INTO protocol_events (
-                event_name, start_date, end_date, dsa_required, notes, created_by
-            ) VALUES ($1, $2, $3, $4, $5, $6)
-            RETURNING id`,
-            [
-                input.event_name.trim(),
-                input.start_date,
-                input.end_date,
-                input.dsa_required || false,
-                input.notes || null,
-                userId,
-            ]
-        );
-
-        const eventId = rows[0].id;
-
-        if (input.dsa_details && input.dsa_details.length > 0) {
-            for (const detail of input.dsa_details) {
-                const total = detail.dsa_per_day * detail.days;
-                await client.query(
-                    `INSERT INTO protocol_dsa_details (
-                        protocol_event_id, judge_name, pj_number, dsa_per_day, days, total, notes
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-                    [
-                        eventId,
-                        detail.judge_name.trim(),
-                        detail.pj_number.trim(),
-                        detail.dsa_per_day,
-                        detail.days,
-                        total,
-                        detail.notes || null, // Convert undefined to null for DB
-                    ]
-                );
-            }
-        }
-
-        await client.query('COMMIT');
-
-        const event = await this.findProtocolEventById(eventId);
-        if (!event) throw new AppError(500, 'Failed to create protocol event');
-        return event;
+        input: CreateProtocolEventInput,
+        userId: string
+    ): Promise<ProtocolEvent> {
+        const client = await pool.connect();
         
-    } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-    } finally {
-        client.release();
+        try {
+            await client.query('BEGIN');
+
+            const { rows } = await client.query(
+                `INSERT INTO protocol_events (
+                    event_name, start_date, end_date, dsa_required, notes, created_by
+                ) VALUES ($1, $2, $3, $4, $5, $6)
+                RETURNING id`,
+                [
+                    input.event_name.trim(),
+                    input.start_date,
+                    input.end_date,
+                    input.dsa_required || false,
+                    input.notes || null,
+                    userId,
+                ]
+            );
+
+            const eventId = rows[0].id;
+
+            if (input.dsa_details && input.dsa_details.length > 0) {
+                for (const detail of input.dsa_details) {
+                    const total = detail.dsa_per_day * detail.days;
+                    await client.query(
+                        `INSERT INTO protocol_dsa_details (
+                            protocol_event_id, judge_name, pj_number, designation, dsa_per_day, days, total, notes
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                        [
+                            eventId,
+                            detail.judge_name.trim(),
+                            detail.pj_number.trim(),
+                            detail.designation || null,
+                            detail.dsa_per_day,
+                            detail.days,
+                            total,
+                            detail.notes || null,
+                        ]
+                    );
+                }
+            }
+
+            await client.query('COMMIT');
+
+            const event = await this.findProtocolEventById(eventId);
+            if (!event) throw new AppError(500, 'Failed to create protocol event');
+            return event;
+            
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
     }
-}
 
     static async updateProtocolStatus(
         id: string,
@@ -1339,194 +1579,4 @@ export class HelpDeskService {
             client.release();
         }
     }
-
-    // Add to service class
-static async findAllServiceWeeks(filters: HelpDeskFilters = {}): Promise<ServiceWeek[]> {
-    let query = `SELECT id, name, week_number, year, start_date, end_date, total_dsa, status,
-                        created_by, created_at, updated_at
-                 FROM service_weeks WHERE is_active = true`;
-    const params: unknown[] = [];
-    let paramCount = 1;
-
-    if (filters.search) {
-        query += ` AND (name ILIKE $${paramCount} OR week_number ILIKE $${paramCount})`;
-        params.push(`%${filters.search}%`);
-        paramCount++;
-    }
-    if (filters.status) {
-        query += ` AND status = $${paramCount}`;
-        params.push(filters.status);
-        paramCount++;
-    }
-
-    query += ` ORDER BY created_at DESC`;
-    if (filters.limit) {
-        query += ` LIMIT $${paramCount}`;
-        params.push(filters.limit);
-        paramCount++;
-    }
-    if (filters.offset) {
-        query += ` OFFSET $${paramCount}`;
-        params.push(filters.offset);
-    }
-
-    const { rows } = await pool.query(query, params);
-
-    for (const week of rows) {
-        const { rows: dsaRows } = await pool.query(
-            `SELECT id, judge_name, pj_number, dsa_per_day, days, total, notes
-             FROM service_week_dsa_details 
-             WHERE service_week_id = $1 AND is_active = true
-             ORDER BY created_at ASC`,
-            [week.id]
-        );
-        week.dsa_details = dsaRows;
-        
-        if (dsaRows.length > 0) {
-            week.total_dsa = dsaRows.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
-        } else {
-            week.total_dsa = 0;
-        }
-    }
-
-    return rows;
-}
-
-static async findServiceWeekById(id: string): Promise<ServiceWeek | null> {
-    const { rows } = await pool.query(
-        `SELECT id, name, week_number, year, start_date, end_date, total_dsa, status,
-                created_by, created_at, updated_at
-         FROM service_weeks WHERE id = $1 AND is_active = true`,
-        [id]
-    );
-
-    if (rows.length === 0) return null;
-
-    const week = rows[0];
-    const { rows: dsaRows } = await pool.query(
-        `SELECT id, judge_name, pj_number, dsa_per_day, days, total, notes
-         FROM service_week_dsa_details 
-         WHERE service_week_id = $1 AND is_active = true
-         ORDER BY created_at ASC`,
-        [id]
-    );
-    week.dsa_details = dsaRows;
-    
-    if (dsaRows.length > 0) {
-        week.total_dsa = dsaRows.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
-    } else {
-        week.total_dsa = 0;
-    }
-
-    return week;
-}
-
-static async createServiceWeek(
-    input: CreateServiceWeekInput,
-    userId: string
-): Promise<ServiceWeek> {
-    const client = await pool.connect();
-    
-    try {
-        await client.query('BEGIN');
-
-        const { rows } = await client.query(
-            `INSERT INTO service_weeks (
-                name, week_number, year, start_date, end_date, created_by
-            ) VALUES ($1, $2, $3, $4, $5, $6)
-            RETURNING id`,
-            [
-                input.name.trim(),
-                input.week_number.trim(),
-                input.year,
-                input.start_date,
-                input.end_date,
-                userId,
-            ]
-        );
-
-        const weekId = rows[0].id;
-
-        if (input.dsa_details && input.dsa_details.length > 0) {
-            for (const detail of input.dsa_details) {
-                const total = detail.dsa_per_day * detail.days;
-                await client.query(
-                    `INSERT INTO service_week_dsa_details (
-                        service_week_id, judge_name, pj_number, dsa_per_day, days, total, notes
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-                    [
-                        weekId,
-                        detail.judge_name.trim(),
-                        detail.pj_number.trim(),
-                        detail.dsa_per_day,
-                        detail.days,
-                        total,
-                        detail.notes || null,
-                    ]
-                );
-            }
-        }
-
-        await client.query('COMMIT');
-
-        const week = await this.findServiceWeekById(weekId);
-        if (!week) throw new AppError(500, 'Failed to create service week');
-        return week;
-        
-    } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-    } finally {
-        client.release();
-    }
-}
-
-static async updateServiceWeekStatus(
-    id: string,
-    input: UpdateStatusInput
-): Promise<ServiceWeek> {
-    const existing = await this.findServiceWeekById(id);
-    if (!existing) {
-        throw new AppError(404, 'Service week not found');
-    }
-
-    await pool.query(
-        `UPDATE service_weeks SET status = $1 WHERE id = $2`,
-        [input.status, id]
-    );
-
-    const updated = await this.findServiceWeekById(id);
-    if (!updated) throw new AppError(500, 'Failed to update service week status');
-    return updated;
-}
-
-static async deleteServiceWeek(id: string): Promise<void> {
-    const client = await pool.connect();
-    
-    try {
-        await client.query('BEGIN');
-
-        const { rows } = await client.query(
-            `UPDATE service_weeks SET is_active = false WHERE id = $1 RETURNING id`,
-            [id]
-        );
-        
-        if (rows.length === 0) {
-            throw new AppError(404, 'Service week not found');
-        }
-
-        await client.query(
-            `UPDATE service_week_dsa_details SET is_active = false WHERE service_week_id = $1`,
-            [id]
-        );
-
-        await client.query('COMMIT');
-        
-    } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-    } finally {
-        client.release();
-    }
-}
 }

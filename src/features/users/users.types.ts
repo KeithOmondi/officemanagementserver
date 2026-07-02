@@ -18,6 +18,10 @@ export interface User {
   created_at:    Date;
   updated_at:    Date;
   last_login?:   Date;
+  // Public URL of the user's uploaded signature image, or null if none has
+  // been uploaded yet. Safe to send to the frontend and to fetch when
+  // embedding a signature into a generated document.
+  signature_url: string | null;
 }
 
 export type CreateUserInput       = ValidatorCreateUserInput;

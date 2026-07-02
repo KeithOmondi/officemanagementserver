@@ -7,7 +7,7 @@ const ALLOWED_SORT_COLUMNS = new Set(['created_at', 'updated_at', 'full_name', '
 
 const USER_SELECT = `
   u.id, u.full_name, u.email, u.pj_number, u.role, u.department_id,
-  u.is_active, u.created_at, u.updated_at, u.last_login
+  u.is_active, u.created_at, u.updated_at, u.last_login, u.signature_url
 `;
 
 export class UserService {
@@ -133,6 +133,35 @@ export class UserService {
 
   static async updateLastLogin(id: string): Promise<void> {
     await pool.query(`UPDATE users SET last_login = NOW() WHERE id = $1`, [id]);
+  }
+
+  // ── Signature ────────────────────────────────────────────────────────────
+
+  /**
+   * The Cloudinary public_id is intentionally NOT part of USER_SELECT (no
+   * reason to expose it to the frontend) — fetched separately so the
+   * controller can delete the old asset when a signature is replaced.
+   */
+  static async getSignaturePublicId(id: string): Promise<string | null> {
+    const { rows } = await pool.query(
+      'SELECT signature_public_id FROM users WHERE id = $1',
+      [id]
+    );
+    return rows[0]?.signature_public_id ?? null;
+  }
+
+  static async updateSignature(
+    id: string,
+    signatureUrl: string | null,
+    signaturePublicId: string | null
+  ): Promise<User> {
+    const { rows } = await pool.query(
+      `UPDATE users SET signature_url = $1, signature_public_id = $2, updated_at = NOW()
+       WHERE id = $3 RETURNING id`,
+      [signatureUrl, signaturePublicId, id]
+    );
+    if (!rows.length) throw new AppError(404, 'User not found');
+    return (await this.findById(id))!;
   }
 
   static async getStats(): Promise<{

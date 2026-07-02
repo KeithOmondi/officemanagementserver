@@ -11,11 +11,13 @@ router.use(protect);
 router.get('/stats', helpDeskController.getStats);
 router.get('/audit', helpDeskController.getAuditLog);
 
-// ─── Judge Utilities ─────────────────────────────────────────────────────────
+// ─── Judge Utilities (one judge → many utility items) ────────────────────────
 router.get('/utilities', helpDeskController.getAllUtilities);
 router.get('/utilities/:id', helpDeskController.getUtilityById);
 router.post('/utilities', requireRole('dept_head', 'super_admin'), helpDeskController.createUtility);
-router.put('/utilities/:id/status', requireRole('dept_head', 'super_admin'), helpDeskController.updateUtilityStatus);
+router.post('/utilities/:id/items', requireRole('dept_head', 'super_admin'), helpDeskController.addUtilityItem);
+router.put('/utilities/:id/items/:itemId', requireRole('dept_head', 'super_admin'), helpDeskController.updateUtilityItem);
+router.delete('/utilities/:id/items/:itemId', requireRole('super_admin'), helpDeskController.deleteUtilityItem);
 router.delete('/utilities/:id', requireRole('super_admin'), helpDeskController.deleteUtility);
 
 // ─── Club Membership ─────────────────────────────────────────────────────────

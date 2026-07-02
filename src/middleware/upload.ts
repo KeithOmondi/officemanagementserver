@@ -123,3 +123,27 @@ export const uploadTemplate = multer({
   limits: { fileSize: 15 * 1024 * 1024, files: 1 }, // 15MB is plenty for a letterhead doc
   fileFilter: templateFileFilter,
 }).single('file');
+
+// Add this to your existing src/middleware/upload.ts, alongside `uploadTemplate`.
+// It reuses the same `storage` (memoryStorage) already defined in that file.
+
+const signatureFileFilter = (
+  _req: Request,
+  file: Express.Multer.File,
+  cb: FileFilterCallback
+) => {
+  // PNG/WEBP with a transparent background gives the cleanest result when
+  // composited into a memo, but JPEG/SVG are accepted too.
+  const allowedSignatureTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'];
+  if (allowedSignatureTypes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new AppError(400, 'Signature must be a PNG, JPEG, WEBP, or SVG image') as any, false);
+  }
+};
+
+export const uploadSignature = multer({
+  storage,
+  limits: { fileSize: 2 * 1024 * 1024, files: 1 }, // 2MB is plenty for a signature image
+  fileFilter: signatureFileFilter,
+}).single('signature');

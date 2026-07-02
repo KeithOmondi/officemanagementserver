@@ -14,6 +14,7 @@ import {
   markDocumentSchema,
   finalizeDraftSchema,
   returnDocumentSchema,
+  respondToDocumentSchema,
 } from './documents.validator';
 
 export const documentController = {
@@ -127,6 +128,34 @@ export const documentController = {
     if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
     const flow = await DocumentService.getFlowHistory(result.data.params.id);
     return sendSuccess(res, flow, 'Document flow retrieved');
+  }),
+
+  // ── Response thread ───────────────────────────────────────────────────────
+  //
+  // Replies in place to whatever the document currently needs (e.g. a return
+  // for more info) — numbered, with an optional file attachment — instead of
+  // the caller creating a disconnected new /upload document.
+
+  respond: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = documentIdSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    const bodyResult = respondToDocumentSchema.safeParse({ body: req.body });
+    if (!bodyResult.success) throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid response');
+
+    const response = await DocumentService.addResponse(
+      paramsResult.data.params.id,
+      bodyResult.data.body,
+      req.user!.id,
+      req.file
+    );
+    return sendSuccess(res, response, 'Response added successfully', 201);
+  }),
+
+  getResponses: asyncHandler(async (req: Request, res: Response) => {
+    const result = documentIdSchema.safeParse({ params: req.params });
+    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    const responses = await DocumentService.getResponses(result.data.params.id);
+    return sendSuccess(res, responses, 'Responses retrieved');
   }),
 
   // ── Marking to Departments ─────────────────────────────────────────────────

@@ -130,8 +130,18 @@ export const createAnnotationSchema = z.object({
   }).strict(),
 });
 
+// ── Response (threaded reply to a return/action request) ───────────────────
+//
+// Sent as multipart/form-data (file is optional) — same shape as
+// createUploadDocumentSchema's relationship to `upload.single('file')`.
+// `note` is required even when a file is attached, since the point is that
+// the reply is legible in the thread without having to open the attachment.
 
-
+export const respondToDocumentSchema = z.object({
+  body: z.object({
+    note: z.string().min(1, 'A response note is required').max(2000).trim(),
+  }).strict(),
+});
 
 // New schema for returning a document for action
 export const returnDocumentSchema = z.object({
@@ -160,3 +170,4 @@ export type UpdateDocumentInput = z.infer<typeof updateDocumentSchema>['body'];
 export type DocumentFilters = z.infer<typeof documentFiltersSchema>['query'];
 export type CreateAnnotationInput = z.infer<typeof createAnnotationSchema>['body'];
 export type MarkDocumentInput = z.infer<typeof markDocumentSchema>['body'];
+export type RespondToDocumentInput = z.infer<typeof respondToDocumentSchema>['body'];

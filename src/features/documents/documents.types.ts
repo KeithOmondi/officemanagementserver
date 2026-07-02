@@ -52,6 +52,28 @@ export interface DocumentAnnotation {
   created_at: Date;
 }
 
+// ── Document Response (threaded reply, numbered per document) ─────────────
+//
+// Distinct from DocumentAnnotation: an annotation is a side comment on the
+// document, whereas a DocumentResponse is a formal numbered reply to a
+// return/action request, can carry a file attachment, and drives the
+// document back into the assignee's queue (see DocumentService.addResponse).
+
+export interface DocumentResponse {
+  id: string;
+  document_id: string;
+  response_number: number;
+  responded_by: string;
+  responded_by_name: string;
+  note: string;
+  file_url: string | null;
+  file_public_id: string | null;
+  file_size_bytes: number | null;
+  mime_type: string | null;
+  original_name: string | null;
+  created_at: Date;
+}
+
 // ── Document ────────────────────────────────────────────────────────────────
 
 export interface Document {
@@ -91,6 +113,7 @@ export interface Document {
 export interface DocumentWithAnnotations extends Document {
   annotations: DocumentAnnotation[];
   mark_history: DocumentMark[];
+  responses: DocumentResponse[];
 }
 
 export interface DocumentPaginationResponse {

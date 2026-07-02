@@ -10,6 +10,7 @@ import type {
   DocumentAnnotation,
   DocumentMark,
   DocumentFlowEntry,
+  DocumentResponse,
 } from './documents.types';
 import type {
   CreateComposedDocumentInput,
@@ -18,6 +19,7 @@ import type {
   DocumentFilters,
   CreateAnnotationInput,
   MarkDocumentInput,
+  RespondToDocumentInput,
 } from './documents.validator';
 import { embedSignatureIntoHTML, embedSignatureIntoPDF } from '../../utils/embedSignature';
 import axios from 'axios';
@@ -94,6 +96,20 @@ const MARK_JOIN_DETAIL = `
   LEFT JOIN users mb        ON mb.id  = m.marked_by
   LEFT JOIN departments md  ON md.id  = m.marked_to_dept
   LEFT JOIN users mu        ON mu.id  = m.assigned_to
+`;
+
+// ── Response thread ──────────────────────────────────────────────────────────
+
+const RESPONSE_SELECT = `
+  r.id, r.document_id, r.response_number, r.responded_by,
+  ru.full_name AS responded_by_name,
+  r.note, r.file_url, r.file_public_id, r.file_size_bytes, r.mime_type, r.original_name,
+  r.created_at
+`;
+
+const RESPONSE_JOIN = `
+  FROM document_responses r
+  JOIN users ru ON ru.id = r.responded_by
 `;
 
 const ALLOWED_SORT = new Set(['created_at', 'updated_at', 'title', 'status']);
@@ -298,7 +314,7 @@ export class DocumentService {
   }
 
   static async findByIdWithAnnotations(id: string): Promise<DocumentWithAnnotations | null> {
-    const [docResult, annotResult, markResult, historyResult] = await Promise.all([
+    const [docResult, annotResult, markResult, historyResult, responseResult] = await Promise.all([
       pool.query(
         `SELECT ${DOC_SELECT} ${DOC_JOIN} WHERE d.id = $1 AND d.is_active = true`,
         [id]
@@ -322,6 +338,12 @@ export class DocumentService {
          ORDER BY m.marked_at DESC`,
         [id]
       ),
+      pool.query(
+        `SELECT ${RESPONSE_SELECT} ${RESPONSE_JOIN}
+         WHERE r.document_id = $1
+         ORDER BY r.response_number ASC`,
+        [id]
+      ),
     ]);
 
     if (!docResult.rows[0]) return null;
@@ -331,6 +353,7 @@ export class DocumentService {
       annotations: annotResult.rows,
       active_mark: markResult.rows[0] ?? null,
       mark_history: historyResult.rows,
+      responses: responseResult.rows,
     };
   }
 
@@ -627,6 +650,104 @@ export class DocumentService {
     await pool.query(`DELETE FROM document_annotations WHERE id = $1`, [annotationId]);
   }
 
+  // ── Response thread ──────────────────────────────────────────────────────
+  //
+  // This is the piece that closes the loop: instead of the administrator
+  // typing the reply into a brand new /upload document (which severs the
+  // link to what it's actually answering), the reply is appended to the
+  // SAME document as a numbered entry, optionally with a file attachment,
+  // and the document is handed straight back to the super admin's queue.
+
+  static async getResponses(documentId: string): Promise<DocumentResponse[]> {
+    const { rows } = await pool.query(
+      `SELECT ${RESPONSE_SELECT} ${RESPONSE_JOIN}
+       WHERE r.document_id = $1
+       ORDER BY r.response_number ASC`,
+      [documentId]
+    );
+    return rows;
+  }
+
+  static async addResponse(
+    documentId: string,
+    input: RespondToDocumentInput,
+    respondedBy: string,
+    file?: Express.Multer.File
+  ): Promise<DocumentResponse> {
+    const doc = await this.findById(documentId);
+    if (!doc) throw new AppError(404, 'Document not found');
+
+    // Only whoever the document is currently assigned to — i.e. whoever the
+    // return/mark was actually addressed to — can add a response. This is
+    // what keeps the thread meaningful: it's always the intended recipient
+    // replying, not just anyone attaching a comment.
+    if (doc.assigned_to !== respondedBy) {
+      throw new AppError(403, 'This document is not currently assigned to you, so you cannot respond to it');
+    }
+
+    let uploaded: { secure_url: string; public_id: string } | null = null;
+    if (file) {
+      uploaded = await uploadToCloudinary(file, 'registrar/document-responses');
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const { rows: countRows } = await client.query(
+        `SELECT COUNT(*) AS count FROM document_responses WHERE document_id = $1`,
+        [documentId]
+      );
+      const nextNumber = parseInt(countRows[0].count, 10) + 1;
+
+      const { rows } = await client.query(
+        `INSERT INTO document_responses
+           (document_id, response_number, responded_by, note,
+            file_url, file_public_id, file_size_bytes, mime_type, original_name)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         RETURNING id`,
+        [
+          documentId, nextNumber, respondedBy, input.note.trim(),
+          uploaded?.secure_url ?? null, uploaded?.public_id ?? null,
+          file?.size ?? null, file?.mimetype ?? null, file?.originalname ?? null,
+        ]
+      );
+
+      // Hand the document straight back to the super admin so it lands in
+      // their queue as "responded to" rather than sitting on the
+      // administrator's side waiting to be noticed.
+      const { rows: adminRows } = await client.query(
+        `SELECT id FROM users WHERE role = 'super_admin' AND is_active = true LIMIT 1`
+      );
+      const superAdminId = adminRows[0]?.id ?? null;
+
+      await client.query(
+        `UPDATE documents
+         SET status = 'pending_review', assigned_to = $1, updated_at = NOW()
+         WHERE id = $2`,
+        [superAdminId, documentId]
+      );
+
+      await this.logFlow(
+        client, documentId, 'responded', respondedBy, superAdminId,
+        `Response #${nextNumber}: ${input.note.trim()}`
+      );
+
+      await client.query('COMMIT');
+
+      const { rows: result } = await pool.query(
+        `SELECT ${RESPONSE_SELECT} ${RESPONSE_JOIN} WHERE r.id = $1`,
+        [rows[0].id]
+      );
+      return result[0];
+    } catch (err) {
+      await client.query('ROLLBACK');
+      if (uploaded) await deleteFromCloudinary(uploaded.public_id).catch(console.error);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
 
   // ── Request sign OTP ──────────────────────────────────────────────────────────
 

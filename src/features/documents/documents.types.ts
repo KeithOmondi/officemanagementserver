@@ -75,6 +75,7 @@ export interface DocumentResponse {
 }
 
 // ── Document ────────────────────────────────────────────────────────────────
+// UPDATED: Added response_count field
 
 export interface Document {
   id: string;
@@ -108,6 +109,7 @@ export interface Document {
   created_at: Date;
   updated_at: Date;
   active_mark: DocumentMark | null;
+  response_count?: number;  // ← ADDED: Number of responses on this document
 }
 
 export interface DocumentWithAnnotations extends Document {
@@ -134,4 +136,29 @@ export interface DocumentFlowEntry {
   to_user_name: string | null;
   note: string | null;
   created_at: Date;
+}
+
+// src/types/documents.types.ts - Add these types
+
+export interface CreateMemoInput {
+  to: string;
+  from: string;
+  cc?: string;
+  ref: string;
+  date: string;
+  subject: string;
+  body: string;
+  recipient_id?: string;
+  note?: string;
+}
+
+export interface CreateLetterInput {
+  to: string;
+  from: string;
+  ref: string;
+  date: string;
+  subject: string;
+  body: string;
+  recipient_id?: string;
+  note?: string;
 }

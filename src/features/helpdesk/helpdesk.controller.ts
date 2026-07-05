@@ -12,13 +12,16 @@ import {
     createCircuitSchema,
     createSpecialBenchSchema,
     createPartHeardSchema,
-    createJudgeRequestSchema,
+    createMedicalClaimSchema,
+    createGeneralRequestSchema,
     createVisaRequestSchema,
     createProtocolEventSchema,
     helpDeskFiltersSchema,
     idSchema,
     updateCircuitDSASchema,
     createServiceWeekSchema,
+    createOtherPaymentSchema,
+    updateOtherPaymentDSASchema,
 } from './helpdesk.validator';
 
 export const helpDeskController = {
@@ -59,7 +62,6 @@ export const helpDeskController = {
         return sendSuccess(res, utility, 'Judge utility record retrieved');
     }),
 
-    // Creates a judge + one or more utility items in one call
     createUtility: asyncHandler(async (req: Request, res: Response) => {
         const result = createUtilitySchema.safeParse({ body: req.body });
         if (!result.success) {
@@ -69,7 +71,6 @@ export const helpDeskController = {
         return sendSuccess(res, utility, 'Judge utility record created', 201);
     }),
 
-    // Adds a new utility item under an existing judge
     addUtilityItem: asyncHandler(async (req: Request, res: Response) => {
         const paramsResult = idSchema.safeParse({ params: req.params });
         if (!paramsResult.success) {
@@ -86,7 +87,6 @@ export const helpDeskController = {
         return sendSuccess(res, utility, 'Utility item added', 201);
     }),
 
-    // Updates a single utility item's status/dates/amount/etc.
     updateUtilityItem: asyncHandler(async (req: Request, res: Response) => {
         const paramsResult = utilityItemIdSchema.safeParse({ params: req.params });
         if (!paramsResult.success) {
@@ -232,12 +232,10 @@ export const helpDeskController = {
         if (!paramsResult.success) {
             throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
         }
-        
         const result = updateCircuitDSASchema.safeParse({ body: req.body });
         if (!result.success) {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid DSA details data');
         }
-        
         const circuit = await HelpDeskService.updateCircuitDSADetails(
             paramsResult.data.params.id,
             result.data.body.dsa_details
@@ -425,61 +423,118 @@ export const helpDeskController = {
         return sendSuccess(res, null, 'Service week deleted');
     }),
 
-    // ─── Judges' Requests ────────────────────────────────────────────────────
+    // ─── Medical Expense Claims ─────────────────────────────────────────────
 
-    getAllRequests: asyncHandler(async (req: Request, res: Response) => {
+    getAllMedicalClaims: asyncHandler(async (req: Request, res: Response) => {
         const result = helpDeskFiltersSchema.safeParse({ query: req.query });
         if (!result.success) {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid filters');
         }
-        const requests = await HelpDeskService.findAllRequests(result.data.query);
-        return sendSuccess(res, requests, 'Requests retrieved');
+        const claims = await HelpDeskService.findAllMedicalClaims(result.data.query);
+        return sendSuccess(res, claims, 'Medical claims retrieved');
     }),
 
-    getRequestById: asyncHandler(async (req: Request, res: Response) => {
+    getMedicalClaimById: asyncHandler(async (req: Request, res: Response) => {
         const result = idSchema.safeParse({ params: req.params });
         if (!result.success) {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
-        const request = await HelpDeskService.findRequestById(result.data.params.id);
-        if (!request) {
-            throw new AppError(404, 'Request not found');
+        const claim = await HelpDeskService.findMedicalClaimById(result.data.params.id);
+        if (!claim) {
+            throw new AppError(404, 'Medical claim not found');
         }
-        return sendSuccess(res, request, 'Request retrieved');
+        return sendSuccess(res, claim, 'Medical claim retrieved');
     }),
 
-    createRequest: asyncHandler(async (req: Request, res: Response) => {
-        const result = createJudgeRequestSchema.safeParse({ body: req.body });
+    createMedicalClaim: asyncHandler(async (req: Request, res: Response) => {
+        const result = createMedicalClaimSchema.safeParse({ body: req.body });
         if (!result.success) {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
-        const request = await HelpDeskService.createRequest(result.data.body, req.user!.id);
-        return sendSuccess(res, request, 'Request created', 201);
+        const claim = await HelpDeskService.createMedicalClaim(result.data.body, req.user!.id);
+        return sendSuccess(res, claim, 'Medical claim created', 201);
     }),
 
-    updateRequest: asyncHandler(async (req: Request, res: Response) => {
+    updateMedicalClaimStatus: asyncHandler(async (req: Request, res: Response) => {
         const paramsResult = idSchema.safeParse({ params: req.params });
         if (!paramsResult.success) {
             throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
         }
-        const { status, resolution_notes } = req.body;
+        const { status, remarks } = req.body;
         if (!status) {
             throw new AppError(400, 'Status is required');
         }
-        const request = await HelpDeskService.updateRequest(
+        const claim = await HelpDeskService.updateMedicalClaimStatus(
             paramsResult.data.params.id,
-            { status, resolution_notes }
+            { status, remarks }
         );
-        return sendSuccess(res, request, 'Request updated');
+        return sendSuccess(res, claim, 'Medical claim status updated');
     }),
 
-    deleteRequest: asyncHandler(async (req: Request, res: Response) => {
+    deleteMedicalClaim: asyncHandler(async (req: Request, res: Response) => {
         const result = idSchema.safeParse({ params: req.params });
         if (!result.success) {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
-        await HelpDeskService.deleteRequest(result.data.params.id);
-        return sendSuccess(res, null, 'Request deleted');
+        await HelpDeskService.deleteMedicalClaim(result.data.params.id);
+        return sendSuccess(res, null, 'Medical claim deleted');
+    }),
+
+    // ─── General Requests ────────────────────────────────────────────────────
+
+    getAllGeneralRequests: asyncHandler(async (req: Request, res: Response) => {
+        const result = helpDeskFiltersSchema.safeParse({ query: req.query });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid filters');
+        }
+        const requests = await HelpDeskService.findAllGeneralRequests(result.data.query);
+        return sendSuccess(res, requests, 'General requests retrieved');
+    }),
+
+    getGeneralRequestById: asyncHandler(async (req: Request, res: Response) => {
+        const result = idSchema.safeParse({ params: req.params });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        const request = await HelpDeskService.findGeneralRequestById(result.data.params.id);
+        if (!request) {
+            throw new AppError(404, 'General request not found');
+        }
+        return sendSuccess(res, request, 'General request retrieved');
+    }),
+
+    createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
+        const result = createGeneralRequestSchema.safeParse({ body: req.body });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
+        }
+        const request = await HelpDeskService.createGeneralRequest(result.data.body, req.user!.id);
+        return sendSuccess(res, request, 'General request created', 201);
+    }),
+
+    updateGeneralRequestStatus: asyncHandler(async (req: Request, res: Response) => {
+        const paramsResult = idSchema.safeParse({ params: req.params });
+        if (!paramsResult.success) {
+            throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        const { status, remarks } = req.body;
+        if (!status) {
+            throw new AppError(400, 'Status is required');
+        }
+        const request = await HelpDeskService.updateGeneralRequestStatus(
+            paramsResult.data.params.id,
+            { status, remarks }
+        );
+        return sendSuccess(res, request, 'General request status updated');
+    }),
+
+    deleteGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
+        const result = idSchema.safeParse({ params: req.params });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        await HelpDeskService.deleteGeneralRequest(result.data.params.id);
+        return sendSuccess(res, null, 'General request deleted');
     }),
 
     // ─── Visa Support ────────────────────────────────────────────────────────
@@ -594,5 +649,78 @@ export const helpDeskController = {
         }
         await HelpDeskService.deleteProtocolEvent(result.data.params.id);
         return sendSuccess(res, null, 'Protocol event deleted');
+    }),
+
+    // ─── Other Payments ──────────────────────────────────────────────────────
+
+    getAllOtherPayments: asyncHandler(async (req: Request, res: Response) => {
+        const result = helpDeskFiltersSchema.safeParse({ query: req.query });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid filters');
+        }
+        const payments = await HelpDeskService.findAllOtherPayments(result.data.query);
+        return sendSuccess(res, payments, 'Other payments retrieved');
+    }),
+
+    getOtherPaymentById: asyncHandler(async (req: Request, res: Response) => {
+        const result = idSchema.safeParse({ params: req.params });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        const payment = await HelpDeskService.findOtherPaymentById(result.data.params.id);
+        if (!payment) {
+            throw new AppError(404, 'Other payment not found');
+        }
+        return sendSuccess(res, payment, 'Other payment retrieved');
+    }),
+
+    createOtherPayment: asyncHandler(async (req: Request, res: Response) => {
+        const result = createOtherPaymentSchema.safeParse({ body: req.body });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
+        }
+        const payment = await HelpDeskService.createOtherPayment(result.data.body, req.user!.id);
+        return sendSuccess(res, payment, 'Other payment created', 201);
+    }),
+
+    updateOtherPaymentStatus: asyncHandler(async (req: Request, res: Response) => {
+        const paramsResult = idSchema.safeParse({ params: req.params });
+        if (!paramsResult.success) {
+            throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        const { status } = req.body;
+        if (!status) {
+            throw new AppError(400, 'Status is required');
+        }
+        const payment = await HelpDeskService.updateOtherPaymentStatus(
+            paramsResult.data.params.id,
+            { status }
+        );
+        return sendSuccess(res, payment, 'Other payment status updated');
+    }),
+
+    updateOtherPaymentDSADetails: asyncHandler(async (req: Request, res: Response) => {
+        const paramsResult = idSchema.safeParse({ params: req.params });
+        if (!paramsResult.success) {
+            throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        const result = updateOtherPaymentDSASchema.safeParse({ body: req.body });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid DSA details data');
+        }
+        const payment = await HelpDeskService.updateOtherPaymentDSADetails(
+            paramsResult.data.params.id,
+            result.data.body.dsa_details
+        );
+        return sendSuccess(res, payment, 'Other payment DSA details updated');
+    }),
+
+    deleteOtherPayment: asyncHandler(async (req: Request, res: Response) => {
+        const result = idSchema.safeParse({ params: req.params });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        await HelpDeskService.deleteOtherPayment(result.data.params.id);
+        return sendSuccess(res, null, 'Other payment deleted');
     }),
 };

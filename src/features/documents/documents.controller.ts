@@ -15,6 +15,9 @@ import {
   finalizeDraftSchema,
   returnDocumentSchema,
   respondToDocumentSchema,
+  createMemoSchema,
+  createLetterSchema,
+  sendToUserSchema,
 } from './documents.validator';
 
 export const documentController = {
@@ -35,6 +38,55 @@ export const documentController = {
     if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
     const doc = await DocumentService.createUpload(result.data.body, file, req.user!.id, req.user!.role);
     return sendSuccess(res, doc, 'Document uploaded successfully', 201);
+  }),
+
+  // ── Create Memo ──────────────────────────────────────────────────────────────
+
+  createMemo: asyncHandler(async (req: Request, res: Response) => {
+    const result = createMemoSchema.safeParse({ body: req.body });
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid memo data');
+    }
+    const doc = await DocumentService.createMemo(result.data.body, req.user!.id, req.file);
+    return sendSuccess(res, doc, 'Memo created successfully', 201);
+  }),
+
+  // ── Create Letter ────────────────────────────────────────────────────────────
+
+  createLetter: asyncHandler(async (req: Request, res: Response) => {
+    const result = createLetterSchema.safeParse({ body: req.body });
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid letter data');
+    }
+    const doc = await DocumentService.createLetter(result.data.body, req.user!.id, req.file);
+    return sendSuccess(res, doc, 'Letter created successfully', 201);
+  }),
+
+  // ── Send to User ─────────────────────────────────────────────────────────────
+
+  sendToUser: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = documentIdSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) {
+      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    }
+    const bodyResult = sendToUserSchema.safeParse({ body: req.body });
+    if (!bodyResult.success) {
+      throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid request');
+    }
+    const doc = await DocumentService.sendToUser(
+      paramsResult.data.params.id,
+      bodyResult.data.body.recipient_id,
+      req.user!.id,
+      bodyResult.data.body.note
+    );
+    return sendSuccess(res, doc, 'Document sent successfully');
+  }),
+
+  // ── Get Received Documents ──────────────────────────────────────────────────
+
+  getReceivedDocuments: asyncHandler(async (req: Request, res: Response) => {
+    const docs = await DocumentService.getReceivedDocuments(req.user!.id);
+    return sendSuccess(res, docs, 'Received documents retrieved');
   }),
 
   // ── Read ──────────────────────────────────────────────────────────────────────
@@ -131,10 +183,6 @@ export const documentController = {
   }),
 
   // ── Response thread ───────────────────────────────────────────────────────
-  //
-  // Replies in place to whatever the document currently needs (e.g. a return
-  // for more info) — numbered, with an optional file attachment — instead of
-  // the caller creating a disconnected new /upload document.
 
   respond: asyncHandler(async (req: Request, res: Response) => {
     const paramsResult = documentIdSchema.safeParse({ params: req.params });

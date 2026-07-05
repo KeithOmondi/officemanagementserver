@@ -7,7 +7,8 @@ import type {
     Circuit,
     SpecialBench,
     PartHeard,
-    JudgeRequest,
+    MedicalClaim,
+    GeneralRequest,
     VisaRequest,
     ProtocolEvent,
     HelpDeskAuditEntry,
@@ -20,7 +21,8 @@ import type {
     CreateCircuitInput,
     CreateSpecialBenchInput,
     CreatePartHeardInput,
-    CreateJudgeRequestInput,
+    CreateMedicalClaimInput,
+    CreateGeneralRequestInput,
     CreateVisaRequestInput,
     CreateProtocolEventInput,
     UpdateStatusInput,
@@ -28,6 +30,9 @@ import type {
     DSADetailInput,
     ServiceWeek,
     CreateServiceWeekInput,
+    OtherPayment,
+    CreateOtherPaymentInput,
+    Status,
 } from './helpdesk.types';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -36,18 +41,18 @@ const UTILITY_REQUEST_SELECT = `
     id, judge_name, created_by, created_at, updated_at
 `;
 
-// CHANGED: amount cast to float8 so pg returns a real JS number instead of a
-// string (Postgres NUMERIC columns come back as strings by default, which
-// was causing "+=" to concatenate rather than add in the frontend memo math).
 const UTILITY_ITEM_SELECT = `
-    id, request_id, utility_type, amount::float8 AS amount, period, description,
+    id, request_id, utility_type, requisition_number, amount::float8 AS amount, period, description,
     date_received, date_forwarded_dass, date_paid, status,
     supporting_document_url, created_at, updated_at
 `;
 
 const CLUB_SELECT = `
-    id, judge_name, club_name, annual_fee, period,
-    supporting_document_url, status, created_by, created_at, updated_at
+    id, pj_no, judge_name, club_name, 
+    entry_fee::float8 AS entry_fee, 
+    annual_fee::float8 AS annual_fee, 
+    date_submitted_dass, court, payment_date, remarks,
+    status, created_by, created_at, updated_at
 `;
 
 const CIRCUIT_SELECT = `
@@ -70,24 +75,36 @@ const SERVICE_WEEK_SELECT = `
     created_by, created_at, updated_at
 `;
 
-const REQUEST_SELECT = `
-    id, judge_name, nature, mode, received_date, status, resolution_notes,
+const MEDICAL_CLAIM_SELECT = `
+    id, s_no, officer_name, claim_amount::float8 AS claim_amount, 
+    date_forwarded_dhr, status, remarks,
+    created_by, created_at, updated_at
+`;
+
+const GENERAL_REQUEST_SELECT = `
+    id, s_no, judge_name, request, date_received, officer_assigned, status, remarks,
     created_by, created_at, updated_at
 `;
 
 const VISA_SELECT = `
-    id, judge_name, request_date, destination_country, visa_type,
-    travel_date, status, notes, created_by, created_at, updated_at
-`;
-
-const PROTOCOL_SELECT = `
-    id, event_name, start_date, end_date, dsa_required, total_dsa, status, notes,
+    id, s_no, name, destination_country, date_of_travel, date_of_return,
+    visa_type, purpose_of_travel, remarks, status, notes,
     created_by, created_at, updated_at
 `;
 
-// DSA detail select with all fields including notes and designation
+const PROTOCOL_SELECT = `
+    id, s_no, activity, period_from, period_to, officers_assigned, remarks,
+    dsa_required, total_dsa, status, notes,
+    created_by, created_at, updated_at
+`;
+
 const DSA_DETAIL_SELECT = `
     id, judge_name, pj_number, designation, dsa_per_day, days, total, notes
+`;
+
+const OTHER_PAYMENT_SELECT = `
+    id, name, description, start_date, end_date, total_dsa, status,
+    created_by, created_at, updated_at
 `;
 
 // ─── Service Class ────────────────────────────────────────────────────────────
@@ -104,12 +121,18 @@ export class HelpDeskService {
                 (SELECT COUNT(*)::int FROM circuits WHERE is_active = true) +
                 (SELECT COUNT(*)::int FROM special_benches WHERE is_active = true) +
                 (SELECT COUNT(*)::int FROM part_heards WHERE is_active = true) +
-                (SELECT COUNT(*)::int FROM service_weeks WHERE is_active = true) AS total_records,
+                (SELECT COUNT(*)::int FROM service_weeks WHERE is_active = true) +
+                (SELECT COUNT(*)::int FROM medical_claims WHERE is_active = true) +
+                (SELECT COUNT(*)::int FROM general_requests WHERE is_active = true) +
+                (SELECT COUNT(*)::int FROM other_payments WHERE is_active = true) AS total_records,
                 (SELECT COUNT(*)::int FROM judge_utility_items WHERE status IN ('Awaiting', 'Awaiting Documentation', 'Awaiting Funding', 'In Process') AND is_active = true) +
                 (SELECT COUNT(*)::int FROM circuits WHERE status IN ('Pending', 'In Progress') AND is_active = true) +
                 (SELECT COUNT(*)::int FROM special_benches WHERE status IN ('Pending', 'In Progress') AND is_active = true) +
                 (SELECT COUNT(*)::int FROM part_heards WHERE status IN ('Pending', 'In Progress') AND is_active = true) +
-                (SELECT COUNT(*)::int FROM service_weeks WHERE status IN ('Pending', 'In Progress') AND is_active = true) AS in_progress,
+                (SELECT COUNT(*)::int FROM service_weeks WHERE status IN ('Pending', 'In Progress') AND is_active = true) +
+                (SELECT COUNT(*)::int FROM medical_claims WHERE status IN ('Pending', 'In Progress') AND is_active = true) +
+                (SELECT COUNT(*)::int FROM general_requests WHERE status IN ('Pending', 'In Progress') AND is_active = true) +
+                (SELECT COUNT(*)::int FROM other_payments WHERE status IN ('Pending', 'In Progress') AND is_active = true) AS in_progress,
                 (SELECT COUNT(*)::int FROM visa_requests WHERE status = 'Active' AND is_active = true) AS visa_active,
                 (SELECT COUNT(*)::int FROM protocol_events WHERE status = 'Pending' AND is_active = true) AS protocol_pending
         `);
@@ -179,7 +202,6 @@ export class HelpDeskService {
             request.items = items;
         }
 
-        // If filtering by status, drop judges with no matching items left
         return filters.status ? rows.filter((r) => r.items.length > 0) : rows;
     }
 
@@ -216,12 +238,13 @@ export class HelpDeskService {
             for (const item of input.items) {
                 await client.query(
                     `INSERT INTO judge_utility_items (
-                        request_id, utility_type, amount, period, description,
+                        request_id, utility_type, requisition_number, amount, period, description,
                         date_received, date_forwarded_dass, date_paid, status
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
                     [
                         requestId,
                         item.utility_type,
+                        item.requisition_number || null,
                         item.amount,
                         item.period.trim(),
                         item.description || null,
@@ -257,12 +280,13 @@ export class HelpDeskService {
 
         await pool.query(
             `INSERT INTO judge_utility_items (
-                request_id, utility_type, amount, period, description,
+                request_id, utility_type, requisition_number, amount, period, description,
                 date_received, date_forwarded_dass, date_paid, status
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
             [
                 requestId,
                 input.utility_type,
+                input.requisition_number || null,
                 input.amount,
                 input.period.trim(),
                 input.description || null,
@@ -312,7 +336,8 @@ export class HelpDeskService {
         setField('amount', input.amount);
         setField('period', input.period?.trim());
         setField('description', input.description);
-        setField('utility_type', input.utility_type); // ADDED — this was the missing piece causing everything to default/stay Electricity
+        setField('utility_type', input.utility_type);
+        setField('requisition_number', input.requisition_number);
 
         if (fields.length === 0) {
             return request;
@@ -380,7 +405,7 @@ export class HelpDeskService {
         let paramCount = 1;
 
         if (filters.search) {
-            query += ` AND (judge_name ILIKE $${paramCount} OR club_name ILIKE $${paramCount})`;
+            query += ` AND (judge_name ILIKE $${paramCount} OR club_name ILIKE $${paramCount} OR pj_no ILIKE $${paramCount})`;
             params.push(`%${filters.search}%`);
             paramCount++;
         }
@@ -424,14 +449,20 @@ export class HelpDeskService {
     ): Promise<ClubMembership> {
         const { rows } = await pool.query(
             `INSERT INTO club_memberships (
-                judge_name, club_name, annual_fee, period, created_by
-            ) VALUES ($1, $2, $3, $4, $5)
+                pj_no, judge_name, club_name, entry_fee, annual_fee,
+                date_submitted_dass, court, payment_date, remarks, created_by
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             RETURNING id`,
             [
+                input.pj_no || null,
                 input.judge_name.trim(),
                 input.club_name.trim(),
-                input.annual_fee,
-                input.period.trim(),
+                input.entry_fee || null,
+                input.annual_fee || null,
+                input.date_submitted_dass || null,
+                input.court || null,
+                input.payment_date || null,
+                input.remarks || null,
                 userId,
             ]
         );
@@ -1194,26 +1225,21 @@ export class HelpDeskService {
         }
     }
 
-    // ─── Judges' Requests ─────────────────────────────────────────────────────
+    // ─── Medical Expense Claims ──────────────────────────────────────────────
 
-    static async findAllRequests(filters: HelpDeskFilters = {}): Promise<JudgeRequest[]> {
-        let query = `SELECT ${REQUEST_SELECT} FROM judge_requests WHERE is_active = true`;
+    static async findAllMedicalClaims(filters: HelpDeskFilters = {}): Promise<MedicalClaim[]> {
+        let query = `SELECT ${MEDICAL_CLAIM_SELECT} FROM medical_claims WHERE is_active = true`;
         const params: unknown[] = [];
         let paramCount = 1;
 
         if (filters.search) {
-            query += ` AND (judge_name ILIKE $${paramCount} OR nature ILIKE $${paramCount})`;
+            query += ` AND officer_name ILIKE $${paramCount}`;
             params.push(`%${filters.search}%`);
             paramCount++;
         }
         if (filters.status) {
             query += ` AND status = $${paramCount}`;
             params.push(filters.status);
-            paramCount++;
-        }
-        if (filters.judge_name) {
-            query += ` AND judge_name ILIKE $${paramCount}`;
-            params.push(`%${filters.judge_name}%`);
             paramCount++;
         }
 
@@ -1232,65 +1258,165 @@ export class HelpDeskService {
         return rows;
     }
 
-    static async findRequestById(id: string): Promise<JudgeRequest | null> {
+    static async findMedicalClaimById(id: string): Promise<MedicalClaim | null> {
         const { rows } = await pool.query(
-            `SELECT ${REQUEST_SELECT} FROM judge_requests WHERE id = $1 AND is_active = true`,
+            `SELECT ${MEDICAL_CLAIM_SELECT} FROM medical_claims WHERE id = $1 AND is_active = true`,
             [id]
         );
         return rows[0] || null;
     }
 
-    static async createRequest(
-        input: CreateJudgeRequestInput,
+    static async createMedicalClaim(
+        input: CreateMedicalClaimInput,
         userId: string
-    ): Promise<JudgeRequest> {
+    ): Promise<MedicalClaim> {
         const { rows } = await pool.query(
-            `INSERT INTO judge_requests (
-                judge_name, nature, mode, received_date, created_by
-            ) VALUES ($1, $2, $3, $4, $5)
+            `INSERT INTO medical_claims (
+                s_no, officer_name, claim_amount, date_forwarded_dhr, status, remarks, created_by
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id`,
             [
-                input.judge_name.trim(),
-                input.nature.trim(),
-                input.mode,
-                input.received_date,
+                input.s_no || null,
+                input.officer_name.trim(),
+                input.claim_amount,
+                input.date_forwarded_dhr || null,
+                input.status || 'Pending',
+                input.remarks || null,
                 userId,
             ]
         );
 
-        const request = await this.findRequestById(rows[0].id);
-        if (!request) throw new AppError(500, 'Failed to create request');
-        return request;
+        const claim = await this.findMedicalClaimById(rows[0].id);
+        if (!claim) throw new AppError(500, 'Failed to create medical claim');
+        return claim;
     }
 
-    static async updateRequest(
+    static async updateMedicalClaimStatus(
         id: string,
-        input: { status: string; resolution_notes?: string }
-    ): Promise<JudgeRequest> {
-        const existing = await this.findRequestById(id);
+        input: { status: Status; remarks?: string }
+    ): Promise<MedicalClaim> {
+        const existing = await this.findMedicalClaimById(id);
         if (!existing) {
-            throw new AppError(404, 'Request not found');
+            throw new AppError(404, 'Medical claim not found');
         }
 
         await pool.query(
-            `UPDATE judge_requests 
-             SET status = $1, resolution_notes = $2 
+            `UPDATE medical_claims 
+             SET status = $1, remarks = COALESCE($2, remarks)
              WHERE id = $3`,
-            [input.status, input.resolution_notes || null, id]
+            [input.status, input.remarks || null, id]
         );
 
-        const updated = await this.findRequestById(id);
-        if (!updated) throw new AppError(500, 'Failed to update request');
+        const updated = await this.findMedicalClaimById(id);
+        if (!updated) throw new AppError(500, 'Failed to update medical claim status');
         return updated;
     }
 
-    static async deleteRequest(id: string): Promise<void> {
+    static async deleteMedicalClaim(id: string): Promise<void> {
         const { rows } = await pool.query(
-            `UPDATE judge_requests SET is_active = false WHERE id = $1 RETURNING id`,
+            `UPDATE medical_claims SET is_active = false WHERE id = $1 RETURNING id`,
             [id]
         );
         if (rows.length === 0) {
-            throw new AppError(404, 'Request not found');
+            throw new AppError(404, 'Medical claim not found');
+        }
+    }
+
+    // ─── General Requests ─────────────────────────────────────────────────────
+
+    static async findAllGeneralRequests(filters: HelpDeskFilters = {}): Promise<GeneralRequest[]> {
+        let query = `SELECT ${GENERAL_REQUEST_SELECT} FROM general_requests WHERE is_active = true`;
+        const params: unknown[] = [];
+        let paramCount = 1;
+
+        if (filters.search) {
+            query += ` AND (judge_name ILIKE $${paramCount} OR request ILIKE $${paramCount})`;
+            params.push(`%${filters.search}%`);
+            paramCount++;
+        }
+        if (filters.status) {
+            query += ` AND status = $${paramCount}`;
+            params.push(filters.status);
+            paramCount++;
+        }
+
+        query += ` ORDER BY created_at DESC`;
+        if (filters.limit) {
+            query += ` LIMIT $${paramCount}`;
+            params.push(filters.limit);
+            paramCount++;
+        }
+        if (filters.offset) {
+            query += ` OFFSET $${paramCount}`;
+            params.push(filters.offset);
+        }
+
+        const { rows } = await pool.query(query, params);
+        return rows;
+    }
+
+    static async findGeneralRequestById(id: string): Promise<GeneralRequest | null> {
+        const { rows } = await pool.query(
+            `SELECT ${GENERAL_REQUEST_SELECT} FROM general_requests WHERE id = $1 AND is_active = true`,
+            [id]
+        );
+        return rows[0] || null;
+    }
+
+    static async createGeneralRequest(
+        input: CreateGeneralRequestInput,
+        userId: string
+    ): Promise<GeneralRequest> {
+        const { rows } = await pool.query(
+            `INSERT INTO general_requests (
+                s_no, judge_name, request, date_received, officer_assigned, status, remarks, created_by
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING id`,
+            [
+                input.s_no || null,
+                input.judge_name.trim(),
+                input.request.trim(),
+                input.date_received || null,
+                input.officer_assigned || null,
+                input.status || 'Pending',
+                input.remarks || null,
+                userId,
+            ]
+        );
+
+        const request = await this.findGeneralRequestById(rows[0].id);
+        if (!request) throw new AppError(500, 'Failed to create general request');
+        return request;
+    }
+
+    static async updateGeneralRequestStatus(
+        id: string,
+        input: { status: Status; remarks?: string }
+    ): Promise<GeneralRequest> {
+        const existing = await this.findGeneralRequestById(id);
+        if (!existing) {
+            throw new AppError(404, 'General request not found');
+        }
+
+        await pool.query(
+            `UPDATE general_requests 
+             SET status = $1, remarks = COALESCE($2, remarks)
+             WHERE id = $3`,
+            [input.status, input.remarks || null, id]
+        );
+
+        const updated = await this.findGeneralRequestById(id);
+        if (!updated) throw new AppError(500, 'Failed to update general request status');
+        return updated;
+    }
+
+    static async deleteGeneralRequest(id: string): Promise<void> {
+        const { rows } = await pool.query(
+            `UPDATE general_requests SET is_active = false WHERE id = $1 RETURNING id`,
+            [id]
+        );
+        if (rows.length === 0) {
+            throw new AppError(404, 'General request not found');
         }
     }
 
@@ -1302,18 +1428,13 @@ export class HelpDeskService {
         let paramCount = 1;
 
         if (filters.search) {
-            query += ` AND (judge_name ILIKE $${paramCount} OR destination_country ILIKE $${paramCount})`;
+            query += ` AND (name ILIKE $${paramCount} OR destination_country ILIKE $${paramCount})`;
             params.push(`%${filters.search}%`);
             paramCount++;
         }
         if (filters.status) {
             query += ` AND status = $${paramCount}`;
             params.push(filters.status);
-            paramCount++;
-        }
-        if (filters.judge_name) {
-            query += ` AND judge_name ILIKE $${paramCount}`;
-            params.push(`%${filters.judge_name}%`);
             paramCount++;
         }
 
@@ -1365,16 +1486,19 @@ export class HelpDeskService {
     ): Promise<VisaRequest> {
         const { rows } = await pool.query(
             `INSERT INTO visa_requests (
-                judge_name, request_date, destination_country, visa_type,
-                travel_date, notes, created_by
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                s_no, name, destination_country, date_of_travel, date_of_return,
+                visa_type, purpose_of_travel, remarks, notes, created_by
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             RETURNING id`,
             [
-                input.judge_name.trim(),
-                input.request_date,
+                input.s_no || null,
+                input.name.trim(),
                 input.destination_country.trim(),
+                input.date_of_travel || null,
+                input.date_of_return || null,
                 input.visa_type,
-                input.travel_date || null,
+                input.purpose_of_travel || null,
+                input.remarks || null,
                 input.notes || null,
                 userId,
             ]
@@ -1423,7 +1547,7 @@ export class HelpDeskService {
         let paramCount = 1;
 
         if (filters.search) {
-            query += ` AND event_name ILIKE $${paramCount}`;
+            query += ` AND activity ILIKE $${paramCount}`;
             params.push(`%${filters.search}%`);
             paramCount++;
         }
@@ -1480,13 +1604,17 @@ export class HelpDeskService {
 
             const { rows } = await client.query(
                 `INSERT INTO protocol_events (
-                    event_name, start_date, end_date, dsa_required, notes, created_by
-                ) VALUES ($1, $2, $3, $4, $5, $6)
+                    s_no, activity, period_from, period_to, officers_assigned, remarks,
+                    dsa_required, notes, created_by
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 RETURNING id`,
                 [
-                    input.event_name.trim(),
-                    input.start_date,
-                    input.end_date,
+                    input.s_no || null,
+                    input.activity.trim(),
+                    input.period_from || null,
+                    input.period_to || null,
+                    input.officers_assigned || null,
+                    input.remarks || null,
                     input.dsa_required || false,
                     input.notes || null,
                     userId,
@@ -1567,6 +1695,227 @@ export class HelpDeskService {
 
             await client.query(
                 `UPDATE protocol_dsa_details SET is_active = false WHERE protocol_event_id = $1`,
+                [id]
+            );
+
+            await client.query('COMMIT');
+            
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    // ─── Other Payments ──────────────────────────────────────────────────────
+
+    static async findAllOtherPayments(filters: HelpDeskFilters = {}): Promise<OtherPayment[]> {
+        let query = `SELECT ${OTHER_PAYMENT_SELECT} FROM other_payments WHERE is_active = true`;
+        const params: unknown[] = [];
+        let paramCount = 1;
+
+        if (filters.search) {
+            query += ` AND name ILIKE $${paramCount}`;
+            params.push(`%${filters.search}%`);
+            paramCount++;
+        }
+        if (filters.status) {
+            query += ` AND status = $${paramCount}`;
+            params.push(filters.status);
+            paramCount++;
+        }
+
+        query += ` ORDER BY created_at DESC`;
+        if (filters.limit) {
+            query += ` LIMIT $${paramCount}`;
+            params.push(filters.limit);
+            paramCount++;
+        }
+        if (filters.offset) {
+            query += ` OFFSET $${paramCount}`;
+            params.push(filters.offset);
+        }
+
+        const { rows } = await pool.query(query, params);
+
+        for (const payment of rows) {
+            payment.dsa_details = await this.getDSADetails('other_payment_dsa_details', 'other_payment_id', payment.id);
+            if (payment.dsa_details.length > 0) {
+                payment.total_dsa = payment.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
+            } else {
+                payment.total_dsa = 0;
+            }
+        }
+
+        return rows;
+    }
+
+    static async findOtherPaymentById(id: string): Promise<OtherPayment | null> {
+        const { rows } = await pool.query(
+            `SELECT ${OTHER_PAYMENT_SELECT} FROM other_payments WHERE id = $1 AND is_active = true`,
+            [id]
+        );
+
+        if (rows.length === 0) return null;
+
+        const payment = rows[0];
+        payment.dsa_details = await this.getDSADetails('other_payment_dsa_details', 'other_payment_id', id);
+        payment.total_dsa = payment.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
+
+        return payment;
+    }
+
+    static async createOtherPayment(
+        input: CreateOtherPaymentInput,
+        userId: string
+    ): Promise<OtherPayment> {
+        const client = await pool.connect();
+        
+        try {
+            await client.query('BEGIN');
+
+            const { rows } = await client.query(
+                `INSERT INTO other_payments (
+                    name, description, start_date, end_date, created_by
+                ) VALUES ($1, $2, $3, $4, $5)
+                RETURNING id`,
+                [
+                    input.name.trim(),
+                    input.description || null,
+                    input.start_date,
+                    input.end_date,
+                    userId,
+                ]
+            );
+
+            const paymentId = rows[0].id;
+
+            if (input.dsa_details && input.dsa_details.length > 0) {
+                for (const detail of input.dsa_details) {
+                    const total = detail.dsa_per_day * detail.days;
+                    await client.query(
+                        `INSERT INTO other_payment_dsa_details (
+                            other_payment_id, judge_name, pj_number, designation, dsa_per_day, days, total, notes
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                        [
+                            paymentId,
+                            detail.judge_name.trim(),
+                            detail.pj_number.trim(),
+                            detail.designation || null,
+                            detail.dsa_per_day,
+                            detail.days,
+                            total,
+                            detail.notes || null,
+                        ]
+                    );
+                }
+            }
+
+            await client.query('COMMIT');
+
+            const payment = await this.findOtherPaymentById(paymentId);
+            if (!payment) throw new AppError(500, 'Failed to create other payment');
+            return payment;
+            
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    static async updateOtherPaymentStatus(
+        id: string,
+        input: UpdateStatusInput
+    ): Promise<OtherPayment> {
+        const existing = await this.findOtherPaymentById(id);
+        if (!existing) {
+            throw new AppError(404, 'Other payment not found');
+        }
+
+        await pool.query(
+            `UPDATE other_payments SET status = $1 WHERE id = $2`,
+            [input.status, id]
+        );
+
+        const updated = await this.findOtherPaymentById(id);
+        if (!updated) throw new AppError(500, 'Failed to update other payment status');
+        return updated;
+    }
+
+    static async updateOtherPaymentDSADetails(
+        paymentId: string,
+        dsaDetails: DSADetailInput[]
+    ): Promise<OtherPayment> {
+        const client = await pool.connect();
+        
+        try {
+            await client.query('BEGIN');
+
+            const payment = await this.findOtherPaymentById(paymentId);
+            if (!payment) {
+                throw new AppError(404, 'Other payment not found');
+            }
+
+            await client.query(
+                `UPDATE other_payment_dsa_details SET is_active = false WHERE other_payment_id = $1`,
+                [paymentId]
+            );
+
+            if (dsaDetails && dsaDetails.length > 0) {
+                for (const detail of dsaDetails) {
+                    const total = detail.dsa_per_day * detail.days;
+                    await client.query(
+                        `INSERT INTO other_payment_dsa_details (
+                            other_payment_id, judge_name, pj_number, designation, dsa_per_day, days, total, notes
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                        [
+                            paymentId,
+                            detail.judge_name.trim(),
+                            detail.pj_number.trim(),
+                            detail.designation || null,
+                            detail.dsa_per_day,
+                            detail.days,
+                            total,
+                            detail.notes || null,
+                        ]
+                    );
+                }
+            }
+
+            await client.query('COMMIT');
+
+            const updatedPayment = await this.findOtherPaymentById(paymentId);
+            if (!updatedPayment) throw new AppError(500, 'Failed to update other payment DSA details');
+            return updatedPayment;
+            
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    static async deleteOtherPayment(id: string): Promise<void> {
+        const client = await pool.connect();
+        
+        try {
+            await client.query('BEGIN');
+
+            const { rows } = await client.query(
+                `UPDATE other_payments SET is_active = false WHERE id = $1 RETURNING id`,
+                [id]
+            );
+            
+            if (rows.length === 0) {
+                throw new AppError(404, 'Other payment not found');
+            }
+
+            await client.query(
+                `UPDATE other_payment_dsa_details SET is_active = false WHERE other_payment_id = $1`,
                 [id]
             );
 

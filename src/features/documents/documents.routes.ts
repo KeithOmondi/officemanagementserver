@@ -11,12 +11,20 @@ router.use(protect);
 // ── Read ──────────────────────────────────────────────────────────────────────
 router.get('/', documentController.getAll);
 router.get('/my-marked', documentController.getMyMarked);
+router.get('/received', documentController.getReceivedDocuments);
 router.get('/:id', documentController.getById);
 router.get('/:id/mark-history', documentController.getMarkHistory);
 
 // ── Create ────────────────────────────────────────────────────────────────────
 router.post('/compose', requireRole('staff'), documentController.createComposed);
 router.post('/upload', requireRole('staff', 'dept_head'), upload.single('file'), documentController.createUpload);
+
+// ── Memo & Letter ────────────────────────────────────────────────────────────
+router.post('/memo', requireRole('staff', 'super_admin'), upload.single('file'), documentController.createMemo);
+router.post('/letter', requireRole('staff', 'super_admin'), upload.single('file'), documentController.createLetter);
+
+// ── Send to User ─────────────────────────────────────────────────────────────
+router.post('/:id/send-to-user', requireRole('staff', 'super_admin'), documentController.sendToUser);
 
 // ── Edit / lifecycle ──────────────────────────────────────────────────────────
 router.put('/:id', requireRole('staff'), documentController.update);
@@ -42,10 +50,6 @@ router.post('/:id/return', requireRole('super_admin'), documentController.return
 router.get('/:id/flow', documentController.getFlowHistory);
 
 // ── Response thread ───────────────────────────────────────────────────────────
-// `file` is optional — multer parses the multipart body either way, so a
-// text-only response (just `note`) works the same request shape as one with
-// an attachment. Authorization (must be the current assignee) is enforced
-// inside DocumentService.addResponse, since it depends on document state.
 router.post('/:id/respond', upload.single('file'), documentController.respond);
 router.get('/:id/responses', documentController.getResponses);
 

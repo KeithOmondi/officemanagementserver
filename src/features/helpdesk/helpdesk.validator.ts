@@ -9,7 +9,7 @@ const visaTypeEnum = z.enum(['Official', 'Conference', 'Personal', 'Other']);
 
 const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
-// DSA Detail schema - notes is optional string only (not null)
+// DSA Detail schema
 const dsaDetailSchema = z.object({
     judge_name: z.string().min(1).max(100),
     pj_number: z.string().min(1).max(50),
@@ -19,7 +19,7 @@ const dsaDetailSchema = z.object({
     designation: z.string().optional(),
 });
 
-// ─── Judge Utilities (restructured) ──────────────────────────────────────────
+// ─── Judge Utilities ──────────────────────────────────────────────────────────
 
 const utilityStatusEnum = z.enum([
     'Awaiting',
@@ -33,6 +33,7 @@ const utilityStatusEnum = z.enum([
 
 const utilityItemSchema = z.object({
     utility_type: utilityTypeEnum,
+    requisition_number: z.string().optional(),
     amount: z.number().min(0),
     period: z.string().min(1).max(50),
     description: z.string().optional(),
@@ -42,7 +43,6 @@ const utilityItemSchema = z.object({
     status: utilityStatusEnum.optional(),
 });
 
-// Create a judge utility request with one or more utility items at once
 export const createUtilitySchema = z.object({
     body: z.object({
         judge_name: z.string().min(1).max(100),
@@ -50,12 +50,10 @@ export const createUtilitySchema = z.object({
     }).strict(),
 });
 
-// Add a single utility item to an existing judge
 export const addUtilityItemSchema = z.object({
     body: utilityItemSchema.strict(),
 });
 
-// Update a single utility item's status/dates/amount/type/etc.
 export const updateUtilityItemSchema = z.object({
     body: z.object({
         status: utilityStatusEnum.optional(),
@@ -65,7 +63,8 @@ export const updateUtilityItemSchema = z.object({
         amount: z.number().min(0).optional(),
         period: z.string().min(1).max(50).optional(),
         description: z.string().optional(),
-        utility_type: utilityTypeEnum.optional(), // ADDED — allows switching Electricity/Water/etc. on edit
+        utility_type: utilityTypeEnum.optional(),
+        requisition_number: z.string().optional(),
     }).strict(),
 });
 
@@ -79,7 +78,6 @@ export const utilityFiltersSchema = z.object({
     }).strict(),
 });
 
-// ID pair for nested item routes: /utilities/:id/items/:itemId
 export const utilityItemIdSchema = z.object({
     params: z.object({
         id: z.string().uuid('Request ID must be a valid UUID'),
@@ -87,18 +85,23 @@ export const utilityItemIdSchema = z.object({
     }),
 });
 
-// ─── Club Membership ────────────────────────────────────────────────────────
+// ─── Club Membership ──────────────────────────────────────────────────────────
 
 export const createClubMembershipSchema = z.object({
     body: z.object({
+        pj_no: z.string().optional(),
         judge_name: z.string().min(1).max(100),
         club_name: z.string().min(1).max(100),
-        annual_fee: z.number().min(0),
-        period: z.string().min(1).max(50),
+        entry_fee: z.number().min(0).optional(),
+        annual_fee: z.number().min(0).optional(),
+        date_submitted_dass: dateStringSchema.optional(),
+        court: z.string().optional(),
+        payment_date: dateStringSchema.optional(),
+        remarks: z.string().optional(),
     }).strict(),
 });
 
-// ─── Circuits ──────────────────────────────────────────────────────────────
+// ─── Circuits ─────────────────────────────────────────────────────────────────
 
 export const createCircuitSchema = z.object({
     body: z.object({
@@ -110,15 +113,31 @@ export const createCircuitSchema = z.object({
     }).strict(),
 });
 
-// ─── Update Circuit DSA Details ──────────────────────────────────────────
-
 export const updateCircuitDSASchema = z.object({
     body: z.object({
         dsa_details: z.array(dsaDetailSchema).min(1, 'At least one DSA detail is required'),
     }).strict(),
 });
 
-// ─── Special Benches ────────────────────────────────────────────────────────
+// ─── Other Payments ───────────────────────────────────────────────────────────
+
+export const createOtherPaymentSchema = z.object({
+    body: z.object({
+        name: z.string().min(1).max(100),
+        description: z.string().optional(),
+        start_date: dateStringSchema,
+        end_date: dateStringSchema,
+        dsa_details: z.array(dsaDetailSchema).optional(),
+    }).strict(),
+});
+
+export const updateOtherPaymentDSASchema = z.object({
+    body: z.object({
+        dsa_details: z.array(dsaDetailSchema).min(1, 'At least one DSA detail is required'),
+    }).strict(),
+});
+
+// ─── Special Benches ─────────────────────────────────────────────────────────
 
 export const createSpecialBenchSchema = z.object({
     body: z.object({
@@ -142,47 +161,75 @@ export const createPartHeardSchema = z.object({
     }).strict(),
 });
 
-// ─── Judges' Requests ──────────────────────────────────────────────────────
+// ─── Medical Expense Claims ──────────────────────────────────────────────────
 
-export const createJudgeRequestSchema = z.object({
+export const createMedicalClaimSchema = z.object({
     body: z.object({
+        s_no: z.number().int().min(1).optional(),
+        officer_name: z.string().min(1).max(100),
+        claim_amount: z.number().min(0),
+        date_forwarded_dhr: dateStringSchema.optional(),
+        status: statusEnum.optional(),
+        remarks: z.string().optional(),
+    }).strict(),
+});
+
+// ─── General Requests ────────────────────────────────────────────────────────
+
+export const createGeneralRequestSchema = z.object({
+    body: z.object({
+        s_no: z.number().int().min(1).optional(),
         judge_name: z.string().min(1).max(100),
-        nature: z.string().min(1),
-        mode: requestModeEnum,
-        received_date: dateStringSchema,
+        request: z.string().min(1),
+        date_received: dateStringSchema.optional(),
+        officer_assigned: z.string().optional(),
+        status: statusEnum.optional(),
+        remarks: z.string().optional(),
     }).strict(),
 });
 
-export const updateJudgeRequestSchema = z.object({
-    body: z.object({
-        status: statusEnum,
-        resolution_notes: z.string().optional(),
-    }).strict(),
-});
-
-// ─── Visa Support ───────────────────────────────────────────────────────────
+// ─── Visa Support ────────────────────────────────────────────────────────────
 
 export const createVisaRequestSchema = z.object({
     body: z.object({
-        judge_name: z.string().min(1).max(100),
-        request_date: dateStringSchema,
+        s_no: z.number().int().min(1).optional(),
+        name: z.string().min(1).max(100),
         destination_country: z.string().min(1).max(100),
+        date_of_travel: dateStringSchema.optional(),
+        date_of_return: dateStringSchema.optional(),
         visa_type: visaTypeEnum,
-        travel_date: dateStringSchema.optional(),
+        purpose_of_travel: z.string().optional(),
+        remarks: z.string().optional(),
         notes: z.string().optional(),
     }).strict(),
 });
 
-// ─── Protocol Support ──────────────────────────────────────────────────────
+// ─── Protocol Support ─────────────────────────────────────────────────────────
 
 export const createProtocolEventSchema = z.object({
     body: z.object({
-        event_name: z.string().min(1).max(200),
-        start_date: dateStringSchema,
-        end_date: dateStringSchema,
+        s_no: z.number().int().min(1).optional(),
+        activity: z.string().min(1).max(200),
+        period_from: dateStringSchema.optional(),
+        period_to: dateStringSchema.optional(),
+        officers_assigned: z.string().optional(),
+        remarks: z.string().optional(),
+        notes: z.string().optional(),
         dsa_required: z.boolean().default(false),
         dsa_details: z.array(dsaDetailSchema).optional(),
-        notes: z.string().optional(),
+    }).strict(),
+});
+
+// ─── Service Week ────────────────────────────────────────────────────────────
+
+export const createServiceWeekSchema = z.object({
+    body: z.object({
+        name: z.string().min(1).max(200),
+        week_number: z.string().min(1).max(20),
+        year: z.string().min(4).max(4),
+        start_date: dateStringSchema,
+        end_date: dateStringSchema,
+        dsa_details: z.array(dsaDetailSchema).optional(),
     }).strict(),
 });
 
@@ -197,18 +244,6 @@ export const helpDeskFiltersSchema = z.object({
         end_date: dateStringSchema.optional(),
         limit: z.string().regex(/^\d+$/).optional().transform(Number),
         offset: z.string().regex(/^\d+$/).optional().transform(Number),
-    }).strict(),
-});
-
-// Add to validators
-export const createServiceWeekSchema = z.object({
-    body: z.object({
-        name: z.string().min(1).max(200),
-        week_number: z.string().min(1).max(20),
-        year: z.string().min(4).max(4),
-        start_date: dateStringSchema,
-        end_date: dateStringSchema,
-        dsa_details: z.array(dsaDetailSchema).optional(),
     }).strict(),
 });
 
@@ -228,10 +263,13 @@ export type UpdateUtilityItemInput = z.infer<typeof updateUtilityItemSchema>['bo
 export type UtilityFilters = z.infer<typeof utilityFiltersSchema>['query'];
 export type CreateClubMembershipInput = z.infer<typeof createClubMembershipSchema>['body'];
 export type CreateCircuitInput = z.infer<typeof createCircuitSchema>['body'];
+export type CreateOtherPaymentInput = z.infer<typeof createOtherPaymentSchema>['body'];
 export type CreateSpecialBenchInput = z.infer<typeof createSpecialBenchSchema>['body'];
 export type CreatePartHeardInput = z.infer<typeof createPartHeardSchema>['body'];
-export type CreateJudgeRequestInput = z.infer<typeof createJudgeRequestSchema>['body'];
+export type CreateMedicalClaimInput = z.infer<typeof createMedicalClaimSchema>['body'];
+export type CreateGeneralRequestInput = z.infer<typeof createGeneralRequestSchema>['body'];
 export type CreateVisaRequestInput = z.infer<typeof createVisaRequestSchema>['body'];
 export type CreateProtocolEventInput = z.infer<typeof createProtocolEventSchema>['body'];
 export type HelpDeskFilters = z.infer<typeof helpDeskFiltersSchema>['query'];
 export type UpdateCircuitDSADetailsInput = z.infer<typeof updateCircuitDSASchema>['body'];
+export type UpdateOtherPaymentDSADetailsInput = z.infer<typeof updateOtherPaymentDSASchema>['body'];

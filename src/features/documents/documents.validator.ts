@@ -31,6 +31,37 @@ export const createComposedDocumentSchema = z.object({
   }).strict(),
 });
 
+// ── Create Memo ──────────────────────────────────────────────────────────────
+
+export const createMemoSchema = z.object({
+  body: z.object({
+    to: z.string().min(1, 'Recipient is required').max(255).trim(),
+    from: z.string().min(1, 'Sender is required').max(255).trim(),
+    cc: z.string().max(255).trim().optional(),
+    ref: z.string().min(1, 'Reference is required').max(100).trim(),
+    date: z.string().min(1, 'Date is required').trim(),
+    subject: z.string().min(1, 'Subject is required').max(255).trim(),
+    body: z.string().min(1, 'Body is required'),
+    recipient_id: z.string().uuid().optional(),
+    note: z.string().max(500).trim().optional(),
+  }).strict(),
+});
+
+// ── Create Letter ────────────────────────────────────────────────────────────
+
+export const createLetterSchema = z.object({
+  body: z.object({
+    to: z.string().min(1, 'Recipient is required').max(255).trim(),
+    from: z.string().min(1, 'Sender is required').max(255).trim(),
+    ref: z.string().min(1, 'Reference is required').max(100).trim(),
+    date: z.string().min(1, 'Date is required').trim(),
+    subject: z.string().min(1, 'Subject is required').max(255).trim(),
+    body: z.string().min(1, 'Body is required'),
+    recipient_id: z.string().uuid().optional(),
+    note: z.string().max(500).trim().optional(),
+  }).strict(),
+});
+
 // ── Create upload document ─────────────────────────────────────────────────
 
 export const createUploadDocumentSchema = z.object({
@@ -131,11 +162,6 @@ export const createAnnotationSchema = z.object({
 });
 
 // ── Response (threaded reply to a return/action request) ───────────────────
-//
-// Sent as multipart/form-data (file is optional) — same shape as
-// createUploadDocumentSchema's relationship to `upload.single('file')`.
-// `note` is required even when a file is attached, since the point is that
-// the reply is legible in the thread without having to open the attachment.
 
 export const respondToDocumentSchema = z.object({
   body: z.object({
@@ -162,6 +188,15 @@ export const finalizeDraftSchema = z.object({
   }),
 });
 
+// ── Send to User ────────────────────────────────────────────────────────────
+
+export const sendToUserSchema = z.object({
+  body: z.object({
+    recipient_id: z.string().uuid('Must be a valid user ID'),
+    note: z.string().max(500).trim().optional(),
+  }).strict(),
+});
+
 // ── Inferred types ──────────────────────────────────────────────────────────
 
 export type CreateComposedDocumentInput = z.infer<typeof createComposedDocumentSchema>['body'];
@@ -171,3 +206,6 @@ export type DocumentFilters = z.infer<typeof documentFiltersSchema>['query'];
 export type CreateAnnotationInput = z.infer<typeof createAnnotationSchema>['body'];
 export type MarkDocumentInput = z.infer<typeof markDocumentSchema>['body'];
 export type RespondToDocumentInput = z.infer<typeof respondToDocumentSchema>['body'];
+export type CreateMemoInput = z.infer<typeof createMemoSchema>['body'];
+export type CreateLetterInput = z.infer<typeof createLetterSchema>['body'];
+export type SendToUserInput = z.infer<typeof sendToUserSchema>['body'];

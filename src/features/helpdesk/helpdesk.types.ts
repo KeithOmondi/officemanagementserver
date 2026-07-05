@@ -3,7 +3,7 @@ export type RequestMode = 'Letter' | 'Email' | 'Verbal' | 'Other';
 export type VisaType = 'Official' | 'Conference' | 'Personal' | 'Other';
 export type Status = 'Pending' | 'Signed' | 'Rejected' | 'In Progress' | 'Completed' | 'Active' | 'Resolved';
 
-// ─── Judge Utilities (restructured: one judge → many utility items) ──────────
+// ─── Judge Utilities ──────────────────────────────────────────────────────────
 
 export type UtilityStatus =
     | 'Awaiting'
@@ -18,6 +18,7 @@ export interface UtilityItem {
     id: string;
     request_id: string;
     utility_type: UtilityType;
+    requisition_number: string | null;
     amount: number;
     period: string;
     description: string | null;
@@ -41,6 +42,7 @@ export interface JudgeUtility {
 
 export type UtilityItemInput = {
     utility_type: UtilityType;
+    requisition_number?: string;
     amount: number;
     period: string;
     description?: string;
@@ -57,6 +59,7 @@ export interface CreateUtilityInput {
 
 export interface AddUtilityItemInput {
     utility_type: UtilityType;
+    requisition_number?: string;
     amount: number;
     period: string;
     description?: string;
@@ -74,7 +77,8 @@ export interface UpdateUtilityItemInput {
     amount?: number;
     period?: string;
     description?: string;
-    utility_type?: UtilityType; // ADDED — was silently dropped on updates before
+    utility_type?: UtilityType;
+    requisition_number?: string;
 }
 
 export interface UtilityFilters {
@@ -85,20 +89,26 @@ export interface UtilityFilters {
     offset?: number;
 }
 
-// ─── Everything below is unchanged ────────────────────────────────────────────
+// ─── Club Membership ──────────────────────────────────────────────────────────
 
 export interface ClubMembership {
     id: string;
+    pj_no: string | null;
     judge_name: string;
     club_name: string;
-    annual_fee: number;
-    period: string;
-    supporting_document_url: string | null;
+    entry_fee: number | null;
+    annual_fee: number | null;
+    date_submitted_dass: string | null;
+    court: string | null;
+    payment_date: string | null;
+    remarks: string | null;
     status: Status;
     created_by: string | null;
     created_at: string;
     updated_at: string;
 }
+
+// ─── DSA Details ─────────────────────────────────────────────────────────────
 
 export interface DSADetail {
     id: string;
@@ -120,6 +130,8 @@ export type DSADetailInput = {
     designation?: string;
 };
 
+// ─── Circuits ────────────────────────────────────────────────────────────────
+
 export interface Circuit {
     id: string;
     name: string;
@@ -133,6 +145,24 @@ export interface Circuit {
     created_at: string;
     updated_at: string;
 }
+
+// ─── Other Payments ──────────────────────────────────────────────────────────
+
+export interface OtherPayment {
+    id: string;
+    name: string;
+    description: string | null;
+    start_date: string;
+    end_date: string;
+    total_dsa: number;
+    status: Status;
+    dsa_details?: DSADetail[];
+    created_by: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+// ─── Special Benches ─────────────────────────────────────────────────────────
 
 export interface SpecialBench {
     id: string;
@@ -148,6 +178,8 @@ export interface SpecialBench {
     updated_at: string;
 }
 
+// ─── Part-Heards ─────────────────────────────────────────────────────────────
+
 export interface PartHeard {
     id: string;
     case_reference: string;
@@ -162,26 +194,66 @@ export interface PartHeard {
     updated_at: string;
 }
 
-export interface JudgeRequest {
+// ─── Service Weeks ───────────────────────────────────────────────────────────
+
+export interface ServiceWeek {
     id: string;
-    judge_name: string;
-    nature: string;
-    mode: RequestMode;
-    received_date: string;
+    name: string;
+    week_number: string;
+    year: string;
+    start_date: string;
+    end_date: string;
+    total_dsa: number;
     status: Status;
-    resolution_notes: string | null;
+    dsa_details?: DSADetail[];
     created_by: string | null;
     created_at: string;
     updated_at: string;
 }
 
+// ─── Medical Expense Claims ──────────────────────────────────────────────────
+
+export interface MedicalClaim {
+    id: string;
+    s_no: number | null;
+    officer_name: string;
+    claim_amount: number;
+    date_forwarded_dhr: string | null;
+    status: Status;
+    remarks: string | null;
+    created_by: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+// ─── General Requests ────────────────────────────────────────────────────────
+
+export interface GeneralRequest {
+    id: string;
+    s_no: number | null;
+    judge_name: string;
+    request: string;
+    date_received: string | null;
+    officer_assigned: string | null;
+    status: Status;
+    remarks: string | null;
+    created_by: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+// ─── Visa Support ────────────────────────────────────────────────────────────
+
 export interface VisaRequest {
     id: string;
-    judge_name: string;
-    request_date: string;
+    s_no: number | null;
+    name: string;
     destination_country: string;
+    date_of_travel: string | null;
+    date_of_return: string | null;
     visa_type: VisaType;
-    travel_date: string | null;
+    purpose_of_travel: string | null;
+    remarks: string | null;
     status: Status;
     notes: string | null;
     documents?: VisaDocument[];
@@ -198,20 +270,27 @@ export interface VisaDocument {
     created_at: string;
 }
 
+// ─── Protocol Support ─────────────────────────────────────────────────────────
+
 export interface ProtocolEvent {
     id: string;
-    event_name: string;
-    start_date: string;
-    end_date: string;
-    dsa_required: boolean;
-    total_dsa: number;
+    s_no: number | null;
+    activity: string;
+    period_from: string | null;
+    period_to: string | null;
+    officers_assigned: string | null;
+    remarks: string | null;
     status: Status;
     notes: string | null;
+    dsa_required: boolean;
+    total_dsa: number;
     dsa_details?: DSADetail[];
     created_by: string | null;
     created_at: string;
     updated_at: string;
 }
+
+// ─── Audit & Stats ──────────────────────────────────────────────────────────
 
 export interface HelpDeskAuditEntry {
     id: string;
@@ -231,18 +310,31 @@ export interface HelpDeskStats {
     protocol_pending: number;
 }
 
-// Input types
+// ─── Input Types ─────────────────────────────────────────────────────────────
 
 export interface CreateClubMembershipInput {
+    pj_no?: string;
     judge_name: string;
     club_name: string;
-    annual_fee: number;
-    period: string;
+    entry_fee?: number;
+    annual_fee?: number;
+    date_submitted_dass?: string;
+    court?: string;
+    payment_date?: string;
+    remarks?: string;
 }
 
 export interface CreateCircuitInput {
     name: string;
     location?: string;
+    start_date: string;
+    end_date: string;
+    dsa_details?: DSADetailInput[];
+}
+
+export interface CreateOtherPaymentInput {
+    name: string;
+    description?: string;
     start_date: string;
     end_date: string;
     dsa_details?: DSADetailInput[];
@@ -264,29 +356,56 @@ export interface CreatePartHeardInput {
     dsa_details?: DSADetailInput[];
 }
 
-export interface CreateJudgeRequestInput {
+export interface CreateServiceWeekInput {
+    name: string;
+    week_number: string;
+    year: string;
+    start_date: string;
+    end_date: string;
+    dsa_details?: DSADetailInput[];
+}
+
+export interface CreateMedicalClaimInput {
+    s_no?: number;
+    officer_name: string;
+    claim_amount: number;
+    date_forwarded_dhr?: string;
+    status?: Status;
+    remarks?: string;
+}
+
+export interface CreateGeneralRequestInput {
+    s_no?: number;
     judge_name: string;
-    nature: string;
-    mode: RequestMode;
-    received_date: string;
+    request: string;
+    date_received?: string;
+    officer_assigned?: string;
+    status?: Status;
+    remarks?: string;
 }
 
 export interface CreateVisaRequestInput {
-    judge_name: string;
-    request_date: string;
+    s_no?: number;
+    name: string;
     destination_country: string;
+    date_of_travel?: string;
+    date_of_return?: string;
     visa_type: VisaType;
-    travel_date?: string;
+    purpose_of_travel?: string;
+    remarks?: string;
     notes?: string;
 }
 
 export interface CreateProtocolEventInput {
-    event_name: string;
-    start_date: string;
-    end_date: string;
+    s_no?: number;
+    activity: string;
+    period_from?: string;
+    period_to?: string;
+    officers_assigned?: string;
+    remarks?: string;
+    notes?: string;
     dsa_required?: boolean;
     dsa_details?: DSADetailInput[];
-    notes?: string;
 }
 
 export interface UpdateStatusInput {
@@ -302,29 +421,4 @@ export interface HelpDeskFilters {
     end_date?: string;
     limit?: number;
     offset?: number;
-}
-
-// Add to existing types
-export interface ServiceWeek {
-    id: string;
-    name: string;
-    week_number: string;
-    year: string;
-    start_date: string;
-    end_date: string;
-    total_dsa: number;
-    status: Status;
-    dsa_details?: DSADetail[];
-    created_by: string | null;
-    created_at: string;
-    updated_at: string;
-}
-
-export interface CreateServiceWeekInput {
-    name: string;
-    week_number: string;
-    year: string;
-    start_date: string;
-    end_date: string;
-    dsa_details?: DSADetailInput[];
 }

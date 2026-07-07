@@ -19,9 +19,9 @@ router.get('/:id/mark-history', documentController.getMarkHistory);
 router.post('/compose', requireRole('staff'), documentController.createComposed);
 router.post('/upload', requireRole('staff', 'dept_head'), upload.single('file'), documentController.createUpload);
 
-// ── Memo & Letter ────────────────────────────────────────────────────────────
-router.post('/memo', requireRole('staff', 'super_admin'), upload.single('file'), documentController.createMemo);
-router.post('/letter', requireRole('staff', 'super_admin'), upload.single('file'), documentController.createLetter);
+// ── Compose Memo / Letter (new) ──────────────────────────────────────────────
+router.post('/compose-memo', requireRole('staff'), documentController.composeMemo);
+router.post('/compose-letter', requireRole('staff'), documentController.composeLetter);
 
 // ── Send to User ─────────────────────────────────────────────────────────────
 router.post('/:id/send-to-user', requireRole('staff', 'super_admin'), documentController.sendToUser);

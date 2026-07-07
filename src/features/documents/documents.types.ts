@@ -1,8 +1,13 @@
 // src/features/documents/documents.types.ts
 
 export type DocumentType =
-  | 'memo' | 'letter' | 'judgment' | 'ruling'
-  | 'order' | 'correspondence' | 'upload';
+  | 'judgment'
+  | 'ruling'
+  | 'order'
+  | 'correspondence'
+  | 'upload'
+  | 'memo'      // ✅ added
+  | 'letter';   // ✅ added
 
 export type DocumentStatus =
   | 'draft'
@@ -53,11 +58,6 @@ export interface DocumentAnnotation {
 }
 
 // ── Document Response (threaded reply, numbered per document) ─────────────
-//
-// Distinct from DocumentAnnotation: an annotation is a side comment on the
-// document, whereas a DocumentResponse is a formal numbered reply to a
-// return/action request, can carry a file attachment, and drives the
-// document back into the assignee's queue (see DocumentService.addResponse).
 
 export interface DocumentResponse {
   id: string;
@@ -75,7 +75,6 @@ export interface DocumentResponse {
 }
 
 // ── Document ────────────────────────────────────────────────────────────────
-// UPDATED: Added response_count field
 
 export interface Document {
   id: string;
@@ -109,7 +108,7 @@ export interface Document {
   created_at: Date;
   updated_at: Date;
   active_mark: DocumentMark | null;
-  response_count?: number;  // ← ADDED: Number of responses on this document
+  response_count?: number;
 }
 
 export interface DocumentWithAnnotations extends Document {
@@ -136,29 +135,4 @@ export interface DocumentFlowEntry {
   to_user_name: string | null;
   note: string | null;
   created_at: Date;
-}
-
-// src/types/documents.types.ts - Add these types
-
-export interface CreateMemoInput {
-  to: string;
-  from: string;
-  cc?: string;
-  ref: string;
-  date: string;
-  subject: string;
-  body: string;
-  recipient_id?: string;
-  note?: string;
-}
-
-export interface CreateLetterInput {
-  to: string;
-  from: string;
-  ref: string;
-  date: string;
-  subject: string;
-  body: string;
-  recipient_id?: string;
-  note?: string;
 }

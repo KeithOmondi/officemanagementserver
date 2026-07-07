@@ -1,4 +1,5 @@
 // src/features/documents/documents.controller.ts
+
 import { Request, Response } from 'express';
 import { asyncHandler } from '../../utils/asyncHandler';
 import { AppError, sendSuccess } from '../../utils/response';
@@ -15,9 +16,9 @@ import {
   finalizeDraftSchema,
   returnDocumentSchema,
   respondToDocumentSchema,
-  createMemoSchema,
-  createLetterSchema,
   sendToUserSchema,
+  composeMemoSchema,     // ✅ imported
+  composeLetterSchema,   // ✅ imported
 } from './documents.validator';
 
 export const documentController = {
@@ -31,35 +32,44 @@ export const documentController = {
     return sendSuccess(res, doc, 'Document created successfully', 201);
   }),
 
-  createUpload: asyncHandler(async (req: Request, res: Response) => {
-    const file = req.file;
-    if (!file) throw new AppError(400, 'A file is required for this document type');
-    const result = createUploadDocumentSchema.safeParse({ body: req.body });
-    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
-    const doc = await DocumentService.createUpload(result.data.body, file, req.user!.id, req.user!.role);
-    return sendSuccess(res, doc, 'Document uploaded successfully', 201);
-  }),
+  // src/features/documents/documents.controller.ts
 
-  // ── Create Memo ──────────────────────────────────────────────────────────────
+createUpload: asyncHandler(async (req: Request, res: Response) => {
+  const file = req.file;
+  if (!file) throw new AppError(400, 'A file is required for this document type');
+  const result = createUploadDocumentSchema.safeParse({ body: req.body });
+  if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
+  
+  const io = req.app.get('io'); // 👈 get io instance
+  
+  const doc = await DocumentService.createUpload(
+    result.data.body,
+    file,
+    req.user!.id,
+    req.user!.role,
+    io // 👈 pass it
+  );
+  return sendSuccess(res, doc, 'Document uploaded successfully', 201);
+}),
 
-  createMemo: asyncHandler(async (req: Request, res: Response) => {
-    const result = createMemoSchema.safeParse({ body: req.body });
+  // ── Compose Memo & Letter (new) ──────────────────────────────────────────────
+
+  composeMemo: asyncHandler(async (req: Request, res: Response) => {
+    const result = composeMemoSchema.safeParse({ body: req.body });
     if (!result.success) {
       throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid memo data');
     }
-    const doc = await DocumentService.createMemo(result.data.body, req.user!.id, req.file);
-    return sendSuccess(res, doc, 'Memo created successfully', 201);
+    const doc = await DocumentService.generateMemo(result.data.body, req.user!.id);
+    return sendSuccess(res, doc, 'Memo generated successfully', 201);
   }),
 
-  // ── Create Letter ────────────────────────────────────────────────────────────
-
-  createLetter: asyncHandler(async (req: Request, res: Response) => {
-    const result = createLetterSchema.safeParse({ body: req.body });
+  composeLetter: asyncHandler(async (req: Request, res: Response) => {
+    const result = composeLetterSchema.safeParse({ body: req.body });
     if (!result.success) {
       throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid letter data');
     }
-    const doc = await DocumentService.createLetter(result.data.body, req.user!.id, req.file);
-    return sendSuccess(res, doc, 'Letter created successfully', 201);
+    const doc = await DocumentService.generateLetter(result.data.body, req.user!.id);
+    return sendSuccess(res, doc, 'Letter generated successfully', 201);
   }),
 
   // ── Send to User ─────────────────────────────────────────────────────────────

@@ -1,4 +1,5 @@
 // src/features/documents/documents.service.ts
+
 import { pool } from '../../config/db';
 import { AppError } from '../../utils/response';
 import crypto from 'crypto';
@@ -20,14 +21,15 @@ import type {
   CreateAnnotationInput,
   MarkDocumentInput,
   RespondToDocumentInput,
+  ComposeMemoInput,
+  ComposeLetterInput,
 } from './documents.validator';
-import { embedSignatureIntoHTML, embedSignatureIntoPDF } from '../../utils/embedSignature';
 import axios from 'axios';
 import { generateOTP } from '../../utils/SendOTP';
 import { sendMail } from '../../utils/sendMail';
 import { NotificationsService } from '../notifications/notifications.service';
-import jsPDF from 'jspdf';
-import { Buffer } from 'buffer';
+import { embedSignatureIntoHTML, embedSignatureIntoPDF } from '../../utils/embedSignature';
+import { generateDocumentFromTemplate } from '../../utils/documentGenerator';
 
 // ─── SELECT fragments ──────────────────────────────────────────────────────────
 
@@ -83,8 +85,6 @@ const MARK_JOIN = `
   LEFT JOIN users mu ON mu.id = m.assigned_to
 `;
 
-// ── MARK_SELECT for detail view (without alias prefixes) ────────────────────
-
 const MARK_SELECT_DETAIL = `
   m.id, m.document_id,
   m.marked_by,      mb.full_name  AS marked_by_name,
@@ -102,8 +102,6 @@ const MARK_JOIN_DETAIL = `
   LEFT JOIN users mu        ON mu.id  = m.assigned_to
 `;
 
-// ── Response thread ──────────────────────────────────────────────────────────
-
 const RESPONSE_SELECT = `
   r.id, r.document_id, r.response_number, r.responded_by,
   ru.full_name AS responded_by_name,
@@ -117,9 +115,6 @@ const RESPONSE_JOIN = `
 `;
 
 const ALLOWED_SORT = new Set(['created_at', 'updated_at', 'title', 'status']);
-
-const JUDICIARY_CREST_SRC = 'https://res.cloudinary.com/do0yflasl/image/upload/v1781759596/JOB_LOGO_ubls4m.jpg';
-const FOOTER_EMBLEM_SRC = 'https://res.cloudinary.com/do0yflasl/image/upload/v1782893389/footer-emblem_n0ncm9.jpg';
 
 // ─── Service ───────────────────────────────────────────────────────────────────
 
@@ -152,64 +147,72 @@ export class DocumentService {
 
   // ── Create upload ──────────────────────────────────────────────────────────
 
-  static async createUpload(
-    input: CreateUploadDocumentInput,
-    file: Express.Multer.File,
-    createdBy: string,
-    createdByRole: string
-  ): Promise<Document> {
-    if (createdByRole === 'dept_head' && input.type !== 'correspondence') {
-      throw new AppError(400, 'Department heads can only upload correspondence documents');
-    }
+  // src/features/documents/documents.service.ts
 
-    const uploaded = await uploadToCloudinary(file, 'registrar/documents');
-    const status = input.is_draft ? 'draft' : 'uploaded';
+// src/features/documents/documents.service.ts
 
-    try {
-      const { rows } = await pool.query(
-        `INSERT INTO documents
-           (title, type, category, reference_no, ref_type, ref_other_description,
-            file_url, file_public_id, file_size_bytes, mime_type, original_name,
-            assigned_to, department_id, created_by, status, is_draft, priority)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
-         RETURNING id`,
-        [
-          input.title.trim(), input.type, input.category ?? null,
-          input.reference_no?.trim() ?? null,
-          input.ref_type, input.ref_other_description?.trim() ?? null,
-          uploaded.secure_url, uploaded.public_id, file.size, file.mimetype, file.originalname,
-          input.assigned_to ?? null, input.department_id ?? null,
-          createdBy, status, input.is_draft, input.priority,
-        ]
-      );
-      await this.logFlow(pool, rows[0].id, input.is_draft ? 'draft_saved' : 'created', createdBy, null);
-      return (await this.findById(rows[0].id))!;
-    } catch (err) {
-      await deleteFromCloudinary(uploaded.public_id).catch(console.error);
-      throw err;
-    }
+static async createUpload(
+  input: CreateUploadDocumentInput,
+  file: Express.Multer.File,
+  createdBy: string,
+  createdByRole: string,
+  io?: any
+): Promise<Document> {
+  console.log('[Upload] Starting document upload...');
+
+  if (createdByRole === 'dept_head' && input.type !== 'correspondence') {
+    throw new AppError(400, 'Department heads can only upload correspondence documents');
   }
 
+  const uploaded = await uploadToCloudinary(file, 'registrar/documents');
+  const status = input.is_draft ? 'draft' : 'uploaded';
+
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO documents
+         (title, type, category, reference_no, ref_type, ref_other_description,
+          file_url, file_public_id, file_size_bytes, mime_type, original_name,
+          assigned_to, department_id, created_by, status, is_draft, priority)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+       RETURNING id`,
+      [
+        input.title.trim(), input.type, input.category ?? null,
+        input.reference_no?.trim() ?? null,
+        input.ref_type, input.ref_other_description?.trim() ?? null,
+        uploaded.secure_url, uploaded.public_id, file.size, file.mimetype, file.originalname,
+        input.assigned_to ?? null, input.department_id ?? null,
+        createdBy, status, input.is_draft, input.priority,
+      ]
+    );
+
+    await this.logFlow(pool, rows[0].id, input.is_draft ? 'draft_saved' : 'created', createdBy, null);
+
+    console.log(`[Upload] Document saved with ID: ${rows[0].id}, is_draft: ${input.is_draft}`);
+
+    // ── Notify super admins if not a draft ──
+    if (!input.is_draft) {
+      console.log('[Upload] Document is NOT a draft – notifying super admins.');
+      const { rows: userRows } = await pool.query(
+        `SELECT full_name FROM users WHERE id = $1`,
+        [createdBy]
+      );
+      const creatorName = userRows[0]?.full_name || 'Unknown';
+      await this.notifySuperAdmins(rows[0].id, 'uploaded', creatorName, io);
+    } else {
+      console.log('[Upload] Document is a draft – skipping notifications.');
+    }
+
+    return (await this.findById(rows[0].id))!;
+  } catch (err) {
+    console.error('[Upload] Error during upload:', err);
+    await deleteFromCloudinary(uploaded.public_id).catch(console.error);
+    throw err;
+  }
+}
+
+
+
   // ── Find all ─────────────────────────────────────────────────────────────────
-  //
-  // NOTE ON `for_my_action` + `department_id` (fixed):
-  //
-  // Previously, `for_my_action` unconditionally pushed an extra
-  // `d.assigned_to = requestingUserId` condition, which was then joined with
-  // AND alongside any separately-supplied `department_id` condition. For a
-  // dept_head, the frontend sends BOTH `department_id` (their own dept) and
-  // `for_my_action=true` on every request — so the query collapsed to:
-  //
-  //   WHERE d.department_id = <dept>  AND  d.assigned_to = <dept head id>
-  //
-  // ...which silently excluded every document routed to the department but
-  // assigned to someone else on the team (e.g. marked to a specific staff
-  // member). A dept_head needs to see the WHOLE department queue to
-  // delegate/mark documents, not just items individually assigned to them.
-  //
-  // Fix: when `for_my_action` is requested alongside a `department_id`, OR
-  // the two conditions together instead of ANDing them, and don't also apply
-  // `department_id` as a second, separate AND condition.
 
   static async findAll(
     filters: DocumentFilters,
@@ -230,10 +233,6 @@ export class DocumentService {
     const values: unknown[] = [];
     let p = 1;
 
-    // Drafts are private to their creator until finalized (assigned to a user
-    // or sent to the super admin). Without this, every caller — including the
-    // super admin's own document list — would see unfinalized drafts the
-    // moment they're uploaded.
     conditions.push(`(d.is_draft = false OR d.created_by = $${p})`);
     values.push(requestingUserId);
     p++;
@@ -247,12 +246,6 @@ export class DocumentService {
     if (status) { conditions.push(`d.status = $${p}`); values.push(status); p++; }
     if (assigned_to) { conditions.push(`d.assigned_to = $${p}`); values.push(assigned_to); p++; }
 
-    // ── for_my_action / department_id (fixed) ──────────────────────────────
-    //
-    // - for_my_action + department_id  → documents routed to my department
-    //                                     OR individually assigned to me.
-    // - for_my_action only             → documents individually assigned to me.
-    // - department_id only (no action) → strict department filter, unchanged.
     if (for_my_action && department_id) {
       conditions.push(`(d.department_id = $${p} OR d.assigned_to = $${p + 1})`);
       values.push(department_id, requestingUserId);
@@ -284,7 +277,6 @@ export class DocumentService {
       ),
     ]);
 
-    // Transform the results to include active_mark
     const documents = dataResult.rows.map((row) => {
       const doc: Document = {
         id: row.id,
@@ -481,7 +473,6 @@ export class DocumentService {
       throw new AppError(409, 'Filed documents cannot be marked');
     }
 
-    // Verify the department exists
     const { rows: deptCheck } = await pool.query(
       `SELECT id, name FROM departments WHERE id = $1 AND is_active = true`,
       [input.department_id]
@@ -490,7 +481,6 @@ export class DocumentService {
       throw new AppError(400, 'Department not found or inactive');
     }
 
-    // If a specific user is provided, verify they exist and belong to the department
     if (input.assigned_to) {
       const { rows: userCheck } = await pool.query(
         `SELECT id FROM users WHERE id = $1 AND department_id = $2 AND is_active = true`,
@@ -518,7 +508,6 @@ export class DocumentService {
         ]
       );
 
-      // Update document status and assignment
       await client.query(
         `UPDATE documents
          SET status = 'marked', 
@@ -965,39 +954,58 @@ export class DocumentService {
 
   // ── Finalize draft ────────────────────────────────────────────────────────────
 
-  static async finalizeDraft(
-    documentId: string,
-    input: { assigned_to?: string; send_to_super_admin?: boolean },
-    actingUser: string
-  ): Promise<Document> {
-    const doc = await this.findById(documentId);
-    if (!doc) throw new AppError(404, 'Document not found');
-    if (!doc.is_draft) throw new AppError(409, 'Document is not a draft');
+  // In documents.service.ts
 
-    let targetUserId: string | null = null;
-    if (input.send_to_super_admin) {
-      const { rows } = await pool.query(
-        `SELECT id FROM users WHERE role = 'super_admin' AND is_active = true LIMIT 1`
-      );
-      if (!rows.length) throw new AppError(400, 'No active super admin found');
-      targetUserId = rows[0].id;
-    } else if (input.assigned_to) {
-      targetUserId = input.assigned_to;
-    }
+static async finalizeDraft(
+  documentId: string,
+  input: { assigned_to?: string; send_to_super_admin?: boolean },
+  actingUser: string,
+  io?: any // 👈 add optional io
+): Promise<Document> {
+  const doc = await this.findById(documentId);
+  if (!doc) throw new AppError(404, 'Document not found');
+  if (!doc.is_draft) throw new AppError(409, 'Document is not a draft');
 
-    await pool.query(
-      `UPDATE documents
-       SET is_draft = false, assigned_to = $1, status = 'pending_review', updated_at = NOW()
-       WHERE id = $2`,
-      [targetUserId, documentId]
+  let targetUserId: string | null = null;
+  if (input.send_to_super_admin) {
+    const { rows } = await pool.query(
+      `SELECT id FROM users WHERE role = 'super_admin' AND is_active = true LIMIT 1`
     );
-    await this.logFlow(
-      pool, documentId,
-      input.send_to_super_admin ? 'sent_to_admin' : 'assigned',
-      actingUser, targetUserId
-    );
-    return (await this.findById(documentId))!;
+    if (!rows.length) throw new AppError(400, 'No active super admin found');
+    targetUserId = rows[0].id;
+  } else if (input.assigned_to) {
+    targetUserId = input.assigned_to;
   }
+
+  // ── Update document ────────────────────────────────────────────
+  await pool.query(
+    `UPDATE documents
+     SET is_draft = false, assigned_to = $1, status = 'pending_review', updated_at = NOW()
+     WHERE id = $2`,
+    [targetUserId, documentId]
+  );
+
+  // ── Log flow ──────────────────────────────────────────────────
+  await this.logFlow(
+    pool, documentId,
+    input.send_to_super_admin ? 'sent_to_admin' : 'assigned',
+    actingUser, targetUserId
+  );
+
+  // ── 🆕 Notify super admins if sent to them ───────────────────
+  if (input.send_to_super_admin) {
+    // Fetch creator name for the notification
+    const { rows: userRows } = await pool.query(
+      `SELECT full_name FROM users WHERE id = $1`,
+      [actingUser]
+    );
+    const creatorName = userRows[0]?.full_name || 'Unknown';
+    // Use the same helper – it will find all active super admins
+    await this.notifySuperAdmins(documentId, 'finalized', creatorName, io);
+  }
+
+  return (await this.findById(documentId))!;
+}
 
   // ── Return document ──────────────────────────────────────────────────────────
 
@@ -1022,802 +1030,6 @@ export class DocumentService {
       returnedBy, doc.created_by, input.note
     );
     return (await this.findById(documentId))!;
-  }
-
-  // ── Helper: Fetch image as base64 ───────────────────────────────────────────
-
-  private static async fetchImageAsBase64(url: string): Promise<string> {
-    try {
-      const response = await axios.get(url, { responseType: 'arraybuffer' });
-      const base64 = Buffer.from(response.data).toString('base64');
-      const contentType = response.headers['content-type'] || 'image/jpeg';
-      return `data:${contentType};base64,${base64}`;
-    } catch (error) {
-      console.error(`Failed to fetch image from ${url}:`, error);
-      return '';
-    }
-  }
-
-  // ── Helper: Add header logo to PDF ────────────────────────────────────────────
-
-  private static async addHeaderLogoToPDF(
-    doc: jsPDF,
-    pageWidth: number,
-    pageHeight: number
-  ): Promise<void> {
-    try {
-      const crestBase64 = await this.fetchImageAsBase64(JUDICIARY_CREST_SRC);
-      if (crestBase64) {
-        // Center the logo at the top
-        const logoWidth = 50;
-        const logoHeight = 50;
-        const logoX = (pageWidth - logoWidth) / 2;
-        const logoY = 10;
-        doc.addImage(crestBase64, 'JPEG', logoX, logoY, logoWidth, logoHeight);
-      }
-    } catch (error) {
-      console.error('Failed to add header logo to PDF:', error);
-    }
-  }
-
-  // ── Helper: Add footer image to PDF ────────────────────────────────────────────
-
-  private static async addFooterImageToPDF(
-    doc: jsPDF,
-    pageWidth: number,
-    pageHeight: number,
-    margin: number
-  ): Promise<void> {
-    try {
-      const footerBase64 = await this.fetchImageAsBase64(FOOTER_EMBLEM_SRC);
-      if (footerBase64) {
-        // Position footer emblem on the right side
-        const footerWidth = 35;
-        const footerHeight = 35;
-        const footerX = pageWidth - margin - footerWidth;
-        const footerY = pageHeight - margin - 5;
-        doc.addImage(footerBase64, 'JPEG', footerX, footerY, footerWidth, footerHeight);
-      }
-    } catch (error) {
-      console.error('Failed to add footer image to PDF:', error);
-    }
-  }
-
-
- // ── Generate Memo PDF ──────────────────────────────────────────────────────
-
-// src/features/documents/documents.service.ts
-
-// ... keep all your existing code up to the generateMemoPDF method ...
-
-// ── Generate Memo PDF ──────────────────────────────────────────────────────
-
-private static async generateMemoPDF(input: {
-  to: string;
-  from: string;
-  cc?: string;
-  ref: string;
-  date: string;
-  subject: string;
-  body: string;
-  senderName: string;
-  senderInitials: string;
-  senderSignature?: string;
-}): Promise<Buffer> {
-  const {
-    to,
-    from,
-    cc,
-    ref,
-    date,
-    subject,
-    body,
-    senderName,
-    senderInitials,
-    senderSignature,
-  } = input;
-
-  const doc = new jsPDF('p', 'mm', 'a4');
-  const pageWidth = 210;
-  const pageHeight = 297;
-  const margin = 25;
-  let y = margin;
-
-  const checkPage = (needed: number = 20) => {
-    if (y > pageHeight - margin - needed) {
-      doc.addPage();
-      y = margin;
-      // Re-add header elements on new page
-      try {
-        const crestBase64 = this.fetchImageAsBase64(JUDICIARY_CREST_SRC);
-        // ... we can add crest re-add logic if needed
-      } catch {}
-    }
-  };
-
-  // --- Crest / Logo ---
-  try {
-    const crestBase64 = await this.fetchImageAsBase64(JUDICIARY_CREST_SRC);
-    if (crestBase64) {
-      const imgWidth = 40;
-      const imgHeight = 40;
-      const imgX = (pageWidth - imgWidth) / 2;
-      doc.addImage(crestBase64, 'JPEG', imgX, y, imgWidth, imgHeight);
-      y += imgHeight + 4;
-    } else {
-      y += 10;
-    }
-  } catch {
-    y += 10;
-  }
-
-  // --- Header (matches frontend exactly) ---
-  doc.setFontSize(16);
-  doc.setFont('helvetica', 'bold');
-  doc.text('OFFICE OF THE REGISTRAR HIGH COURT', pageWidth / 2, y, { align: 'center' });
-  y += 8;
-
-  doc.setFontSize(16);
-  doc.text('INTERNAL MEMO', pageWidth / 2, y, { align: 'center' });
-  y += 4;
-  
-  // Underline after INTERNAL MEMO (matches frontend)
-  doc.line(margin + 30, y, pageWidth - margin - 30, y);
-  y += 10;
-
-  // --- Fields (matches frontend: labels with colon, no extra spacing) ---
-  doc.setFontSize(12);
-  doc.setFont('helvetica', 'bold');
-
-  // TO
-  doc.text('TO', margin, y);
-  doc.text(':', margin + 18, y);
-  doc.setFont('helvetica', 'normal');
-  doc.text(to.toUpperCase(), margin + 22, y);
-  y += 7;
-
-  // FROM
-  doc.setFont('helvetica', 'bold');
-  doc.text('FROM', margin, y);
-  doc.text(':', margin + 18, y);
-  doc.setFont('helvetica', 'normal');
-  doc.text(from.toUpperCase(), margin + 22, y);
-  y += 7;
-
-  // CC (if provided)
-  if (cc) {
-    doc.setFont('helvetica', 'bold');
-    doc.text('CC', margin, y);
-    doc.text(':', margin + 18, y);
-    doc.setFont('helvetica', 'normal');
-    doc.text(cc.toUpperCase(), margin + 22, y);
-    y += 7;
-  }
-
-  // REF
-  doc.setFont('helvetica', 'bold');
-  doc.text('REF', margin, y);
-  doc.text(':', margin + 18, y);
-  doc.setFont('helvetica', 'normal');
-  doc.text(ref.toUpperCase(), margin + 22, y);
-  y += 7;
-
-  // DATE
-  doc.setFont('helvetica', 'bold');
-  doc.text('DATE', margin, y);
-  doc.text(':', margin + 18, y);
-  doc.setFont('helvetica', 'normal');
-  doc.text(date, margin + 22, y);
-  y += 7;
-
-  // SUBJECT
-  doc.setFont('helvetica', 'bold');
-  doc.text('SUBJECT', margin, y);
-  doc.text(':', margin + 18, y);
-  doc.setFont('helvetica', 'normal');
-  doc.text(subject.toUpperCase(), margin + 22, y);
-  y += 3;
-  
-  // Underline after subject (matches frontend)
-  doc.line(margin, y, pageWidth - margin, y);
-  y += 10;
-
-  // --- Body ---
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(11);
-
-  const lines = body.split('\n');
-  for (const line of lines) {
-    checkPage(15);
-    if (line.trim() === '') {
-      y += 4;
-      continue;
-    }
-    
-    const wrappedLines = doc.splitTextToSize(line, pageWidth - margin * 2);
-    for (const wrapped of wrappedLines) {
-      checkPage(10);
-      doc.text(wrapped, margin, y);
-      y += 6;
-    }
-    y += 2;
-  }
-
-  // --- Sign-off ---
-  checkPage(40);
-  y += 20;
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(12);
-  doc.text(senderName, margin, y);
-  y += 4;
-
-  // Signature
-  if (senderSignature) {
-    try {
-      const signatureBase64 = await this.fetchImageAsBase64(senderSignature);
-      if (signatureBase64) {
-        doc.addImage(signatureBase64, 'PNG', margin, y, 40, 15);
-        y += 20;
-      } else {
-        doc.line(margin, y + 2, margin + 40, y + 2);
-        y += 8;
-      }
-    } catch {
-      doc.line(margin, y + 2, margin + 40, y + 2);
-      y += 8;
-    }
-  } else {
-    doc.line(margin, y + 2, margin + 40, y + 2);
-    y += 8;
-  }
-
-  // From line with underline
-  doc.setFont('helvetica', 'bold');
-  doc.text(from.toUpperCase(), margin, y);
-  y += 4;
-  
-  // Initials
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'italic');
-  doc.setTextColor(102, 102, 102);
-  doc.text(`RHC/${senderInitials}`, margin, y);
-  y += 12;
-
-  // --- Footer (with emblem image, matching frontend) ---
-  checkPage(30);
-  
-  // Position footer at bottom of page
-  const footerY = pageHeight - margin - 15;
-  
-  // Add footer emblem (matches frontend - positioned on left side)
-  try {
-    const footerBase64 = await this.fetchImageAsBase64(FOOTER_EMBLEM_SRC);
-    if (footerBase64) {
-      doc.addImage(footerBase64, 'JPEG', margin, footerY - 12, 25, 25);
-    }
-  } catch {
-    // Continue without footer image
-  }
-
-  // Footer text (positioned to the right of the emblem)
-  doc.setFontSize(8);
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(102, 102, 102);
-  
-  // Calculate text position to the right of the emblem
-  const textX = margin + 35;
-  doc.text('Milimani Law Courts | 3rd Floor, Chamber 337 | P.O. Box 30041-00100 | Nairobi', textX, footerY - 8, { align: 'left' });
-  doc.text('Tel. +254 0730 181478 | registrarhighcourt@court.go.ke | www.judiciary.go.ke', textX, footerY - 3, { align: 'left' });
-  
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(26, 61, 28);
-  doc.text('Justice Be Our Shield and Defender', textX, footerY + 2, { align: 'left' });
-
-  // --- Output ---
-  const pdfBuffer = doc.output('arraybuffer');
-  return Buffer.from(pdfBuffer);
-}
-
-
-
-// ... keep the rest of your service code unchanged ...
-
-  // ── Generate Letter PDF ────────────────────────────────────────────────────
-
-  private static async generateLetterPDF(data: {
-    to: string;
-    from: string;
-    ref: string;
-    date: string;
-    subject: string;
-    body: string;
-    senderName: string;
-    senderSignature: string | null;
-    senderInitials: string;
-  }): Promise<Buffer> {
-    const doc = new jsPDF('p', 'mm', 'a4');
-    const pageWidth = 210;
-    const pageHeight = 297;
-    const margin = 25;
-    let y = margin + 60; // Start lower to accommodate logo
-
-    // ─── Add Header Logo (non-editable) ──────────────────────────────────
-    await this.addHeaderLogoToPDF(doc, pageWidth, pageHeight);
-
-    const checkPage = (needed: number = 20) => {
-      if (y > pageHeight - margin - needed) {
-        doc.addPage();
-        y = margin + 60;
-        // Re-add logo on new page
-        this.addHeaderLogoToPDF(doc, pageWidth, pageHeight);
-        this.addFooterImageToPDF(doc, pageWidth, pageHeight, margin);
-      }
-    };
-
-    // ─── Add Footer Image (non-editable) ──────────────────────────────────
-    await this.addFooterImageToPDF(doc, pageWidth, pageHeight, margin);
-
-    // ─── Header Text ──────────────────────────────────────────────────────
-    doc.setFontSize(12);
-    doc.setFont('helvetica', 'bold');
-    doc.text('THE JUDICIARY', pageWidth / 2, y, { align: 'center' });
-    y += 6;
-
-    doc.setFontSize(14);
-    doc.text('OFFICE OF THE REGISTRAR HIGH COURT', pageWidth / 2, y, { align: 'center' });
-    y += 12;
-
-    // Ref (editable)
-    doc.setFontSize(11);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Ref:', pageWidth - margin - 60, y);
-    doc.setFont('helvetica', 'normal');
-    doc.text(data.ref, pageWidth - margin - 30, y);
-    y += 7;
-
-    // Date (editable)
-    doc.setFont('helvetica', 'bold');
-    doc.text('Date:', pageWidth - margin - 60, y);
-    doc.setFont('helvetica', 'normal');
-    doc.text(data.date, pageWidth - margin - 30, y);
-    y += 12;
-
-    // To (editable)
-    doc.setFont('helvetica', 'bold');
-    doc.text('To:', margin, y);
-    doc.setFont('helvetica', 'normal');
-    doc.text(data.to.toUpperCase(), margin + 20, y);
-    y += 8;
-
-    // From (editable)
-    doc.setFont('helvetica', 'bold');
-    doc.text('From:', margin, y);
-    doc.setFont('helvetica', 'normal');
-    doc.text(data.from.toUpperCase(), margin + 20, y);
-    y += 8;
-
-    // Subject (editable)
-    doc.setFont('helvetica', 'bold');
-    doc.text('Subject:', margin, y);
-    doc.setFont('helvetica', 'normal');
-    doc.text(data.subject.toUpperCase(), margin + 20, y);
-    y += 10;
-
-    // ─── Body (editable) ─────────────────────────────────────────────────────
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(11);
-
-    const lines = data.body.split('\n');
-    for (const line of lines) {
-      checkPage(15);
-      if (line.trim() === '') {
-        y += 4;
-        continue;
-      }
-      const wrappedLines = doc.splitTextToSize(line, pageWidth - margin * 2);
-      for (const wrapped of wrappedLines) {
-        checkPage(10);
-        doc.text(wrapped, margin, y);
-        y += 6;
-      }
-      y += 2;
-    }
-
-    // ─── Yours sincerely (editable) ──────────────────────────────────────
-    checkPage(40);
-    y += 20;
-
-    doc.setFont('helvetica', 'italic');
-    doc.setFontSize(11);
-    doc.text('Yours sincerely,', margin, y);
-    y += 12;
-
-    // Sign-off (editable)
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(12);
-    doc.text(data.senderName, margin, y);
-    y += 4;
-
-    doc.line(margin, y + 2, margin + 40, y + 2);
-    y += 8;
-
-    doc.setFont('helvetica', 'bold');
-    doc.text(data.from.toUpperCase(), margin, y);
-    y += 4;
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'italic');
-    doc.setTextColor(102, 102, 102);
-    doc.text(`RHC/${data.senderInitials}`, margin, y);
-    y += 12;
-
-    // ─── Footer Text (non-editable) ─────────────────────────────────────
-    // Position footer text above the footer image
-    const footerY = pageHeight - margin - 15;
-    doc.setFontSize(8);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(102, 102, 102);
-    doc.text('Milimani Law Courts | 3rd Floor, Chamber 337 | P.O. Box 30041-00100 | Nairobi', margin + 20, footerY - 10, { align: 'left' });
-    doc.text('Tel. +254 0730 181478 | registrarhighcourt@court.go.ke | www.judiciary.go.ke', margin + 20, footerY - 5, { align: 'left' });
-    doc.text('Justice Be Our Shield and Defender', margin + 20, footerY, { align: 'left' });
-
-    return Buffer.from(doc.output('arraybuffer'));
-  }
-
-  // src/features/documents/documents.service.ts
-
-// ── Create Memo ──────────────────────────────────────────────────────────────
-
-static async createMemo(
-  input: {
-    to: string;
-    from: string;
-    cc?: string;
-    ref: string;
-    date: string;
-    subject: string;
-    body: string;
-    recipient_id?: string;
-    note?: string;
-  },
-  createdBy: string,
-  file?: Express.Multer.File  // This is the PDF from the frontend!
-): Promise<Document> {
-  const title = `MEMO: ${input.subject}`;
-
-  // Get the sender's full name and initials
-  const { rows: senderRows } = await pool.query(
-    `SELECT full_name, signature_url FROM users WHERE id = $1`,
-    [createdBy]
-  );
-  const senderName = senderRows[0]?.full_name || input.from;
-  const senderSignature = senderRows[0]?.signature_url || null;
-  const senderInitials = senderName
-    .split(' ')
-    .map((n: string) => n.charAt(0).toUpperCase())
-    .join('');
-
-  // ─── UPLOAD THE FRONTEND-GENERATED PDF ────────────────────────────────
-  // Use the file from the frontend instead of regenerating!
-  let uploaded: { secure_url: string; public_id: string };
-  
-  if (file) {
-    // The frontend already generated the PDF - just upload it
-    const multerFile = {
-      buffer: file.buffer,
-      mimetype: file.mimetype || 'application/pdf',
-      originalname: file.originalname || `Memo_${input.ref || 'untitled'}.pdf`,
-      size: file.size,
-      fieldname: 'file',
-      encoding: '7bit',
-    } as Express.Multer.File;
-    
-    uploaded = await uploadToCloudinary(multerFile, 'registrar/memos');
-  } else {
-    // Fallback: generate PDF on backend if no file was provided
-    const pdfBuffer = await this.generateMemoPDF({
-      to: input.to,
-      from: input.from,
-      cc: input.cc,
-      ref: input.ref,
-      date: input.date,
-      subject: input.subject,
-      body: input.body,
-      senderName,
-      senderSignature,
-      senderInitials,
-    });
-
-    uploaded = await uploadToCloudinary(
-      {
-        buffer: pdfBuffer,
-        mimetype: 'application/pdf',
-        originalname: `Memo_${input.ref || 'untitled'}.pdf`,
-        size: pdfBuffer.length,
-        fieldname: 'file',
-        encoding: '7bit',
-      } as Express.Multer.File,
-      'registrar/memos'
-    );
-  }
-
-  // ─── HTML preview (matches frontend exactly) ──────────────────────────
-  const htmlContent = `
-    <div style="font-family: 'Times New Roman', Times, serif; max-width: 794px; margin: 0 auto; padding: 48px 56px; background: white;">
-      <div style="text-align: center; margin-bottom: 32px;">
-        <img src="${JUDICIARY_CREST_SRC}" alt="Judiciary of Kenya" style="height: 80px; width: auto; object-fit: contain; display: block; margin: 0 auto;" />
-      </div>
-      <div style="text-align: center; margin-bottom: 24px;">
-        <p style="font-size: 14px; font-weight: bold; text-transform: uppercase; color: #1a3d1c; margin: 4px 0;">OFFICE OF THE REGISTRAR HIGH COURT</p>
-        <p style="font-size: 16px; font-weight: bold; text-transform: uppercase; color: #1a3d1c; margin: 4px 0;">INTERNAL MEMO</p>
-      </div>
-      <div style="margin-bottom: 24px;">
-        <div style="display: flex; margin-bottom: 4px; font-size: 12px;">
-          <span style="width: 80px; font-weight: bold; flex-shrink: 0;">TO :</span>
-          <span style="font-weight: bold;">${input.to.toUpperCase()}</span>
-        </div>
-        <div style="display: flex; margin-bottom: 4px; font-size: 12px;">
-          <span style="width: 80px; font-weight: bold; flex-shrink: 0;">FROM :</span>
-          <span style="font-weight: bold;">${input.from.toUpperCase()}</span>
-        </div>
-        ${input.cc ? `
-        <div style="display: flex; margin-bottom: 4px; font-size: 12px;">
-          <span style="width: 80px; font-weight: bold; flex-shrink: 0;">CC :</span>
-          <span style="font-weight: bold;">${input.cc.toUpperCase()}</span>
-        </div>` : ''}
-        <div style="display: flex; margin-bottom: 4px; font-size: 12px;">
-          <span style="width: 80px; font-weight: bold; flex-shrink: 0;">REF :</span>
-          <span style="font-weight: bold;">${input.ref.toUpperCase()}</span>
-        </div>
-        <div style="display: flex; margin-bottom: 4px; font-size: 12px;">
-          <span style="width: 80px; font-weight: bold; flex-shrink: 0;">DATE :</span>
-          <span style="font-weight: bold;">${input.date}</span>
-        </div>
-        <div style="display: flex; margin-bottom: 4px; font-size: 12px; border-bottom: 2px solid #000000; padding-bottom: 8px;">
-          <span style="width: 80px; font-weight: bold; flex-shrink: 0;">SUBJECT :</span>
-          <span style="font-weight: bold;">${input.subject.toUpperCase()}</span>
-        </div>
-      </div>
-      <div style="margin-bottom: 40px; line-height: 1.8; font-size: 12px; min-height: 200px;">
-        ${input.body.replace(/\n/g, '<br>')}
-      </div>
-      <div style="margin-top: 48px;">
-        <p style="font-size: 13px; font-weight: bold; margin-bottom: 4px;">${senderName}</p>
-        ${senderSignature ? `<img src="${senderSignature}" alt="Signature" style="max-height: 50px; margin-bottom: 4px; display: block;" />` : '<div style="height: 24px;"></div>'}
-        <p style="font-size: 12px; font-weight: bold; text-decoration: underline; margin-bottom: 2px;">${input.from.toUpperCase()}</p>
-        <p style="font-size: 10px; font-style: italic; color: #666666; margin-top: 2px;">RHC/${senderInitials}</p>
-      </div>
-      <div style="margin-top: 48px; padding-top: 16px; border-top: 1px solid #d1d5db; display: flex; align-items: center; justify-content: space-between;">
-        <img src="${FOOTER_EMBLEM_SRC}" alt="Footer emblem" style="height: 40px; width: auto; object-fit: contain;" />
-        <div style="text-align: right;">
-          <p style="font-size: 8px; color: #666666; margin: 2px 0; line-height: 1.4;">Milimani Law Courts | 3rd Floor, Chamber 337 | P.O. Box 30041-00100 | Nairobi</p>
-          <p style="font-size: 8px; color: #666666; margin: 2px 0; line-height: 1.4;">Tel. +254 0730 181478 | registrarhighcourt@court.go.ke | www.judiciary.go.ke</p>
-          <p style="font-size: 8px; font-weight: bold; color: #1a3d1c; margin: 4px 0 0 0; line-height: 1.4;">Justice Be Our Shield and Defender</p>
-        </div>
-      </div>
-    </div>
-  `;
-
-  const status = input.recipient_id ? 'pending_review' : 'draft';
-
-  const { rows } = await pool.query(
-    `INSERT INTO documents
-       (title, type, body, file_url, file_public_id, file_size_bytes, mime_type, original_name,
-        reference_no, assigned_to, created_by, status, is_draft, department_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-     RETURNING id`,
-    [
-      title,
-      'memo',
-      htmlContent,
-      uploaded.secure_url,
-      uploaded.public_id,
-      uploaded.secure_url ? (file?.size || 0) : 0,
-      'application/pdf',
-      `Memo_${input.ref || 'untitled'}.pdf`,
-      input.ref,
-      input.recipient_id || null,
-      createdBy,
-      status,
-      !input.recipient_id,
-      null,
-    ]
-  );
-
-  const doc = await this.findById(rows[0].id);
-
-  if (input.recipient_id && doc) {
-    await NotificationsService.createNotification({
-      user_id: input.recipient_id,
-      type_name: 'memo',
-      title: `New Memo: ${input.subject}`,
-      message: `You have received a new memo from ${input.from}.${input.note ? `\n\nNote: ${input.note}` : ''}`,
-      icon: 'FileText',
-      color: '#1a3d1c',
-      link: `/documents/${doc.id}`,
-      priority: 'high',
-      metadata: {
-        document_id: doc.id,
-        document_type: 'memo',
-        document_title: input.subject,
-        from_user: createdBy,
-        note: input.note,
-      },
-      send_email: true,
-    });
-
-    await this.logFlow(
-      pool,
-      doc.id,
-      'sent_to_user',
-      createdBy,
-      input.recipient_id,
-      input.note || `Memo sent: ${input.subject}`
-    );
-  }
-
-  return doc!;
-}
-
-  // ── Create Letter ────────────────────────────────────────────────────────────
-
-  static async createLetter(
-    input: {
-      to: string;
-      from: string;
-      ref: string;
-      date: string;
-      subject: string;
-      body: string;
-      recipient_id?: string;
-      note?: string;
-    },
-    createdBy: string,
-    file?: Express.Multer.File
-  ): Promise<Document> {
-    const title = `LETTER: ${input.subject}`;
-
-    // Get the sender's full name and initials
-    const { rows: senderRows } = await pool.query(
-      `SELECT full_name, signature_url FROM users WHERE id = $1`,
-      [createdBy]
-    );
-    const senderName = senderRows[0]?.full_name || input.from;
-    const senderSignature = senderRows[0]?.signature_url || null;
-    const senderInitials = senderName
-      .split(' ')
-      .map((n: string) => n.charAt(0).toUpperCase())
-      .join('');
-
-    // ─── Generate PDF (with images) ──────────────────────────────────────
-    const pdfBuffer = await this.generateLetterPDF({
-      to: input.to,
-      from: input.from,
-      ref: input.ref,
-      date: input.date,
-      subject: input.subject,
-      body: input.body,
-      senderName,
-      senderSignature,
-      senderInitials,
-    });
-
-    // ─── Upload PDF to Cloudinary ─────────────────────────────────────────
-    const uploaded = await uploadToCloudinary(
-      {
-        buffer: pdfBuffer,
-        mimetype: 'application/pdf',
-        originalname: `Letter_${input.ref || 'untitled'}.pdf`,
-        size: pdfBuffer.length,
-        fieldname: 'file',
-        encoding: '7bit',
-      } as Express.Multer.File,
-      'registrar/letters'
-    );
-
-    // ─── HTML preview ──────────────────────────────────────────────────────
-    const htmlContent = `
-      <div style="font-family: 'Times New Roman', serif; max-width: 794px; margin: 0 auto; padding: 40px; background: white;">
-        <div style="text-align: center; margin-bottom: 16px;">
-          <img src="${JUDICIARY_CREST_SRC}" alt="Judiciary of Kenya" style="height: 80px; width: auto; object-fit: contain;" />
-        </div>
-        <div style="text-align: center; margin-bottom: 16px;">
-          <h1 style="font-size: 14px; font-weight: bold; text-transform: uppercase; color: #555; margin: 0;">THE JUDICIARY</h1>
-          <h2 style="font-size: 16px; font-weight: bold; text-transform: uppercase; color: #1a3d1c; margin: 4px 0;">OFFICE OF THE REGISTRAR HIGH COURT</h2>
-        </div>
-        <div style="text-align: right; margin-bottom: 20px;">
-          <p style="margin: 2px 0; font-size: 12px;"><strong>Ref:</strong> ${input.ref}</p>
-          <p style="margin: 2px 0; font-size: 12px;"><strong>Date:</strong> ${input.date}</p>
-        </div>
-        <div style="margin-bottom: 20px;">
-          <p style="margin: 4px 0; font-size: 12px;"><strong>To:</strong> ${input.to.toUpperCase()}</p>
-          <p style="margin: 4px 0; font-size: 12px;"><strong>From:</strong> ${input.from.toUpperCase()}</p>
-        </div>
-        <div style="margin-bottom: 30px;">
-          <p style="margin: 4px 0; font-size: 12px;"><strong>Subject:</strong> ${input.subject.toUpperCase()}</p>
-        </div>
-        <div style="margin-bottom: 30px; line-height: 1.6; font-size: 11px; min-height: 200px;">
-          ${input.body.replace(/\n/g, '<br>')}
-        </div>
-        <div style="margin-top: 40px;">
-          <p style="font-size: 12px; font-style: italic;">Yours sincerely,</p>
-          <div style="margin-top: 30px;">
-            <p style="font-size: 12px; font-weight: bold; margin-bottom: 4px;">${senderName}</p>
-            ${senderSignature ? `<img src="${senderSignature}" alt="Signature" style="max-height: 40px; margin-bottom: 4px; display: block;" />` : '<div style="height: 20px;"></div>'}
-            <p style="font-size: 12px; font-weight: bold; text-decoration: underline;">${input.from.toUpperCase()}</p>
-            <p style="font-size: 10px; font-style: italic; color: #666; margin-top: 4px;">RHC/${senderInitials}</p>
-          </div>
-        </div>
-        <div style="margin-top: 40px; padding-top: 12px; border-top: 1px solid #ccc; display: flex; align-items: center; justify-content: space-between;">
-          <img src="${FOOTER_EMBLEM_SRC}" alt="Footer emblem" style="height: 40px; width: auto; object-fit: contain;" />
-          <div style="text-align: right;">
-            <p style="font-size: 8px; color: #666; margin: 2px 0;">Milimani Law Courts | 3rd Floor, Chamber 337 | P.O. Box 30041-00100 | Nairobi</p>
-            <p style="font-size: 8px; color: #666; margin: 2px 0;">Tel. +254 0730 181478 | registrarhighcourt@court.go.ke | www.judiciary.go.ke</p>
-            <p style="font-size: 8px; font-weight: bold; color: #1a3d1c; margin: 4px 0 0 0;">Justice Be Our Shield and Defender</p>
-          </div>
-        </div>
-      </div>
-    `;
-
-    const status = input.recipient_id ? 'pending_review' : 'draft';
-
-    const { rows } = await pool.query(
-      `INSERT INTO documents
-         (title, type, body, file_url, file_public_id, file_size_bytes, mime_type, original_name,
-          reference_no, assigned_to, created_by, status, is_draft, department_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-       RETURNING id`,
-      [
-        title,
-        'letter',
-        htmlContent,
-        uploaded.secure_url,
-        uploaded.public_id,
-        pdfBuffer.length,
-        'application/pdf',
-        `Letter_${input.ref || 'untitled'}.pdf`,
-        input.ref,
-        input.recipient_id || null,
-        createdBy,
-        status,
-        !input.recipient_id,
-        null,
-      ]
-    );
-
-    const doc = await this.findById(rows[0].id);
-
-    if (input.recipient_id && doc) {
-      await NotificationsService.createNotification({
-        user_id: input.recipient_id,
-        type_name: 'letter',
-        title: `New Letter: ${input.subject}`,
-        message: `You have received a new letter from ${input.from}.${input.note ? `\n\nNote: ${input.note}` : ''}`,
-        icon: 'Mail',
-        color: '#1a3d1c',
-        link: `/documents/${doc.id}`,
-        priority: 'high',
-        metadata: {
-          document_id: doc.id,
-          document_type: 'letter',
-          document_title: input.subject,
-          from_user: createdBy,
-          note: input.note,
-        },
-        send_email: true,
-      });
-
-      await this.logFlow(
-        pool,
-        doc.id,
-        'sent_to_user',
-        createdBy,
-        input.recipient_id,
-        input.note || `Letter sent: ${input.subject}`
-      );
-    }
-
-    return doc!;
   }
 
   // ── Send to User ─────────────────────────────────────────────────────────────
@@ -1890,18 +1102,20 @@ static async createMemo(
 
   // ── Create Notification (helper) ────────────────────────────────────────────
 
-  static async createNotification(
-    userId: string,
-    title: string,
-    message: string,
-    type: string,
-    documentId?: string
-  ): Promise<void> {
+ static async createNotification(
+  userId: string,
+  title: string,
+  message: string,
+  type: string,
+  documentId?: string
+): Promise<void> {
+  console.log(`[DocHelper] Creating notification for user ${userId}, type: ${type}`);
+  try {
     await NotificationsService.createNotification({
       user_id: userId,
       type_name: type,
-      title: title,
-      message: message,
+      title,
+      message,
       icon: type === 'memo' ? 'FileText' : type === 'letter' ? 'Mail' : 'Bell',
       color: type === 'memo' || type === 'letter' ? '#1a3d1c' : '#6b7280',
       link: documentId ? `/documents/${documentId}` : undefined,
@@ -1912,5 +1126,186 @@ static async createMemo(
       },
       send_email: true,
     });
+    console.log(`[DocHelper] Notification created successfully.`);
+  } catch (error) {
+    console.error(`[DocHelper] Failed to create notification for user ${userId}:`, error);
+    // Don’t re-throw – notification failure should not break the main flow
   }
+}
+
+
+  // ════════════════════════════════════════════════════════════════════════════
+  //  NEW: Memo & Letter generation with PDF
+  // ════════════════════════════════════════════════════════════════════════════
+
+  private static async getUserDisplayName(userId: string): Promise<string> {
+    const { rows } = await pool.query(
+      `SELECT full_name FROM users WHERE id = $1 AND is_active = true`,
+      [userId]
+    );
+    return rows[0]?.full_name || 'Unknown User';
+  }
+
+  // ── Save Document Helper ──────────────────────────────────────────────────
+
+  private static async saveDocument(
+    title: string,
+    type: string,
+    ref: string,
+    body: string,
+    pdfBuffer: Buffer,
+    createdBy: string,
+    departmentId?: string
+  ): Promise<Document> {
+    const multerFile: Express.Multer.File = {
+      buffer: pdfBuffer,
+      originalname: `${type}_${Date.now()}.pdf`,
+      mimetype: 'application/pdf',
+      size: pdfBuffer.length,
+      fieldname: 'file',
+      encoding: '7bit',
+      stream: null as any,
+      destination: '',
+      filename: '',
+      path: '',
+    };
+
+    const uploaded = await uploadToCloudinary(multerFile, `registrar/documents/${type}s`);
+
+    const { rows } = await pool.query(
+      `INSERT INTO documents
+         (title, type, category, reference_no, body, file_url, file_public_id,
+          file_size_bytes, mime_type, original_name, created_by, department_id, status, is_draft)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+       RETURNING id`,
+      [title, type, null, ref, body, uploaded.secure_url, uploaded.public_id, pdfBuffer.length,
+       'application/pdf', multerFile.originalname, createdBy, departmentId || null, 'draft', true]
+    );
+
+    await this.logFlow(pool, rows[0].id, 'created', createdBy, null);
+    return (await this.findById(rows[0].id))!;
+  }
+
+  // ── Generate Memo ─────────────────────────────────────────────────────────
+
+  static async generateMemo(input: ComposeMemoInput, createdBy: string): Promise<Document> {
+    const sender = input.from || (await this.getUserDisplayName(createdBy));
+    const ref = input.reference_no || `RHC/MEMO/${new Date().getFullYear()}/${Date.now().toString().slice(-6)}`;
+
+    const logoUrl = process.env.MEMO_LOGO_URL || undefined;
+    const footerEmblemUrl = process.env.MEMO_FOOTER_EMBLEM_URL || undefined;
+
+    const pdfBuffer = await generateDocumentFromTemplate('memo', {
+      to: input.to,
+      from: sender,
+      ref: ref,
+      date: input.date ? new Date(input.date).toLocaleDateString('en-KE', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      }) : new Date().toLocaleDateString('en-KE', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      }),
+      subject: input.title,
+      body: input.body,
+      signatureName: sender,
+      signatureTitle: input.signatureTitle || 'Registrar, High Court',
+      logoUrl: logoUrl,
+      footerEmblemUrl: footerEmblemUrl
+    });
+
+    return await this.saveDocument(input.title, 'memo', ref, input.body, pdfBuffer, createdBy, input.department_id);
+  }
+
+  // ── Generate Letter ───────────────────────────────────────────────────────
+
+  static async generateLetter(input: ComposeLetterInput, createdBy: string): Promise<Document> {
+    const sender = input.from || (await this.getUserDisplayName(createdBy));
+    const ref = input.reference_no || `RHC/LTR/${new Date().getFullYear()}/${Date.now().toString().slice(-6)}`;
+
+    const logoUrl = process.env.LETTER_LOGO_URL || undefined;
+    const footerEmblemUrl = process.env.LETTER_FOOTER_EMBLEM_URL || undefined;
+
+    const pdfBuffer = await generateDocumentFromTemplate('letter', {
+      ref: ref,
+      date: input.date ? new Date(input.date).toLocaleDateString('en-KE', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      }) : new Date().toLocaleDateString('en-KE', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      }),
+      to: input.to,
+      from: sender,
+      subject: input.title,
+      body: input.body,
+      sender: sender,
+      senderTitle: input.signatureTitle || 'Registrar, High Court',
+      cc: input.cc || '',
+      enclosures: input.enclosures || '',
+      logoUrl: logoUrl,
+      footerEmblemUrl: footerEmblemUrl
+    });
+
+    return await this.saveDocument(input.title, 'letter', ref, input.body, pdfBuffer, createdBy, input.department_id);
+  }
+
+  // ── Notify all active super admins ──────────────────────────────────────────
+
+private static async notifySuperAdmins(
+  documentId: string,
+  action: 'created' | 'uploaded' | 'finalized',
+  creatorName?: string,
+  io?: any
+): Promise<void> {
+  console.log(`[Notify] Looking for active super admins...`);
+  const { rows: admins } = await pool.query(
+    `SELECT id FROM users WHERE role = 'super_admin' AND is_active = true`
+  );
+
+  if (!admins.length) {
+    console.warn('[Notify] No active super admins found – skipping notifications.');
+    return;
+  }
+
+  console.log(`[Notify] Found ${admins.length} active super admin(s).`);
+
+  const doc = await this.findById(documentId);
+  if (!doc) {
+    console.error(`[Notify] Document ${documentId} not found – aborting.`);
+    return;
+  }
+
+  const title = `New ${doc.type} document ${action}`;
+  const message = `A new ${doc.type} "${doc.title}" has been ${action} by ${creatorName || 'a user'}.`;
+
+  for (const admin of admins) {
+    try {
+      console.log(`[Notify] Creating notification for admin ${admin.id}...`);
+      await NotificationsService.createNotification(
+        {
+          user_id: admin.id,
+          type_name: doc.type,
+          title,
+          message,
+          icon: doc.type === 'memo' ? 'FileText' : doc.type === 'letter' ? 'Mail' : 'Bell',
+          color: '#1a3d1c',
+          link: `/documents/${documentId}`,
+          priority: 'high',
+          metadata: { document_id: documentId, type: doc.type },
+          send_email: true,
+        },
+        io
+      );
+      console.log(`[Notify] Notification created for admin ${admin.id}.`);
+    } catch (error) {
+      console.error(`[Notify] Failed to create notification for admin ${admin.id}:`, error);
+    }
+  }
+}
+
 }

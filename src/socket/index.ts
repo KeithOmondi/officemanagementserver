@@ -167,9 +167,7 @@ export function setupWebSocket(server: Server) {
       origin: env.CLIENT_URL || 'http://localhost:5173',
       credentials: true,
     },
-    // Path for socket.io
     path: '/socket.io',
-    // Transport options
     transports: ['websocket', 'polling'],
   });
 
@@ -198,7 +196,7 @@ export function setupWebSocket(server: Server) {
     // Join user's personal room for direct messages
     socket.join(`user:${user.id}`);
 
-    // Join group rooms for group messages
+    // ✅ Fix: Batch join rooms instantly to resolve asynchronous closure allocation leaks
     try {
       const { rows } = await pool.query(
         `SELECT group_id FROM group_members 
@@ -206,9 +204,10 @@ export function setupWebSocket(server: Server) {
         [user.id]
       );
 
-      for (const row of rows) {
-        socket.join(`group:${row.group_id}`);
-        console.log(`📨 ${user.full_name} joined group: ${row.group_id}`);
+      if (rows.length > 0) {
+        const targetRooms = rows.map((row) => `group:${row.group_id}`);
+        await socket.join(targetRooms);
+        console.log(`📨 ${user.full_name} batch-joined ${rows.length} group rooms`);
       }
     } catch (err) {
       console.error('Error joining group rooms:', err);
@@ -225,12 +224,9 @@ export function setupWebSocket(server: Server) {
 
         // Emit to recipients
         if (message.group_id) {
-          // Group message - emit to all group members
           io.to(`group:${message.group_id}`).emit('new_message', message);
         } else if (message.recipient_id) {
-          // Direct message - emit to recipient
           io.to(`user:${message.recipient_id}`).emit('new_message', message);
-          // Also emit to sender for confirmation
           socket.emit('new_message', message);
         }
 
@@ -263,7 +259,6 @@ export function setupWebSocket(server: Server) {
       try {
         await markMessageAsRead(message_id, user.id);
         
-        // Notify sender that message was read
         const message = await getMessage(message_id);
         if (message && message.sender_id) {
           io.to(`user:${message.sender_id}`).emit('message_read', {
@@ -298,13 +293,25 @@ export function setupWebSocket(server: Server) {
     });
 
     // ── Disconnect ──────────────────────────────────────────────────────────
-    socket.on('disconnect', () => {
-      console.log(`🔌 User disconnected: ${user.full_name} (${user.id})`);
+    // ── Disconnect ──────────────────────────────────────────────────────────
+    socket.on('disconnect', (reason) => {
+      console.log(`🔌 User disconnected: ${user.full_name} (${user.id}) | Reason: ${reason}`);
+      
+      // ✅ Clean up active rooms safely using public API
+      for (const room of socket.rooms) {
+        if (room !== socket.id) {
+          socket.leave(room);
+        }
+      }
+      
+      // ✅ Force-remove event tracking maps to eliminate memory leaks
+      socket.removeAllListeners();
     });
 
     // ── Error Handler ──────────────────────────────────────────────────────
     socket.on('error', (error) => {
       console.error(`Socket error for ${user.full_name}:`, error);
+      socket.disconnect(true);
     });
   });
 

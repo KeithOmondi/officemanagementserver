@@ -33,6 +33,12 @@ import type {
     OtherPayment,
     CreateOtherPaymentInput,
     Status,
+    Ticket,
+    TicketFilters,
+    CreateTicketInput,
+    UpdateTicketInput,
+    UpdateBenchInput,
+    UpdatePartHeardInput,
 } from './helpdesk.types';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -107,6 +113,14 @@ const OTHER_PAYMENT_SELECT = `
     created_by, created_at, updated_at
 `;
 
+const TICKET_SELECT = `
+    id, ticket_number, ticket_type, reference_id,
+    date_of_travel, return_date, departure_from, destination,
+    preferred_flight_time, passenger_name, passenger_pj_number,
+    flight_details, amount::float8 AS amount, status, remarks,
+    created_by, created_at, updated_at
+`;
+
 // ─── Service Class ────────────────────────────────────────────────────────────
 
 export class HelpDeskService {
@@ -124,7 +138,8 @@ export class HelpDeskService {
                 (SELECT COUNT(*)::int FROM service_weeks WHERE is_active = true) +
                 (SELECT COUNT(*)::int FROM medical_claims WHERE is_active = true) +
                 (SELECT COUNT(*)::int FROM general_requests WHERE is_active = true) +
-                (SELECT COUNT(*)::int FROM other_payments WHERE is_active = true) AS total_records,
+                (SELECT COUNT(*)::int FROM other_payments WHERE is_active = true) +
+                (SELECT COUNT(*)::int FROM tickets WHERE is_active = true) AS total_records,
                 (SELECT COUNT(*)::int FROM judge_utility_items WHERE status IN ('Awaiting', 'Awaiting Documentation', 'Awaiting Funding', 'In Process') AND is_active = true) +
                 (SELECT COUNT(*)::int FROM circuits WHERE status IN ('Pending', 'In Progress') AND is_active = true) +
                 (SELECT COUNT(*)::int FROM special_benches WHERE status IN ('Pending', 'In Progress') AND is_active = true) +
@@ -132,7 +147,8 @@ export class HelpDeskService {
                 (SELECT COUNT(*)::int FROM service_weeks WHERE status IN ('Pending', 'In Progress') AND is_active = true) +
                 (SELECT COUNT(*)::int FROM medical_claims WHERE status IN ('Pending', 'In Progress') AND is_active = true) +
                 (SELECT COUNT(*)::int FROM general_requests WHERE status IN ('Pending', 'In Progress') AND is_active = true) +
-                (SELECT COUNT(*)::int FROM other_payments WHERE status IN ('Pending', 'In Progress') AND is_active = true) AS in_progress,
+                (SELECT COUNT(*)::int FROM other_payments WHERE status IN ('Pending', 'In Progress') AND is_active = true) +
+                (SELECT COUNT(*)::int FROM tickets WHERE status IN ('Pending', 'In Progress') AND is_active = true) AS in_progress,
                 (SELECT COUNT(*)::int FROM visa_requests WHERE status = 'Active' AND is_active = true) AS visa_active,
                 (SELECT COUNT(*)::int FROM protocol_events WHERE status = 'Pending' AND is_active = true) AS protocol_pending
         `);
@@ -150,6 +166,196 @@ export class HelpDeskService {
             [limit]
         );
         return rows;
+    }
+
+    // ─── Helper: Get Tickets by Reference ─────────────────────────────────────
+
+    private static async getTicketsByReference(referenceId: string, ticketType?: 'Bench' | 'Part-Heard' | 'General'): Promise<Ticket[]> {
+        let query = `SELECT ${TICKET_SELECT} FROM tickets WHERE is_active = true`;
+        const params: unknown[] = [referenceId];
+        let paramCount = 2;
+
+        if (ticketType) {
+            query += ` AND ticket_type = $${paramCount}`;
+            params.push(ticketType);
+            paramCount++;
+        }
+
+        query += ` AND reference_id = $1 ORDER BY created_at ASC`;
+
+        const { rows } = await pool.query(query, params);
+        return rows;
+    }
+
+    // ─── Helper: Get DSA Details ─────────────────────────────────────────────
+
+    private static async getDSADetails(table: string, foreignKey: string, id: string): Promise<any[]> {
+        const { rows } = await pool.query(
+            `SELECT ${DSA_DETAIL_SELECT} 
+             FROM ${table} 
+             WHERE ${foreignKey} = $1 AND is_active = true
+             ORDER BY created_at ASC`,
+            [id]
+        );
+        return rows;
+    }
+
+    // ─── Tickets ──────────────────────────────────────────────────────────────
+
+    static async findAllTickets(filters: TicketFilters = {}): Promise<Ticket[]> {
+        let query = `SELECT ${TICKET_SELECT} FROM tickets WHERE is_active = true`;
+        const params: unknown[] = [];
+        let paramCount = 1;
+
+        if (filters.search) {
+            query += ` AND (passenger_name ILIKE $${paramCount} OR ticket_number ILIKE $${paramCount} OR departure_from ILIKE $${paramCount} OR destination ILIKE $${paramCount})`;
+            params.push(`%${filters.search}%`);
+            paramCount++;
+        }
+        if (filters.status) {
+            query += ` AND status = $${paramCount}`;
+            params.push(filters.status);
+            paramCount++;
+        }
+        if (filters.ticket_type) {
+            query += ` AND ticket_type = $${paramCount}`;
+            params.push(filters.ticket_type);
+            paramCount++;
+        }
+        if (filters.reference_id) {
+            query += ` AND reference_id = $${paramCount}`;
+            params.push(filters.reference_id);
+            paramCount++;
+        }
+
+        query += ` ORDER BY created_at DESC`;
+        if (filters.limit) {
+            query += ` LIMIT $${paramCount}`;
+            params.push(filters.limit);
+            paramCount++;
+        }
+        if (filters.offset) {
+            query += ` OFFSET $${paramCount}`;
+            params.push(filters.offset);
+        }
+
+        const { rows } = await pool.query(query, params);
+        return rows;
+    }
+
+    static async findTicketById(id: string): Promise<Ticket | null> {
+        const { rows } = await pool.query(
+            `SELECT ${TICKET_SELECT} FROM tickets WHERE id = $1 AND is_active = true`,
+            [id]
+        );
+        return rows[0] || null;
+    }
+
+    static async createTicket(input: CreateTicketInput, userId: string): Promise<Ticket> {
+        // Generate ticket number
+        const ticketNumber = `TKT-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+
+        // If reference_id is provided, validate it exists
+        if (input.reference_id) {
+            if (input.ticket_type === 'Bench') {
+                const bench = await this.findBenchById(input.reference_id);
+                if (!bench) {
+                    throw new AppError(404, 'Bench not found for the provided reference');
+                }
+            } else if (input.ticket_type === 'Part-Heard') {
+                const partHeard = await this.findPartHeardById(input.reference_id);
+                if (!partHeard) {
+                    throw new AppError(404, 'Part-Heard not found for the provided reference');
+                }
+            }
+        }
+
+        const { rows } = await pool.query(
+            `INSERT INTO tickets (
+                ticket_number, ticket_type, reference_id,
+                date_of_travel, return_date, departure_from, destination,
+                preferred_flight_time, passenger_name, passenger_pj_number,
+                flight_details, amount, remarks, created_by
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            RETURNING id`,
+            [
+                ticketNumber,
+                input.ticket_type,
+                input.reference_id || null,
+                input.date_of_travel || null,
+                input.return_date || null,
+                input.departure_from || null,
+                input.destination || null,
+                input.preferred_flight_time || null,
+                input.passenger_name.trim(),
+                input.passenger_pj_number || null,
+                input.flight_details || null,
+                input.amount || null,
+                input.remarks || null,
+                userId,
+            ]
+        );
+
+        const ticket = await this.findTicketById(rows[0].id);
+        if (!ticket) throw new AppError(500, 'Failed to create ticket');
+        return ticket;
+    }
+
+    static async updateTicket(id: string, input: UpdateTicketInput): Promise<Ticket> {
+        const existing = await this.findTicketById(id);
+        if (!existing) {
+            throw new AppError(404, 'Ticket not found');
+        }
+
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        let paramCount = 1;
+
+        const setField = (column: string, value: unknown) => {
+            if (value !== undefined) {
+                fields.push(`${column} = $${paramCount}`);
+                values.push(value);
+                paramCount++;
+            }
+        };
+
+        setField('date_of_travel', input.date_of_travel);
+        setField('return_date', input.return_date);
+        setField('departure_from', input.departure_from);
+        setField('destination', input.destination);
+        setField('preferred_flight_time', input.preferred_flight_time);
+        setField('passenger_name', input.passenger_name?.trim());
+        setField('passenger_pj_number', input.passenger_pj_number);
+        setField('flight_details', input.flight_details);
+        setField('amount', input.amount);
+        setField('status', input.status);
+        setField('remarks', input.remarks);
+
+        if (fields.length === 0) {
+            return existing;
+        }
+
+        fields.push(`updated_at = now()`);
+        values.push(id);
+
+        await pool.query(
+            `UPDATE tickets SET ${fields.join(', ')} WHERE id = $${paramCount}`,
+            values
+        );
+
+        const updated = await this.findTicketById(id);
+        if (!updated) throw new AppError(500, 'Failed to update ticket');
+        return updated;
+    }
+
+    static async deleteTicket(id: string): Promise<void> {
+        const { rows } = await pool.query(
+            `UPDATE tickets SET is_active = false WHERE id = $1 RETURNING id`,
+            [id]
+        );
+        if (rows.length === 0) {
+            throw new AppError(404, 'Ticket not found');
+        }
     }
 
     // ─── Judge Utilities (one judge → many utility items) ────────────────────
@@ -501,19 +707,6 @@ export class HelpDeskService {
         }
     }
 
-    // ─── Helper: Get DSA Details ─────────────────────────────────────────────
-
-    private static async getDSADetails(table: string, foreignKey: string, id: string): Promise<any[]> {
-        const { rows } = await pool.query(
-            `SELECT ${DSA_DETAIL_SELECT} 
-             FROM ${table} 
-             WHERE ${foreignKey} = $1 AND is_active = true
-             ORDER BY created_at ASC`,
-            [id]
-        );
-        return rows;
-    }
-
     // ─── Circuits ────────────────────────────────────────────────────────────
 
     static async findAllCircuits(filters: HelpDeskFilters = {}): Promise<Circuit[]> {
@@ -769,6 +962,7 @@ export class HelpDeskService {
         for (const bench of rows) {
             bench.dsa_details = await this.getDSADetails('special_bench_dsa_details', 'bench_id', bench.id);
             bench.total_dsa = bench.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
+            bench.tickets = await this.getTicketsByReference(bench.id, 'Bench');
         }
 
         return rows;
@@ -785,6 +979,7 @@ export class HelpDeskService {
         const bench = rows[0];
         bench.dsa_details = await this.getDSADetails('special_bench_dsa_details', 'bench_id', id);
         bench.total_dsa = bench.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
+        bench.tickets = await this.getTicketsByReference(id, 'Bench');
 
         return bench;
     }
@@ -849,6 +1044,93 @@ export class HelpDeskService {
         }
     }
 
+    static async updateBench(
+        id: string,
+        input: UpdateBenchInput
+    ): Promise<SpecialBench> {
+        const existing = await this.findBenchById(id);
+        if (!existing) {
+            throw new AppError(404, 'Special bench not found');
+        }
+
+        const client = await pool.connect();
+        
+        try {
+            await client.query('BEGIN');
+
+            const fields: string[] = [];
+            const values: unknown[] = [];
+            let paramCount = 1;
+
+            const setField = (column: string, value: unknown) => {
+                if (value !== undefined) {
+                    fields.push(`${column} = $${paramCount}`);
+                    values.push(value);
+                    paramCount++;
+                }
+            };
+
+            setField('name', input.name?.trim());
+            setField('case_reference', input.case_reference);
+            setField('start_date', input.start_date);
+            setField('end_date', input.end_date);
+            setField('status', input.status);
+
+            if (fields.length > 0) {
+                fields.push(`updated_at = now()`);
+                values.push(id);
+
+                await client.query(
+                    `UPDATE special_benches SET ${fields.join(', ')} WHERE id = $${paramCount}`,
+                    values
+                );
+            }
+
+            // Update DSA details if provided
+            if (input.dsa_details !== undefined) {
+                // Soft delete existing DSA details
+                await client.query(
+                    `UPDATE special_bench_dsa_details SET is_active = false WHERE bench_id = $1`,
+                    [id]
+                );
+
+                // Insert new DSA details
+                if (input.dsa_details.length > 0) {
+                    for (const detail of input.dsa_details) {
+                        const total = detail.dsa_per_day * detail.days;
+                        await client.query(
+                            `INSERT INTO special_bench_dsa_details (
+                                bench_id, judge_name, pj_number, designation, dsa_per_day, days, total, notes
+                            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                            [
+                                id,
+                                detail.judge_name.trim(),
+                                detail.pj_number.trim(),
+                                detail.designation || null,
+                                detail.dsa_per_day,
+                                detail.days,
+                                total,
+                                detail.notes || null,
+                            ]
+                        );
+                    }
+                }
+            }
+
+            await client.query('COMMIT');
+
+            const updated = await this.findBenchById(id);
+            if (!updated) throw new AppError(500, 'Failed to update special bench');
+            return updated;
+            
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
     static async updateBenchStatus(
         id: string,
         input: UpdateStatusInput
@@ -859,7 +1141,7 @@ export class HelpDeskService {
         }
 
         await pool.query(
-            `UPDATE special_benches SET status = $1 WHERE id = $2`,
+            `UPDATE special_benches SET status = $1, updated_at = now() WHERE id = $2`,
             [input.status, id]
         );
 
@@ -885,6 +1167,12 @@ export class HelpDeskService {
 
             await client.query(
                 `UPDATE special_bench_dsa_details SET is_active = false WHERE bench_id = $1`,
+                [id]
+            );
+
+            // Also soft delete associated tickets
+            await client.query(
+                `UPDATE tickets SET is_active = false WHERE reference_id = $1 AND ticket_type = 'Bench'`,
                 [id]
             );
 
@@ -932,6 +1220,7 @@ export class HelpDeskService {
         for (const ph of rows) {
             ph.dsa_details = await this.getDSADetails('part_heard_dsa_details', 'part_heard_id', ph.id);
             ph.total_dsa = ph.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
+            ph.tickets = await this.getTicketsByReference(ph.id, 'Part-Heard');
         }
 
         return rows;
@@ -948,6 +1237,7 @@ export class HelpDeskService {
         const ph = rows[0];
         ph.dsa_details = await this.getDSADetails('part_heard_dsa_details', 'part_heard_id', id);
         ph.total_dsa = ph.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
+        ph.tickets = await this.getTicketsByReference(id, 'Part-Heard');
 
         return ph;
     }
@@ -1012,6 +1302,93 @@ export class HelpDeskService {
         }
     }
 
+    static async updatePartHeard(
+        id: string,
+        input: UpdatePartHeardInput
+    ): Promise<PartHeard> {
+        const existing = await this.findPartHeardById(id);
+        if (!existing) {
+            throw new AppError(404, 'Part-heard not found');
+        }
+
+        const client = await pool.connect();
+        
+        try {
+            await client.query('BEGIN');
+
+            const fields: string[] = [];
+            const values: unknown[] = [];
+            let paramCount = 1;
+
+            const setField = (column: string, value: unknown) => {
+                if (value !== undefined) {
+                    fields.push(`${column} = $${paramCount}`);
+                    values.push(value);
+                    paramCount++;
+                }
+            };
+
+            setField('case_reference', input.case_reference?.trim());
+            setField('approved_by', input.approved_by);
+            setField('start_date', input.start_date);
+            setField('end_date', input.end_date);
+            setField('status', input.status);
+
+            if (fields.length > 0) {
+                fields.push(`updated_at = now()`);
+                values.push(id);
+
+                await client.query(
+                    `UPDATE part_heards SET ${fields.join(', ')} WHERE id = $${paramCount}`,
+                    values
+                );
+            }
+
+            // Update DSA details if provided
+            if (input.dsa_details !== undefined) {
+                // Soft delete existing DSA details
+                await client.query(
+                    `UPDATE part_heard_dsa_details SET is_active = false WHERE part_heard_id = $1`,
+                    [id]
+                );
+
+                // Insert new DSA details
+                if (input.dsa_details.length > 0) {
+                    for (const detail of input.dsa_details) {
+                        const total = detail.dsa_per_day * detail.days;
+                        await client.query(
+                            `INSERT INTO part_heard_dsa_details (
+                                part_heard_id, judge_name, pj_number, designation, dsa_per_day, days, total, notes
+                            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                            [
+                                id,
+                                detail.judge_name.trim(),
+                                detail.pj_number.trim(),
+                                detail.designation || null,
+                                detail.dsa_per_day,
+                                detail.days,
+                                total,
+                                detail.notes || null,
+                            ]
+                        );
+                    }
+                }
+            }
+
+            await client.query('COMMIT');
+
+            const updated = await this.findPartHeardById(id);
+            if (!updated) throw new AppError(500, 'Failed to update part-heard');
+            return updated;
+            
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
     static async updatePartHeardStatus(
         id: string,
         input: UpdateStatusInput
@@ -1022,7 +1399,7 @@ export class HelpDeskService {
         }
 
         await pool.query(
-            `UPDATE part_heards SET status = $1 WHERE id = $2`,
+            `UPDATE part_heards SET status = $1, updated_at = now() WHERE id = $2`,
             [input.status, id]
         );
 
@@ -1048,6 +1425,12 @@ export class HelpDeskService {
 
             await client.query(
                 `UPDATE part_heard_dsa_details SET is_active = false WHERE part_heard_id = $1`,
+                [id]
+            );
+
+            // Also soft delete associated tickets
+            await client.query(
+                `UPDATE tickets SET is_active = false WHERE reference_id = $1 AND ticket_type = 'Part-Heard'`,
                 [id]
             );
 

@@ -11,6 +11,13 @@ router.use(protect);
 router.get('/stats', helpDeskController.getStats);
 router.get('/audit', helpDeskController.getAuditLog);
 
+// ─── Tickets ──────────────────────────────────────────────────────────────────
+router.get('/tickets', helpDeskController.getAllTickets);
+router.get('/tickets/:id', helpDeskController.getTicketById);
+router.post('/tickets', requireRole('dept_head', 'super_admin'), helpDeskController.createTicket);
+router.put('/tickets/:id', requireRole('dept_head', 'super_admin'), helpDeskController.updateTicket);
+router.delete('/tickets/:id', requireRole('super_admin', 'dept_head'), helpDeskController.deleteTicket);
+
 // ─── Judge Utilities ─────────────────────────────────────────────────────────
 router.get('/utilities', helpDeskController.getAllUtilities);
 router.get('/utilities/:id', helpDeskController.getUtilityById);
@@ -35,18 +42,11 @@ router.put('/circuits/:id/status', requireRole('dept_head', 'super_admin'), help
 router.put('/circuits/:id/dsa-details', requireRole('dept_head', 'super_admin'), helpDeskController.updateCircuitDSADetails);
 router.delete('/circuits/:id', requireRole('super_admin', 'dept_head'), helpDeskController.deleteCircuit);
 
-// ─── Other Payments ──────────────────────────────────────────────────────────
-router.get('/other-payments', helpDeskController.getAllOtherPayments);
-router.get('/other-payments/:id', helpDeskController.getOtherPaymentById);
-router.post('/other-payments', requireRole('dept_head', 'super_admin'), helpDeskController.createOtherPayment);
-router.put('/other-payments/:id/status', requireRole('dept_head', 'super_admin'), helpDeskController.updateOtherPaymentStatus);
-router.put('/other-payments/:id/dsa-details', requireRole('dept_head', 'super_admin'), helpDeskController.updateOtherPaymentDSADetails);
-router.delete('/other-payments/:id', requireRole('super_admin', 'dept_head'), helpDeskController.deleteOtherPayment);
-
 // ─── Special Benches ────────────────────────────────────────────────────────
 router.get('/benches', helpDeskController.getAllBenches);
 router.get('/benches/:id', helpDeskController.getBenchById);
 router.post('/benches', requireRole('dept_head', 'super_admin'), helpDeskController.createBench);
+router.put('/benches/:id', requireRole('dept_head', 'super_admin'), helpDeskController.updateBench);
 router.put('/benches/:id/status', requireRole('dept_head', 'super_admin'), helpDeskController.updateBenchStatus);
 router.delete('/benches/:id', requireRole('super_admin', 'dept_head'), helpDeskController.deleteBench);
 
@@ -54,6 +54,7 @@ router.delete('/benches/:id', requireRole('super_admin', 'dept_head'), helpDeskC
 router.get('/part-heards', helpDeskController.getAllPartHeards);
 router.get('/part-heards/:id', helpDeskController.getPartHeardById);
 router.post('/part-heards', requireRole('dept_head', 'super_admin'), helpDeskController.createPartHeard);
+router.put('/part-heards/:id', requireRole('dept_head', 'super_admin'), helpDeskController.updatePartHeard);
 router.put('/part-heards/:id/status', requireRole('dept_head', 'super_admin'), helpDeskController.updatePartHeardStatus);
 router.delete('/part-heards/:id', requireRole('super_admin', 'dept_head'), helpDeskController.deletePartHeard);
 
@@ -91,5 +92,13 @@ router.get('/protocol/:id', helpDeskController.getProtocolEventById);
 router.post('/protocol', requireRole('dept_head', 'super_admin'), helpDeskController.createProtocolEvent);
 router.put('/protocol/:id/status', requireRole('dept_head', 'super_admin'), helpDeskController.updateProtocolStatus);
 router.delete('/protocol/:id', requireRole('super_admin', 'dept_head'), helpDeskController.deleteProtocolEvent);
+
+// ─── Other Payments ──────────────────────────────────────────────────────────
+router.get('/other-payments', helpDeskController.getAllOtherPayments);
+router.get('/other-payments/:id', helpDeskController.getOtherPaymentById);
+router.post('/other-payments', requireRole('dept_head', 'super_admin'), helpDeskController.createOtherPayment);
+router.put('/other-payments/:id/status', requireRole('dept_head', 'super_admin'), helpDeskController.updateOtherPaymentStatus);
+router.put('/other-payments/:id/dsa-details', requireRole('dept_head', 'super_admin'), helpDeskController.updateOtherPaymentDSADetails);
+router.delete('/other-payments/:id', requireRole('super_admin', 'dept_head'), helpDeskController.deleteOtherPayment);
 
 export default router;

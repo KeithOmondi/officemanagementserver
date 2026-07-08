@@ -36,15 +36,25 @@ export function getLetterHTML(data: LetterData): string {
 
         body {
           font-family: Arial, Helvetica, sans-serif;
-          padding: 50px 60px 40px 60px;
           color: #000000;
           background: white;
         }
 
+        /* All page spacing lives here, not on 'body'. Because of the global
+           box-sizing: border-box rule above, this padding is now INCLUDED
+           inside min-height: 1123px (A4 height at 96dpi) instead of being
+           added on top of it. Previously the padding sat on 'body', outside
+           '.page', so the true required height was 1123px + body's padding
+           — taller than a single A4 page — which is what was spilling a
+           blank page 2 into the PDF, independent of the footer fix below.
+           The bottom padding is intentionally large (170px, not 40px) to
+           reserve room for the fixed footer so body content never runs
+           into it. */
         .page {
           max-width: 794px;
-          margin: 0 auto;
           min-height: 1123px;
+          margin: 0 auto;
+          padding: 50px 60px 170px 60px;
           position: relative;
         }
 
@@ -154,13 +164,18 @@ export function getLetterHTML(data: LetterData): string {
           font-weight: bold;
         }
 
-        /* Footer — emblem sized to match the sample, address block and
-           tagline right-aligned beside it, tagline in judiciary dark green */
+        /* Footer — pinned to the bottom of the page.
+           'position: fixed' is intentional: Chromium's print/PDF engine
+           (which is what Puppeteer's page.pdf() uses) keeps fixed-position
+           elements anchored to the same spot on every physical page, which
+           is the standard way to get a footer glued to the bottom of a
+           Puppeteer-generated PDF. Do NOT override this in @media print —
+           that was the previous bug (see note below). */
         .footer {
-          position: absolute;
+          position: fixed;
           bottom: 30px;
-          left: 0;
-          right: 0;
+          left: 60px;
+          right: 60px;
           border-top: 1px solid #999;
           padding-top: 14px;
         }
@@ -202,18 +217,27 @@ export function getLetterHTML(data: LetterData): string {
           margin-top: 8px;
         }
 
-        /* Print Styles */
-        @media print {
-          body { padding: 40px 50px; }
-          .footer { position: static; margin-top: 60px; }
-        }
+        /* Print Styles
+           IMPORTANT: an earlier version of this block reset '.footer' to
+           'position: static; margin-top: 60px;', which — since Puppeteer
+           renders with print media by default — pulled the footer back
+           into normal document flow. That made it render immediately
+           after the letter body instead of at the bottom of the page, and
+           the extra height it added pushed the page past 1123px, which is
+           why a near-empty second page was being generated. There is
+           deliberately no @media print override at all now — re-adding
+           padding here (as a previous version did via 'body { padding }')
+           would just reintroduce the same double-padding overflow bug,
+           since Puppeteer always renders in print mode.
+        */
 
-        /* Responsive */
+        /* Responsive (screen preview only — irrelevant to PDF output) */
         @media (max-width: 600px) {
-          body { padding: 30px 20px; }
+          .page { padding: 30px 20px 170px 20px; }
           .header { flex-direction: column; text-align: center; }
           .logo-container { margin-right: 0; margin-bottom: 10px; }
           .ref-date { flex-direction: column; align-items: flex-start; gap: 5px; }
+          .footer { left: 20px; right: 20px; }
           .footer-top { flex-direction: column; text-align: center; gap: 10px; }
           .footer-text, .footer-tagline { text-align: center; }
         }

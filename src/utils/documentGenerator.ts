@@ -70,14 +70,25 @@ export async function generateDocumentFromTemplate(
         const pdfBuffer = await page.pdf({
           format: 'A4',
           printBackground: true,
+          // All page spacing (header/body/footer margins) is handled by
+          // the template's own `.page { padding: ... }` CSS. Setting a
+          // non-zero margin here as well used to double-count that
+          // spacing — Puppeteer's `margin` carves physical space out of
+          // the page IN ADDITION TO the CSS padding, not instead of it —
+          // which was pushing content past one A4 page and spilling a
+          // blank page 2 into every generated memo/letter. Keep this at
+          // zero and let the template CSS own all spacing.
           margin: {
-            top: '60px',
-            bottom: '40px',
-            left: '60px',
-            right: '60px',
+            top: '0px',
+            bottom: '0px',
+            left: '0px',
+            right: '0px',
           },
           displayHeaderFooter: false,
-          preferCSSPageSize: true,
+          // Removed preferCSSPageSize: true — neither template declares an
+          // @page rule, so this had no well-defined source of truth to
+          // prefer and just added ambiguity. `format: 'A4'` above is now
+          // the single, unambiguous source of the physical page size.
         });
 
         console.log(`✅ ${type} PDF generated successfully! Size: ${Math.round(pdfBuffer.length / 1024)}KB`);

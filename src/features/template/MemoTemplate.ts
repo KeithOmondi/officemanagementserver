@@ -9,6 +9,7 @@ export interface MemoData {
   body: string;
   signatureName: string;
   signatureTitle: string;
+  draftedByInitials?: string; // e.g. "JM" — initials of the logged-in user drafting the memo
   logoUrl?: string;
   footerEmblemUrl?: string;
 }
@@ -35,15 +36,25 @@ export function getMemoHTML(data: MemoData): string {
 
         body {
           font-family: Arial, Helvetica, sans-serif;
-          padding: 50px 60px 40px 60px;
           color: #000000;
           background: white;
         }
 
+        /* All page spacing lives here, not on 'body'. Because of the global
+           box-sizing: border-box rule above, this padding is now INCLUDED
+           inside min-height: 1123px (A4 height at 96dpi) instead of being
+           added on top of it. Previously the padding sat on 'body', outside
+           '.page', so the true required height was 1123px + body's padding
+           — taller than a single A4 page — which is what was spilling a
+           blank page 2 into the PDF.
+           The bottom padding is intentionally large (170px, not 40px) to
+           reserve room for the fixed footer below so body content never
+           runs into it. */
         .page {
           max-width: 794px;
-          margin: 0 auto;
           min-height: 1123px;
+          margin: 0 auto;
+          padding: 50px 60px 170px 60px;
           position: relative;
         }
 
@@ -125,72 +136,99 @@ export function getMemoHTML(data: MemoData): string {
           margin-bottom: 10px;
         }
 
-        /* Sign-off — bold, underlined organization/unit name only */
+        /* Sign-off block */
         .signature {
           margin-top: 40px;
           font-size: 13.5px;
+        }
+
+        /* Signatory's actual name — bold, plain (not underlined) */
+        .signature .signatory-name {
+          font-weight: bold;
+          margin-bottom: 4px;
+        }
+
+        /* Org/unit line — bold, underlined, uppercase */
+        .signature .org-unit {
           font-weight: bold;
           text-decoration: underline;
           text-transform: uppercase;
         }
 
-        /* Footer */
+        /* rhc/initials line for the drafting user — directly under the org unit */
+        .signature .drafted-by {
+          font-weight: normal;
+          text-transform: lowercase;
+          margin-top: 4px;
+          font-size: 12px;
+          color: #333333;
+        }
+
+        /* Footer — pinned to the bottom of the page.
+           'position: fixed' is intentional: Chromium's print/PDF engine
+           (which is what Puppeteer's page.pdf() uses) keeps fixed-position
+           elements anchored to the same spot on every physical page — the
+           standard way to get a footer glued to the bottom of a
+           Puppeteer-generated PDF. There is deliberately no @media print
+           override here: a previous version reset this to
+           'position: static; margin-top: 60px;' under @media print, which
+           — since Puppeteer renders in print mode by default — pulled the
+           footer back into normal document flow, making it appear right
+           after the signature block instead of at the bottom of the page,
+           and adding enough extra height to spill a blank second page. */
         .footer {
-          position: absolute;
+          position: fixed;
           bottom: 30px;
-          left: 0;
-          right: 0;
+          left: 60px;
+          right: 60px;
           border-top: 1px solid #999;
-          padding-top: 10px;
+          padding-top: 14px;
         }
 
         .footer-top {
           display: flex;
           align-items: center;
-          gap: 14px;
+          gap: 18px;
         }
 
         .footer-emblem {
-          flex: 0 0 44px;
+          flex: 0 0 70px;
         }
 
         .footer-emblem img {
-          width: 44px;
-          height: 44px;
+          width: 70px;
+          height: 70px;
           display: block;
+          object-fit: contain;
         }
 
         .footer-text {
           flex: 1;
           text-align: right;
-          font-size: 9.5px;
+          font-size: 11px;
           color: #1a1a1a;
         }
 
         .footer-text p {
-          margin: 1px 0;
+          margin: 2px 0;
           line-height: 1.5;
         }
 
         .footer-tagline {
           text-align: right;
-          font-size: 10px;
+          font-size: 12px;
           font-weight: bold;
-          margin-top: 6px;
+          color: #1E4620;
+          margin-top: 8px;
         }
 
-        /* Print Styles */
-        @media print {
-          body { padding: 40px 50px; }
-          .footer { position: static; margin-top: 60px; }
-        }
-
-        /* Responsive */
+        /* Responsive (screen preview only — irrelevant to PDF output) */
         @media (max-width: 600px) {
-          body { padding: 30px 20px; }
+          .page { padding: 30px 20px 170px 20px; }
           .field { flex-direction: row; }
           .field .label { width: 70px; }
-          .footer-top { flex-direction: column; text-align: center; gap: 8px; }
+          .footer { left: 20px; right: 20px; }
+          .footer-top { flex-direction: column; text-align: center; gap: 10px; }
           .footer-text, .footer-tagline { text-align: center; }
         }
       </style>
@@ -245,9 +283,11 @@ export function getMemoHTML(data: MemoData): string {
           ${data.body ? data.body.replace(/\n/g, '<br/>') : '<p>&nbsp;</p>'}
         </div>
 
-        <!-- Sign-off: bold underlined unit/org name only, no title/contact block -->
+        <!-- Sign-off: signatory name, org unit (bold underlined), then rhc/initials of drafter -->
         <div class="signature">
-          ${escapeHtml(data.signatureName)}
+          <div class="signatory-name">${escapeHtml(data.signatureName)}</div>
+          <div class="org-unit">${escapeHtml(data.signatureTitle)}</div>
+          ${data.draftedByInitials ? `<div class="drafted-by">rhc/${escapeHtml(data.draftedByInitials)}</div>` : ''}
         </div>
 
         <!-- Footer -->

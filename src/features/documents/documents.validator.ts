@@ -8,8 +8,8 @@ export const documentTypeEnum = z.enum([
   'order',
   'correspondence',
   'upload',
-  'memo',    // ✅ added
-  'letter',  // ✅ added
+  'memo',
+  'letter',
 ]);
 
 export const documentStatusEnum = z.enum([
@@ -229,16 +229,15 @@ export const sendToUserSchema = z.object({
 //  NEW: Memo & Letter composition schemas
 // ════════════════════════════════════════════════════════════════════════
 
-// Base fields common to both memo and letter
 const baseComposeSchema = z.object({
   title: z.string().min(1, 'Title is required').max(255).trim(),
   to: z.string().min(1, 'Recipient is required').max(255).trim(),
-  date: z.string().datetime().optional(), // ISO date, defaults to now
+  date: z.string().datetime().optional(),
   body: z.string().min(1, 'Body content is required'),
-  from: z.string().optional(), // sender name; defaults to current user's full name
+  from: z.string().optional(),
   signatureTitle: z.string().optional(),
   department_id: z.string().uuid().optional(),
-  reference_no: z.string().max(100).trim().optional(), // optional user-provided ref
+  reference_no: z.string().max(100).trim().optional(),
 });
 
 export const composeMemoSchema = z.object({
@@ -252,7 +251,26 @@ export const composeLetterSchema = z.object({
   }),
 });
 
-// ── Inferred types (including new ones) ────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════
+//  NEW: Update Mark (instructions & bring_up_date)
+// ════════════════════════════════════════════════════════════════════════
+
+export const updateMarkSchema = z.object({
+  params: z.object({
+    markId: z.string().uuid('Mark ID must be a valid UUID'),
+  }),
+  body: z
+    .object({
+      instructions: z.string().max(2000).trim().optional(),
+      bring_up_date: z.string().nullable().optional(), // ISO date or null
+    })
+    .strict()
+    .refine((b) => b.instructions !== undefined || b.bring_up_date !== undefined, {
+      message: 'At least one field (instructions or bring_up_date) must be provided',
+    }),
+});
+
+// ── Inferred types ─────────────────────────────────────────────────────────
 
 export type CreateComposedDocumentInput = z.infer<
   typeof createComposedDocumentSchema
@@ -278,6 +296,7 @@ export type RespondToDocumentInput = z.infer<
 
 export type SendToUserInput = z.infer<typeof sendToUserSchema>['body'];
 
-// NEW types for memo and letter
 export type ComposeMemoInput = z.infer<typeof composeMemoSchema>['body'];
 export type ComposeLetterInput = z.infer<typeof composeLetterSchema>['body'];
+
+export type UpdateMarkInput = z.infer<typeof updateMarkSchema>['body'];

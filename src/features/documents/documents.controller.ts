@@ -17,8 +17,9 @@ import {
   returnDocumentSchema,
   respondToDocumentSchema,
   sendToUserSchema,
-  composeMemoSchema,     // ✅ imported
-  composeLetterSchema,   // ✅ imported
+  composeMemoSchema,
+  composeLetterSchema,
+  updateMarkSchema,   // ✅ new import
 } from './documents.validator';
 
 export const documentController = {
@@ -32,42 +33,34 @@ export const documentController = {
     return sendSuccess(res, doc, 'Document created successfully', 201);
   }),
 
-  // src/features/documents/documents.controller.ts
+  createUpload: asyncHandler(async (req: Request, res: Response) => {
+    const file = req.file;
+    if (!file) throw new AppError(400, 'A file is required for this document type');
+    const result = createUploadDocumentSchema.safeParse({ body: req.body });
+    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
+    const io = req.app.get('io');
+    const doc = await DocumentService.createUpload(
+      result.data.body,
+      file,
+      req.user!.id,
+      req.user!.role,
+      io
+    );
+    return sendSuccess(res, doc, 'Document uploaded successfully', 201);
+  }),
 
-createUpload: asyncHandler(async (req: Request, res: Response) => {
-  const file = req.file;
-  if (!file) throw new AppError(400, 'A file is required for this document type');
-  const result = createUploadDocumentSchema.safeParse({ body: req.body });
-  if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
-  
-  const io = req.app.get('io'); // 👈 get io instance
-  
-  const doc = await DocumentService.createUpload(
-    result.data.body,
-    file,
-    req.user!.id,
-    req.user!.role,
-    io // 👈 pass it
-  );
-  return sendSuccess(res, doc, 'Document uploaded successfully', 201);
-}),
-
-  // ── Compose Memo & Letter (new) ──────────────────────────────────────────────
+  // ── Compose Memo & Letter ──────────────────────────────────────────────────
 
   composeMemo: asyncHandler(async (req: Request, res: Response) => {
     const result = composeMemoSchema.safeParse({ body: req.body });
-    if (!result.success) {
-      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid memo data');
-    }
+    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid memo data');
     const doc = await DocumentService.generateMemo(result.data.body, req.user!.id);
     return sendSuccess(res, doc, 'Memo generated successfully', 201);
   }),
 
   composeLetter: asyncHandler(async (req: Request, res: Response) => {
     const result = composeLetterSchema.safeParse({ body: req.body });
-    if (!result.success) {
-      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid letter data');
-    }
+    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid letter data');
     const doc = await DocumentService.generateLetter(result.data.body, req.user!.id);
     return sendSuccess(res, doc, 'Letter generated successfully', 201);
   }),
@@ -76,13 +69,9 @@ createUpload: asyncHandler(async (req: Request, res: Response) => {
 
   sendToUser: asyncHandler(async (req: Request, res: Response) => {
     const paramsResult = documentIdSchema.safeParse({ params: req.params });
-    if (!paramsResult.success) {
-      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
-    }
+    if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
     const bodyResult = sendToUserSchema.safeParse({ body: req.body });
-    if (!bodyResult.success) {
-      throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid request');
-    }
+    if (!bodyResult.success) throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid request');
     const doc = await DocumentService.sendToUser(
       paramsResult.data.params.id,
       bodyResult.data.body.recipient_id,
@@ -162,10 +151,12 @@ createUpload: asyncHandler(async (req: Request, res: Response) => {
     if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
     const bodyResult = finalizeDraftSchema.safeParse({ body: req.body });
     if (!bodyResult.success) throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+    const io = req.app.get('io');
     const doc = await DocumentService.finalizeDraft(
       paramsResult.data.params.id,
       bodyResult.data.body,
-      req.user!.id
+      req.user!.id,
+      io
     );
     return sendSuccess(res, doc, 'Draft finalized successfully');
   }),
@@ -199,7 +190,6 @@ createUpload: asyncHandler(async (req: Request, res: Response) => {
     if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
     const bodyResult = respondToDocumentSchema.safeParse({ body: req.body });
     if (!bodyResult.success) throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid response');
-
     const response = await DocumentService.addResponse(
       paramsResult.data.params.id,
       bodyResult.data.body,
@@ -283,11 +273,27 @@ createUpload: asyncHandler(async (req: Request, res: Response) => {
   sign: asyncHandler(async (req: Request, res: Response) => {
     const paramsResult = documentIdSchema.safeParse({ params: req.params });
     if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
-
     const otp = req.body?.otp as string | undefined;
     if (!otp) throw new AppError(400, 'OTP is required');
-
     const doc = await DocumentService.sign(paramsResult.data.params.id, req.user!.id, otp);
     return sendSuccess(res, doc, 'Document signed successfully');
+  }),
+
+  // ── NEW: Update Mark ─────────────────────────────────────────────────────────
+
+  updateMark: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = updateMarkSchema.shape.params.safeParse(req.params);
+    if (!paramsResult.success) {
+      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid mark ID');
+    }
+    const bodyResult = updateMarkSchema.shape.body.safeParse(req.body);
+    if (!bodyResult.success) {
+      throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+    }
+    const updatedMark = await DocumentService.updateMark(
+      paramsResult.data.markId,
+      bodyResult.data
+    );
+    return sendSuccess(res, updatedMark, 'Mark updated successfully');
   }),
 };

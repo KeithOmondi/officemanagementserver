@@ -51,7 +51,12 @@ export const ticketController = {
     if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
     const bodyResult = updateTicketSchema.safeParse({ body: req.body });
     if (!bodyResult.success) throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
-    const ticket = await TicketService.update(paramsResult.data.params.id, bodyResult.data.body);
+    // Pass the authenticated user's ID for scope validation
+    const ticket = await TicketService.update(
+      paramsResult.data.params.id,
+      bodyResult.data.body,
+      req.user!.id
+    );
     return sendSuccess(res, ticket, 'Ticket updated successfully');
   }),
 

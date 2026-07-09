@@ -24,9 +24,6 @@ import {
     createServiceWeekSchema,
     createOtherPaymentSchema,
     updateOtherPaymentDSASchema,
-    createTicketSchema,
-    updateTicketSchema,
-    ticketFiltersSchema,
 } from './helpdesk.validator';
 
 export const helpDeskController = {
@@ -42,63 +39,6 @@ export const helpDeskController = {
         const limit = req.query.limit ? parseInt(req.query.limit as string) : 50;
         const logs = await HelpDeskService.getAuditLog(limit);
         return sendSuccess(res, logs, 'Audit log retrieved');
-    }),
-
-    // ─── Tickets ──────────────────────────────────────────────────────────────
-
-    getAllTickets: asyncHandler(async (req: Request, res: Response) => {
-        const result = ticketFiltersSchema.safeParse({ query: req.query });
-        if (!result.success) {
-            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid filters');
-        }
-        const tickets = await HelpDeskService.findAllTickets(result.data.query);
-        return sendSuccess(res, tickets, 'Tickets retrieved');
-    }),
-
-    getTicketById: asyncHandler(async (req: Request, res: Response) => {
-        const result = idSchema.safeParse({ params: req.params });
-        if (!result.success) {
-            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
-        }
-        const ticket = await HelpDeskService.findTicketById(result.data.params.id);
-        if (!ticket) {
-            throw new AppError(404, 'Ticket not found');
-        }
-        return sendSuccess(res, ticket, 'Ticket retrieved');
-    }),
-
-    createTicket: asyncHandler(async (req: Request, res: Response) => {
-        const result = createTicketSchema.safeParse({ body: req.body });
-        if (!result.success) {
-            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
-        }
-        const ticket = await HelpDeskService.createTicket(result.data.body, req.user!.id);
-        return sendSuccess(res, ticket, 'Ticket created', 201);
-    }),
-
-    updateTicket: asyncHandler(async (req: Request, res: Response) => {
-        const paramsResult = idSchema.safeParse({ params: req.params });
-        if (!paramsResult.success) {
-            throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
-        }
-        const bodyResult = updateTicketSchema.safeParse({ body: req.body });
-        if (!bodyResult.success) {
-            throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
-        }
-        const ticket = await HelpDeskService.updateTicket(
-            paramsResult.data.params.id,
-            bodyResult.data.body
-        );
-        return sendSuccess(res, ticket, 'Ticket updated');
-    }),
-
-    deleteTicket: asyncHandler(async (req: Request, res: Response) => {
-        const result = idSchema.safeParse({ params: req.params });
-        if (!result.success) {
-            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
-        }
-        await HelpDeskService.deleteTicket(result.data.params.id);
-        return sendSuccess(res, null, 'Ticket deleted');
     }),
 
     // ─── Judge Utilities (one judge → many utility items) ───────────────────

@@ -6,14 +6,14 @@ export type DocumentType =
   | 'order'
   | 'correspondence'
   | 'upload'
-  | 'memo'      // ✅ added
-  | 'letter';   // ✅ added
+  | 'memo'
+  | 'letter';
 
 export type DocumentStatus =
   | 'draft'
   | 'uploaded'
   | 'pending_review'
-  | 'marked'          // Marked to department
+  | 'marked'
   | 'in_progress'
   | 'completed'
   | 'filed';
@@ -25,7 +25,7 @@ export type RoutePriority = 'low' | 'normal' | 'urgent';
 
 export type RefType = 'for_signature' | 'for_attention' | 'for_information' | 'direction' | 'other';
 
-// ── Document Mark (to Department) ──────────────────────────────────────────
+// ── Document Mark ──────────────────────────────────────────────────────────
 
 export interface DocumentMark {
   id: string;
@@ -37,6 +37,7 @@ export interface DocumentMark {
   assigned_to: string | null;
   assigned_to_name: string | null;
   instructions: string | null;
+  bring_up_date: string | null;      // ✅ NEW: ISO date string (YYYY-MM-DD)
   priority: RoutePriority;
   marked_at: Date;
   acknowledged_at: Date | null;
@@ -57,7 +58,7 @@ export interface DocumentAnnotation {
   created_at: Date;
 }
 
-// ── Document Response (threaded reply, numbered per document) ─────────────
+// ── Document Response ─────────────────────────────────────────────────────
 
 export interface DocumentResponse {
   id: string;
@@ -74,7 +75,7 @@ export interface DocumentResponse {
   created_at: Date;
 }
 
-// ── Document ────────────────────────────────────────────────────────────────
+// ── Document ──────────────────────────────────────────────────────────────
 
 export interface Document {
   id: string;

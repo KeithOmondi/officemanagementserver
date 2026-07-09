@@ -11,13 +11,6 @@ router.use(protect);
 router.get('/stats', helpDeskController.getStats);
 router.get('/audit', helpDeskController.getAuditLog);
 
-// ─── Tickets ──────────────────────────────────────────────────────────────────
-router.get('/tickets', helpDeskController.getAllTickets);
-router.get('/tickets/:id', helpDeskController.getTicketById);
-router.post('/tickets', requireRole('dept_head', 'super_admin'), helpDeskController.createTicket);
-router.put('/tickets/:id', requireRole('dept_head', 'super_admin'), helpDeskController.updateTicket);
-router.delete('/tickets/:id', requireRole('super_admin', 'dept_head'), helpDeskController.deleteTicket);
-
 // ─── Judge Utilities ─────────────────────────────────────────────────────────
 router.get('/utilities', helpDeskController.getAllUtilities);
 router.get('/utilities/:id', helpDeskController.getUtilityById);

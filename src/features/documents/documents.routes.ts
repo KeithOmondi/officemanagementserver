@@ -1,4 +1,5 @@
 // src/features/documents/documents.routes.ts
+
 import { Router } from 'express';
 import { documentController } from './documents.controller';
 import { upload } from '../../middleware/upload';
@@ -19,7 +20,7 @@ router.get('/:id/mark-history', documentController.getMarkHistory);
 router.post('/compose', requireRole('staff'), documentController.createComposed);
 router.post('/upload', requireRole('staff', 'dept_head'), upload.single('file'), documentController.createUpload);
 
-// ── Compose Memo / Letter (new) ──────────────────────────────────────────────
+// ── Compose Memo / Letter ──────────────────────────────────────────────────────
 router.post('/compose-memo', requireRole('staff'), documentController.composeMemo);
 router.post('/compose-letter', requireRole('staff'), documentController.composeLetter);
 
@@ -52,5 +53,12 @@ router.get('/:id/flow', documentController.getFlowHistory);
 // ── Response thread ───────────────────────────────────────────────────────────
 router.post('/:id/respond', upload.single('file'), documentController.respond);
 router.get('/:id/responses', documentController.getResponses);
+
+// ── NEW: Update Mark (instructions & bring_up_date) ──────────────────────────
+router.patch(
+  '/marks/:markId',
+  requireRole('super_admin'), // Only super admins can edit the note
+  documentController.updateMark
+);
 
 export default router;

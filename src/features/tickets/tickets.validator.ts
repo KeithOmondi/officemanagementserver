@@ -11,6 +11,20 @@ export const travelClassEnum = z.enum(['economy', 'premium_economy', 'business',
 
 export const flightTimePreferenceEnum = z.enum(['morning', 'afternoon', 'evening', 'night', 'any']);
 
+// ── Shared date-only validator ──────────────────────────────────────────────
+//
+// All travel dates in this feature come from plain `<input type="date">`
+// fields on the frontend, which send "YYYY-MM-DD" (e.g. "2026-07-09") — not
+// a full ISO-8601 timestamp. Zod's `.datetime()` requires a time component
+// and a trailing "Z", so it was rejecting every valid date the UI could ever
+// send. This just checks the shape is a real calendar date.
+const dateOnlyString = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format')
+  .refine((value) => !Number.isNaN(new Date(value).getTime()), {
+    message: 'Invalid date',
+  });
+
 // ── Create Ticket ──────────────────────────────────────────────────────────────
 
 export const createTicketSchema = z.object({
@@ -18,23 +32,27 @@ export const createTicketSchema = z.object({
     title: z.string().min(1, 'Title is required').max(255).trim(),
     description: z.string().max(1000).trim().optional(),
     department_id: z.string().uuid().optional(),
-    
+
     // Travel Details
-    date_of_travel: z.string().datetime({ message: 'Invalid date format' }),
-    return_date: z.string().datetime({ message: 'Invalid date format' }).optional(),
+    date_of_travel: dateOnlyString,
+    return_date: dateOnlyString.optional(),
     departure_from: z.string().min(1, 'Departure location is required').max(255).trim(),
     destination: z.string().min(1, 'Destination is required').max(255).trim(),
     preferred_flight_time: flightTimePreferenceEnum.default('any'),
     remarks: z.string().max(1000).trim().optional(),
-    
+
+    // Judge & Case Details
+    judge_name: z.string().max(255).trim().optional().nullable(),
+    pj_number: z.string().max(100).trim().optional().nullable(),
+
     // Additional Travel Info
     travel_class: travelClassEnum.default('economy'),
     number_of_passengers: z.number().int().min(1).max(50).default(1),
     special_requests: z.string().max(1000).trim().optional(),
-    
+
     priority: ticketPriorityEnum.default('normal'),
     assigned_to: z.string().uuid().optional(),
-    
+
     is_draft: z.boolean().default(false),
   }).strict().refine((data) => {
     // Return date must be after travel date if provided
@@ -57,18 +75,22 @@ export const updateTicketSchema = z.object({
     title: z.string().min(1).max(255).trim().optional(),
     description: z.string().max(1000).trim().optional(),
     department_id: z.string().uuid().optional().nullable(),
-    
-    date_of_travel: z.string().datetime().optional(),
-    return_date: z.string().datetime().optional().nullable(),
+
+    date_of_travel: dateOnlyString.optional(),
+    return_date: dateOnlyString.optional().nullable(),
     departure_from: z.string().min(1).max(255).trim().optional(),
     destination: z.string().min(1).max(255).trim().optional(),
     preferred_flight_time: flightTimePreferenceEnum.optional(),
     remarks: z.string().max(1000).trim().optional().nullable(),
-    
+
+    // Judge & Case Details
+    judge_name: z.string().max(255).trim().optional().nullable(),
+    pj_number: z.string().max(100).trim().optional().nullable(),
+
     travel_class: travelClassEnum.optional(),
     number_of_passengers: z.number().int().min(1).max(50).optional(),
     special_requests: z.string().max(1000).trim().optional().nullable(),
-    
+
     priority: ticketPriorityEnum.optional(),
     assigned_to: z.string().uuid().optional().nullable(),
     status: ticketStatusEnum.optional(),
@@ -143,10 +165,12 @@ export const ticketFiltersSchema = z.object({
     department_id: z.string().uuid().optional(),
     assigned_to: z.string().uuid().optional(),
     created_by: z.string().uuid().optional(),
-    date_from: z.string().datetime().optional(),
-    date_to: z.string().datetime().optional(),
+    date_from: dateOnlyString.optional(),
+    date_to: dateOnlyString.optional(),
     departure_from: z.string().trim().max(100).optional(),
     destination: z.string().trim().max(100).optional(),
+    judge_name: z.string().trim().max(100).optional(),
+    pj_number: z.string().trim().max(100).optional(),
     for_my_action: z.enum(['true', 'false']).transform(v => v === 'true').optional(),
     page: z.string().regex(/^\d+$/).transform(Number).pipe(z.number().int().min(1)).optional(),
     limit: z.string().regex(/^\d+$/).transform(Number).pipe(z.number().int().min(1).max(100)).optional(),

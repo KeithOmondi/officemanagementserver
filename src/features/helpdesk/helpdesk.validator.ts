@@ -6,7 +6,6 @@ const statusEnum = z.enum(['Pending', 'Signed', 'Rejected', 'In Progress', 'Comp
 const utilityTypeEnum = z.enum(['Electricity', 'Water', 'Internet', 'Fuel', 'Other']);
 const requestModeEnum = z.enum(['Letter', 'Email', 'Verbal', 'Other']);
 const visaTypeEnum = z.enum(['Official', 'Conference', 'Personal', 'Other']);
-const ticketTypeEnum = z.enum(['Bench', 'Part-Heard', 'General']);
 
 const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
@@ -18,52 +17,6 @@ const dsaDetailSchema = z.object({
     days: z.number().int().min(1),
     notes: z.string().optional(),
     designation: z.string().optional(),
-});
-
-// ─── Tickets ──────────────────────────────────────────────────────────────────
-
-export const createTicketSchema = z.object({
-    body: z.object({
-        ticket_type: ticketTypeEnum,
-        reference_id: z.string().uuid().optional(),
-        date_of_travel: dateStringSchema.optional(),
-        return_date: dateStringSchema.optional(),
-        departure_from: z.string().max(200).optional(),
-        destination: z.string().max(200).optional(),
-        preferred_flight_time: z.string().max(100).optional(),
-        passenger_name: z.string().min(1).max(100),
-        passenger_pj_number: z.string().max(50).optional(),
-        flight_details: z.string().optional(),
-        amount: z.number().min(0).optional(),
-        remarks: z.string().optional(),
-    }).strict(),
-});
-
-export const updateTicketSchema = z.object({
-    body: z.object({
-        date_of_travel: dateStringSchema.optional(),
-        return_date: dateStringSchema.optional(),
-        departure_from: z.string().max(200).optional(),
-        destination: z.string().max(200).optional(),
-        preferred_flight_time: z.string().max(100).optional(),
-        passenger_name: z.string().min(1).max(100).optional(),
-        passenger_pj_number: z.string().max(50).optional(),
-        flight_details: z.string().optional(),
-        amount: z.number().min(0).optional(),
-        status: statusEnum.optional(),
-        remarks: z.string().optional(),
-    }).strict(),
-});
-
-export const ticketFiltersSchema = z.object({
-    query: z.object({
-        search: z.string().optional(),
-        status: statusEnum.optional(),
-        ticket_type: ticketTypeEnum.optional(),
-        reference_id: z.string().uuid().optional(),
-        limit: z.string().regex(/^\d+$/).optional().transform(Number),
-        offset: z.string().regex(/^\d+$/).optional().transform(Number),
-    }).strict(),
 });
 
 // ─── Judge Utilities ──────────────────────────────────────────────────────────
@@ -344,6 +297,3 @@ export type CreateProtocolEventInput = z.infer<typeof createProtocolEventSchema>
 export type HelpDeskFilters = z.infer<typeof helpDeskFiltersSchema>['query'];
 export type UpdateCircuitDSADetailsInput = z.infer<typeof updateCircuitDSASchema>['body'];
 export type UpdateOtherPaymentDSADetailsInput = z.infer<typeof updateOtherPaymentDSASchema>['body'];
-export type CreateTicketInput = z.infer<typeof createTicketSchema>['body'];
-export type UpdateTicketInput = z.infer<typeof updateTicketSchema>['body'];
-export type TicketFilters = z.infer<typeof ticketFiltersSchema>['query'];

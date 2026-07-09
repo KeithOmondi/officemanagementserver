@@ -81,7 +81,7 @@ app.use('/api/v1/notices', noticesRoutes);
 app.use('/api/v1/notifications', notificationsRoutes);
 app.use('/api/v1/links', externalLinksRoutes);
 app.use('/api/v1/templates', templatesRoutes);
-app.use('/api/v1/uploads', helpdeskDocumentsRouter);
+app.use('/api/v1/helpdesk/documents', helpdeskDocumentsRouter);
 app.use('/api/v1/tickets', ticketsRoutes);
 app.use('/api/v1/judges', judgesRoutes);
 

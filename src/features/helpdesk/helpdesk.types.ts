@@ -3,78 +3,6 @@ export type RequestMode = 'Letter' | 'Email' | 'Verbal' | 'Other';
 export type VisaType = 'Official' | 'Conference' | 'Personal' | 'Other';
 export type Status = 'Pending' | 'Signed' | 'Rejected' | 'In Progress' | 'Completed' | 'Active' | 'Resolved' | 'Cancelled';
 
-// ─── Ticket Details (Shared across Tickets, Benches, Part-Heards) ──────────
-
-export interface TicketDetails {
-    date_of_travel: string | null;
-    return_date: string | null;
-    departure_from: string | null;
-    destination: string | null;
-    preferred_flight_time: string | null;
-    remarks: string | null;
-}
-
-// ─── Tickets ──────────────────────────────────────────────────────────────────
-
-export interface Ticket {
-    id: string;
-    ticket_number: string;
-    ticket_type: 'Bench' | 'Part-Heard' | 'General';
-    reference_id: string | null;
-    date_of_travel: string | null;
-    return_date: string | null;
-    departure_from: string | null;
-    destination: string | null;
-    preferred_flight_time: string | null;
-    passenger_name: string;
-    passenger_pj_number: string | null;
-    flight_details: string | null;
-    amount: number | null;
-    status: Status;
-    remarks: string | null;
-    created_by: string | null;
-    created_at: string;
-    updated_at: string;
-}
-
-export interface CreateTicketInput {
-    ticket_type: 'Bench' | 'Part-Heard' | 'General';
-    reference_id?: string;
-    date_of_travel?: string;
-    return_date?: string;
-    departure_from?: string;
-    destination?: string;
-    preferred_flight_time?: string;
-    passenger_name: string;
-    passenger_pj_number?: string;
-    flight_details?: string;
-    amount?: number;
-    remarks?: string;
-}
-
-export interface UpdateTicketInput {
-    date_of_travel?: string;
-    return_date?: string;
-    departure_from?: string;
-    destination?: string;
-    preferred_flight_time?: string;
-    passenger_name?: string;
-    passenger_pj_number?: string;
-    flight_details?: string;
-    amount?: number;
-    status?: Status;
-    remarks?: string;
-}
-
-export interface TicketFilters {
-    search?: string;
-    status?: Status;
-    ticket_type?: 'Bench' | 'Part-Heard' | 'General';
-    reference_id?: string;
-    limit?: number;
-    offset?: number;
-}
-
 // ─── Judge Utilities ──────────────────────────────────────────────────────────
 
 export type UtilityStatus =
@@ -225,7 +153,6 @@ export interface Circuit {
     total_dsa: number;
     status: Status;
     dsa_details?: DSADetail[];
-    tickets?: Ticket[];
     created_by: string | null;
     created_at: string;
     updated_at: string;
@@ -274,7 +201,6 @@ export interface SpecialBench {
     total_dsa: number;
     status: Status;
     dsa_details?: DSADetail[];
-    tickets?: Ticket[];
     created_by: string | null;
     created_at: string;
     updated_at: string;
@@ -308,7 +234,6 @@ export interface PartHeard {
     total_dsa: number;
     status: Status;
     dsa_details?: DSADetail[];
-    tickets?: Ticket[];
     created_by: string | null;
     created_at: string;
     updated_at: string;

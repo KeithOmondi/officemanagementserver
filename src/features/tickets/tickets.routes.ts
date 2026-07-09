@@ -8,29 +8,29 @@ const router = Router();
 router.use(protect);
 
 // ── Read ──────────────────────────────────────────────────────────────────────
-router.get('/', ticketController.getAll);
-router.get('/:id', ticketController.getById);
+router.get('/', requireRole('super_admin', 'dept_head'), ticketController.getAll);
+router.get('/:id', requireRole('super_admin', 'dept_head'), ticketController.getById);
 
 // ── Create ────────────────────────────────────────────────────────────────────
-router.post('/', requireRole('staff'), ticketController.create);
+router.post('/', requireRole('dept_head'), ticketController.create);
 
 // ── Update ────────────────────────────────────────────────────────────────────
-router.put('/:id', requireRole('staff'), ticketController.update);
+router.put('/:id', requireRole('dept_head'), ticketController.update);
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
 router.post('/:id/submit', ticketController.submitForApproval);
-router.post('/:id/approve', requireRole('super_admin'), ticketController.approve);
+router.post('/:id/approve', requireRole('super_admin',), ticketController.approve);
 router.post('/:id/reject', requireRole('super_admin'), ticketController.reject);
-router.post('/:id/return', requireRole('super_admin'), ticketController.return);
-router.post('/:id/book', requireRole('super_admin'), ticketController.book);
-router.post('/:id/cancel', requireRole('staff'), ticketController.cancel);
-router.post('/:id/complete', requireRole('staff'), ticketController.complete);
+router.post('/:id/return', requireRole('super_admin', 'dept_head'), ticketController.return);
+router.post('/:id/book', requireRole('super_admin', 'dept_head'), ticketController.book);
+router.post('/:id/cancel', requireRole('dept_head'), ticketController.cancel);
+router.post('/:id/complete', requireRole('dept_head'), ticketController.complete);
 
 // ── Comments ──────────────────────────────────────────────────────────────────
-router.post('/:id/comments', ticketController.addComment);
-router.delete('/:id/comments/:commentId', ticketController.deleteComment);
+router.post('/:id/comments', requireRole('super_admin', 'dept_head'), ticketController.addComment);
+router.delete('/:id/comments/:commentId', requireRole('super_admin', 'dept_head'), ticketController.deleteComment);
 
 // ── Delete ────────────────────────────────────────────────────────────────────
-router.delete('/:id', requireRole('super_admin'), ticketController.delete);
+router.delete('/:id', requireRole('super_admin', 'dept_head'), ticketController.delete);
 
 export default router;

@@ -31,6 +31,10 @@ export interface Ticket {
   preferred_flight_time: FlightTimePreference;
   remarks: string | null;
   
+  // Judge & Case Details
+  judge_name: string | null;
+  pj_number: string | null;
+  
   // Additional Travel Info
   travel_class: TravelClass;
   number_of_passengers: number;

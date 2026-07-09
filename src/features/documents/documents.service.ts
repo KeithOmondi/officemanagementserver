@@ -23,6 +23,7 @@ import type {
   RespondToDocumentInput,
   ComposeMemoInput,
   ComposeLetterInput,
+  UpdateMarkInput,
 } from './documents.validator';
 import axios from 'axios';
 import { generateOTP } from '../../utils/SendOTP';
@@ -71,6 +72,7 @@ const MARK_SELECT = `
   m.assigned_to AS mark_assigned_to,
   mu.full_name AS mark_assigned_to_name,
   m.instructions AS mark_instructions,
+  m.bring_up_date AS mark_bring_up_date,   -- ✅ new
   m.priority AS mark_priority,
   m.marked_at AS mark_marked_at,
   m.acknowledged_at AS mark_acknowledged_at,
@@ -90,7 +92,9 @@ const MARK_SELECT_DETAIL = `
   m.marked_by,      mb.full_name  AS marked_by_name,
   m.marked_to_dept, md.name       AS marked_to_dept_name,
   m.assigned_to,    mu.full_name  AS assigned_to_name,
-  m.instructions, m.priority,
+  m.instructions,
+  m.bring_up_date,   -- ✅ new
+  m.priority,
   m.marked_at, m.acknowledged_at, m.completed_at,
   m.is_active
 `;
@@ -147,70 +151,63 @@ export class DocumentService {
 
   // ── Create upload ──────────────────────────────────────────────────────────
 
-  // src/features/documents/documents.service.ts
+  static async createUpload(
+    input: CreateUploadDocumentInput,
+    file: Express.Multer.File,
+    createdBy: string,
+    createdByRole: string,
+    io?: any
+  ): Promise<Document> {
+    console.log('[Upload] Starting document upload...');
 
-// src/features/documents/documents.service.ts
-
-static async createUpload(
-  input: CreateUploadDocumentInput,
-  file: Express.Multer.File,
-  createdBy: string,
-  createdByRole: string,
-  io?: any
-): Promise<Document> {
-  console.log('[Upload] Starting document upload...');
-
-  if (createdByRole === 'dept_head' && input.type !== 'correspondence') {
-    throw new AppError(400, 'Department heads can only upload correspondence documents');
-  }
-
-  const uploaded = await uploadToCloudinary(file, 'registrar/documents');
-  const status = input.is_draft ? 'draft' : 'uploaded';
-
-  try {
-    const { rows } = await pool.query(
-      `INSERT INTO documents
-         (title, type, category, reference_no, ref_type, ref_other_description,
-          file_url, file_public_id, file_size_bytes, mime_type, original_name,
-          assigned_to, department_id, created_by, status, is_draft, priority)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
-       RETURNING id`,
-      [
-        input.title.trim(), input.type, input.category ?? null,
-        input.reference_no?.trim() ?? null,
-        input.ref_type, input.ref_other_description?.trim() ?? null,
-        uploaded.secure_url, uploaded.public_id, file.size, file.mimetype, file.originalname,
-        input.assigned_to ?? null, input.department_id ?? null,
-        createdBy, status, input.is_draft, input.priority,
-      ]
-    );
-
-    await this.logFlow(pool, rows[0].id, input.is_draft ? 'draft_saved' : 'created', createdBy, null);
-
-    console.log(`[Upload] Document saved with ID: ${rows[0].id}, is_draft: ${input.is_draft}`);
-
-    // ── Notify super admins if not a draft ──
-    if (!input.is_draft) {
-      console.log('[Upload] Document is NOT a draft – notifying super admins.');
-      const { rows: userRows } = await pool.query(
-        `SELECT full_name FROM users WHERE id = $1`,
-        [createdBy]
-      );
-      const creatorName = userRows[0]?.full_name || 'Unknown';
-      await this.notifySuperAdmins(rows[0].id, 'uploaded', creatorName, io);
-    } else {
-      console.log('[Upload] Document is a draft – skipping notifications.');
+    if (createdByRole === 'dept_head' && input.type !== 'correspondence') {
+      throw new AppError(400, 'Department heads can only upload correspondence documents');
     }
 
-    return (await this.findById(rows[0].id))!;
-  } catch (err) {
-    console.error('[Upload] Error during upload:', err);
-    await deleteFromCloudinary(uploaded.public_id).catch(console.error);
-    throw err;
+    const uploaded = await uploadToCloudinary(file, 'registrar/documents');
+    const status = input.is_draft ? 'draft' : 'uploaded';
+
+    try {
+      const { rows } = await pool.query(
+        `INSERT INTO documents
+           (title, type, category, reference_no, ref_type, ref_other_description,
+            file_url, file_public_id, file_size_bytes, mime_type, original_name,
+            assigned_to, department_id, created_by, status, is_draft, priority)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+         RETURNING id`,
+        [
+          input.title.trim(), input.type, input.category ?? null,
+          input.reference_no?.trim() ?? null,
+          input.ref_type, input.ref_other_description?.trim() ?? null,
+          uploaded.secure_url, uploaded.public_id, file.size, file.mimetype, file.originalname,
+          input.assigned_to ?? null, input.department_id ?? null,
+          createdBy, status, input.is_draft, input.priority,
+        ]
+      );
+
+      await this.logFlow(pool, rows[0].id, input.is_draft ? 'draft_saved' : 'created', createdBy, null);
+
+      console.log(`[Upload] Document saved with ID: ${rows[0].id}, is_draft: ${input.is_draft}`);
+
+      if (!input.is_draft) {
+        console.log('[Upload] Document is NOT a draft – notifying super admins.');
+        const { rows: userRows } = await pool.query(
+          `SELECT full_name FROM users WHERE id = $1`,
+          [createdBy]
+        );
+        const creatorName = userRows[0]?.full_name || 'Unknown';
+        await this.notifySuperAdmins(rows[0].id, 'uploaded', creatorName, io);
+      } else {
+        console.log('[Upload] Document is a draft – skipping notifications.');
+      }
+
+      return (await this.findById(rows[0].id))!;
+    } catch (err) {
+      console.error('[Upload] Error during upload:', err);
+      await deleteFromCloudinary(uploaded.public_id).catch(console.error);
+      throw err;
+    }
   }
-}
-
-
 
   // ── Find all ─────────────────────────────────────────────────────────────────
 
@@ -319,6 +316,7 @@ static async createUpload(
           assigned_to: row.mark_assigned_to,
           assigned_to_name: row.mark_assigned_to_name,
           instructions: row.mark_instructions,
+          bring_up_date: row.mark_bring_up_date,   // ✅ new
           priority: row.mark_priority,
           marked_at: row.mark_marked_at,
           acknowledged_at: row.mark_acknowledged_at,
@@ -497,14 +495,15 @@ static async createUpload(
 
       await client.query(
         `INSERT INTO document_marks
-           (document_id, marked_by, marked_to_dept, assigned_to, instructions, priority)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
+           (document_id, marked_by, marked_to_dept, assigned_to, instructions, priority, bring_up_date)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [
           documentId, markedBy,
           input.department_id,
           input.assigned_to ?? null,
           input.instructions ?? null,
           input.priority,
+          null, // bring_up_date initially null
         ]
       );
 
@@ -954,58 +953,51 @@ static async createUpload(
 
   // ── Finalize draft ────────────────────────────────────────────────────────────
 
-  // In documents.service.ts
+  static async finalizeDraft(
+    documentId: string,
+    input: { assigned_to?: string; send_to_super_admin?: boolean },
+    actingUser: string,
+    io?: any
+  ): Promise<Document> {
+    const doc = await this.findById(documentId);
+    if (!doc) throw new AppError(404, 'Document not found');
+    if (!doc.is_draft) throw new AppError(409, 'Document is not a draft');
 
-static async finalizeDraft(
-  documentId: string,
-  input: { assigned_to?: string; send_to_super_admin?: boolean },
-  actingUser: string,
-  io?: any // 👈 add optional io
-): Promise<Document> {
-  const doc = await this.findById(documentId);
-  if (!doc) throw new AppError(404, 'Document not found');
-  if (!doc.is_draft) throw new AppError(409, 'Document is not a draft');
+    let targetUserId: string | null = null;
+    if (input.send_to_super_admin) {
+      const { rows } = await pool.query(
+        `SELECT id FROM users WHERE role = 'super_admin' AND is_active = true LIMIT 1`
+      );
+      if (!rows.length) throw new AppError(400, 'No active super admin found');
+      targetUserId = rows[0].id;
+    } else if (input.assigned_to) {
+      targetUserId = input.assigned_to;
+    }
 
-  let targetUserId: string | null = null;
-  if (input.send_to_super_admin) {
-    const { rows } = await pool.query(
-      `SELECT id FROM users WHERE role = 'super_admin' AND is_active = true LIMIT 1`
+    await pool.query(
+      `UPDATE documents
+       SET is_draft = false, assigned_to = $1, status = 'pending_review', updated_at = NOW()
+       WHERE id = $2`,
+      [targetUserId, documentId]
     );
-    if (!rows.length) throw new AppError(400, 'No active super admin found');
-    targetUserId = rows[0].id;
-  } else if (input.assigned_to) {
-    targetUserId = input.assigned_to;
-  }
 
-  // ── Update document ────────────────────────────────────────────
-  await pool.query(
-    `UPDATE documents
-     SET is_draft = false, assigned_to = $1, status = 'pending_review', updated_at = NOW()
-     WHERE id = $2`,
-    [targetUserId, documentId]
-  );
-
-  // ── Log flow ──────────────────────────────────────────────────
-  await this.logFlow(
-    pool, documentId,
-    input.send_to_super_admin ? 'sent_to_admin' : 'assigned',
-    actingUser, targetUserId
-  );
-
-  // ── 🆕 Notify super admins if sent to them ───────────────────
-  if (input.send_to_super_admin) {
-    // Fetch creator name for the notification
-    const { rows: userRows } = await pool.query(
-      `SELECT full_name FROM users WHERE id = $1`,
-      [actingUser]
+    await this.logFlow(
+      pool, documentId,
+      input.send_to_super_admin ? 'sent_to_admin' : 'assigned',
+      actingUser, targetUserId
     );
-    const creatorName = userRows[0]?.full_name || 'Unknown';
-    // Use the same helper – it will find all active super admins
-    await this.notifySuperAdmins(documentId, 'finalized', creatorName, io);
-  }
 
-  return (await this.findById(documentId))!;
-}
+    if (input.send_to_super_admin) {
+      const { rows: userRows } = await pool.query(
+        `SELECT full_name FROM users WHERE id = $1`,
+        [actingUser]
+      );
+      const creatorName = userRows[0]?.full_name || 'Unknown';
+      await this.notifySuperAdmins(documentId, 'finalized', creatorName, io);
+    }
+
+    return (await this.findById(documentId))!;
+  }
 
   // ── Return document ──────────────────────────────────────────────────────────
 
@@ -1102,37 +1094,35 @@ static async finalizeDraft(
 
   // ── Create Notification (helper) ────────────────────────────────────────────
 
- static async createNotification(
-  userId: string,
-  title: string,
-  message: string,
-  type: string,
-  documentId?: string
-): Promise<void> {
-  console.log(`[DocHelper] Creating notification for user ${userId}, type: ${type}`);
-  try {
-    await NotificationsService.createNotification({
-      user_id: userId,
-      type_name: type,
-      title,
-      message,
-      icon: type === 'memo' ? 'FileText' : type === 'letter' ? 'Mail' : 'Bell',
-      color: type === 'memo' || type === 'letter' ? '#1a3d1c' : '#6b7280',
-      link: documentId ? `/documents/${documentId}` : undefined,
-      priority: type === 'memo' || type === 'letter' ? 'high' : 'normal',
-      metadata: {
-        document_id: documentId,
-        type: type,
-      },
-      send_email: true,
-    });
-    console.log(`[DocHelper] Notification created successfully.`);
-  } catch (error) {
-    console.error(`[DocHelper] Failed to create notification for user ${userId}:`, error);
-    // Don’t re-throw – notification failure should not break the main flow
+  static async createNotification(
+    userId: string,
+    title: string,
+    message: string,
+    type: string,
+    documentId?: string
+  ): Promise<void> {
+    console.log(`[DocHelper] Creating notification for user ${userId}, type: ${type}`);
+    try {
+      await NotificationsService.createNotification({
+        user_id: userId,
+        type_name: type,
+        title,
+        message,
+        icon: type === 'memo' ? 'FileText' : type === 'letter' ? 'Mail' : 'Bell',
+        color: type === 'memo' || type === 'letter' ? '#1a3d1c' : '#6b7280',
+        link: documentId ? `/documents/${documentId}` : undefined,
+        priority: type === 'memo' || type === 'letter' ? 'high' : 'normal',
+        metadata: {
+          document_id: documentId,
+          type: type,
+        },
+        send_email: true,
+      });
+      console.log(`[DocHelper] Notification created successfully.`);
+    } catch (error) {
+      console.error(`[DocHelper] Failed to create notification for user ${userId}:`, error);
+    }
   }
-}
-
 
   // ════════════════════════════════════════════════════════════════════════════
   //  NEW: Memo & Letter generation with PDF
@@ -1145,8 +1135,6 @@ static async finalizeDraft(
     );
     return rows[0]?.full_name || 'Unknown User';
   }
-
-  // ── Save Document Helper ──────────────────────────────────────────────────
 
   private static async saveDocument(
     title: string,
@@ -1186,8 +1174,6 @@ static async finalizeDraft(
     return (await this.findById(rows[0].id))!;
   }
 
-  // ── Generate Memo ─────────────────────────────────────────────────────────
-
   static async generateMemo(input: ComposeMemoInput, createdBy: string): Promise<Document> {
     const sender = input.from || (await this.getUserDisplayName(createdBy));
     const ref = input.reference_no || `RHC/MEMO/${new Date().getFullYear()}/${Date.now().toString().slice(-6)}`;
@@ -1218,8 +1204,6 @@ static async finalizeDraft(
 
     return await this.saveDocument(input.title, 'memo', ref, input.body, pdfBuffer, createdBy, input.department_id);
   }
-
-  // ── Generate Letter ───────────────────────────────────────────────────────
 
   static async generateLetter(input: ComposeLetterInput, createdBy: string): Promise<Document> {
     const sender = input.from || (await this.getUserDisplayName(createdBy));
@@ -1256,56 +1240,93 @@ static async finalizeDraft(
 
   // ── Notify all active super admins ──────────────────────────────────────────
 
-private static async notifySuperAdmins(
-  documentId: string,
-  action: 'created' | 'uploaded' | 'finalized',
-  creatorName?: string,
-  io?: any
-): Promise<void> {
-  console.log(`[Notify] Looking for active super admins...`);
-  const { rows: admins } = await pool.query(
-    `SELECT id FROM users WHERE role = 'super_admin' AND is_active = true`
-  );
+  private static async notifySuperAdmins(
+    documentId: string,
+    action: 'created' | 'uploaded' | 'finalized',
+    creatorName?: string,
+    io?: any
+  ): Promise<void> {
+    console.log(`[Notify] Looking for active super admins...`);
+    const { rows: admins } = await pool.query(
+      `SELECT id FROM users WHERE role = 'super_admin' AND is_active = true`
+    );
 
-  if (!admins.length) {
-    console.warn('[Notify] No active super admins found – skipping notifications.');
-    return;
-  }
+    if (!admins.length) {
+      console.warn('[Notify] No active super admins found – skipping notifications.');
+      return;
+    }
 
-  console.log(`[Notify] Found ${admins.length} active super admin(s).`);
+    console.log(`[Notify] Found ${admins.length} active super admin(s).`);
 
-  const doc = await this.findById(documentId);
-  if (!doc) {
-    console.error(`[Notify] Document ${documentId} not found – aborting.`);
-    return;
-  }
+    const doc = await this.findById(documentId);
+    if (!doc) {
+      console.error(`[Notify] Document ${documentId} not found – aborting.`);
+      return;
+    }
 
-  const title = `New ${doc.type} document ${action}`;
-  const message = `A new ${doc.type} "${doc.title}" has been ${action} by ${creatorName || 'a user'}.`;
+    const title = `New ${doc.type} document ${action}`;
+    const message = `A new ${doc.type} "${doc.title}" has been ${action} by ${creatorName || 'a user'}.`;
 
-  for (const admin of admins) {
-    try {
-      console.log(`[Notify] Creating notification for admin ${admin.id}...`);
-      await NotificationsService.createNotification(
-        {
-          user_id: admin.id,
-          type_name: doc.type,
-          title,
-          message,
-          icon: doc.type === 'memo' ? 'FileText' : doc.type === 'letter' ? 'Mail' : 'Bell',
-          color: '#1a3d1c',
-          link: `/documents/${documentId}`,
-          priority: 'high',
-          metadata: { document_id: documentId, type: doc.type },
-          send_email: true,
-        },
-        io
-      );
-      console.log(`[Notify] Notification created for admin ${admin.id}.`);
-    } catch (error) {
-      console.error(`[Notify] Failed to create notification for admin ${admin.id}:`, error);
+    for (const admin of admins) {
+      try {
+        console.log(`[Notify] Creating notification for admin ${admin.id}...`);
+        await NotificationsService.createNotification(
+          {
+            user_id: admin.id,
+            type_name: doc.type,
+            title,
+            message,
+            icon: doc.type === 'memo' ? 'FileText' : doc.type === 'letter' ? 'Mail' : 'Bell',
+            color: '#1a3d1c',
+            link: `/documents/${documentId}`,
+            priority: 'high',
+            metadata: { document_id: documentId, type: doc.type },
+            send_email: true,
+          },
+          io
+        );
+        console.log(`[Notify] Notification created for admin ${admin.id}.`);
+      } catch (error) {
+        console.error(`[Notify] Failed to create notification for admin ${admin.id}:`, error);
+      }
     }
   }
-}
 
+  // ════════════════════════════════════════════════════════════════════════════
+  //  NEW: Update Mark (instructions & bring_up_date)
+  // ════════════════════════════════════════════════════════════════════════════
+
+  static async updateMark(markId: string, input: UpdateMarkInput): Promise<DocumentMark> {
+    const updates: string[] = [];
+    const values: unknown[] = [];
+    let p = 1;
+
+    if (input.instructions !== undefined) {
+      updates.push(`instructions = $${p++}`);
+      values.push(input.instructions.trim() || null);
+    }
+    if (input.bring_up_date !== undefined) {
+      updates.push(`bring_up_date = $${p++}`);
+      values.push(input.bring_up_date);
+    }
+
+    if (!updates.length) {
+      throw new AppError(400, 'No fields to update');
+    }
+
+    values.push(markId);
+
+    await pool.query(
+      `UPDATE document_marks SET ${updates.join(', ')} WHERE id = $${p}`,
+      values
+    );
+
+    // Fetch updated mark
+    const { rows } = await pool.query(
+      `SELECT ${MARK_SELECT_DETAIL} ${MARK_JOIN_DETAIL} WHERE m.id = $1`,
+      [markId]
+    );
+    if (!rows.length) throw new AppError(404, 'Mark not found');
+    return rows[0];
+  }
 }

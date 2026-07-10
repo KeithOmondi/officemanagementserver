@@ -1,92 +1,92 @@
 [
   {
-    "timestamp": 1783639816861,
+    "timestamp": 1783672492320,
     "label": "Initial (before imports)",
-    "heapUsed": 190351064,
-    "heapTotal": 261455872,
-    "rss": 189317120,
-    "external": 4457711,
-    "arrayBuffers": 577365
+    "heapUsed": 168458608,
+    "heapTotal": 284635136,
+    "rss": 369868800,
+    "external": 4558586,
+    "arrayBuffers": 627040
   },
   {
-    "timestamp": 1783639816863,
+    "timestamp": 1783672492322,
     "label": "Before server start",
-    "heapUsed": 190402168,
-    "heapTotal": 261455872,
-    "rss": 189419520,
-    "external": 4457711,
-    "arrayBuffers": 577365
+    "heapUsed": 168509688,
+    "heapTotal": 284635136,
+    "rss": 369958912,
+    "external": 4558586,
+    "arrayBuffers": 627040
   },
   {
-    "timestamp": 1783639816939,
+    "timestamp": 1783672492429,
     "label": "After initial GC",
-    "heapUsed": 157533200,
+    "heapUsed": 157652984,
     "heapTotal": 299200512,
-    "rss": 249511936,
-    "external": 4457711,
+    "rss": 370245632,
+    "external": 4507386,
     "arrayBuffers": 517973
   },
   {
-    "timestamp": 1783639816939,
+    "timestamp": 1783672492431,
     "label": "Before DB connection",
-    "heapUsed": 157541968,
+    "heapUsed": 157661752,
     "heapTotal": 299200512,
-    "rss": 249511936,
-    "external": 4457711,
+    "rss": 370245632,
+    "external": 4507386,
     "arrayBuffers": 517973
   },
   {
-    "timestamp": 1783639819151,
+    "timestamp": 1783672494357,
     "label": "After DB connection",
-    "heapUsed": 158601016,
-    "heapTotal": 299888640,
-    "rss": 260116480,
-    "external": 4437697,
-    "arrayBuffers": 520837
+    "heapUsed": 158720888,
+    "heapTotal": 299364352,
+    "rss": 374861824,
+    "external": 4437698,
+    "arrayBuffers": 520838
   },
   {
-    "timestamp": 1783639819151,
+    "timestamp": 1783672494357,
     "label": "Before HTTP server",
-    "heapUsed": 158605448,
-    "heapTotal": 299888640,
-    "rss": 260116480,
-    "external": 4437697,
-    "arrayBuffers": 520837
+    "heapUsed": 158725320,
+    "heapTotal": 299364352,
+    "rss": 374861824,
+    "external": 4437698,
+    "arrayBuffers": 520838
   },
   {
-    "timestamp": 1783639819155,
+    "timestamp": 1783672494362,
     "label": "After HTTP server instantiated",
-    "heapUsed": 158674184,
-    "heapTotal": 299888640,
-    "rss": 260333568,
-    "external": 4456828,
-    "arrayBuffers": 520837
+    "heapUsed": 158794056,
+    "heapTotal": 299364352,
+    "rss": 374915072,
+    "external": 4456829,
+    "arrayBuffers": 520838
   },
   {
-    "timestamp": 1783639819155,
+    "timestamp": 1783672494362,
     "label": "Before WebSocket setup",
-    "heapUsed": 158677568,
-    "heapTotal": 299888640,
-    "rss": 260333568,
-    "external": 4456828,
-    "arrayBuffers": 520837
+    "heapUsed": 158797464,
+    "heapTotal": 299364352,
+    "rss": 374915072,
+    "external": 4456829,
+    "arrayBuffers": 520838
   },
   {
-    "timestamp": 1783639819158,
+    "timestamp": 1783672494367,
     "label": "After WebSocket setup",
-    "heapUsed": 158808704,
-    "heapTotal": 299888640,
-    "rss": 260411392,
-    "external": 4456828,
-    "arrayBuffers": 520837
+    "heapUsed": 158929056,
+    "heapTotal": 299364352,
+    "rss": 374927360,
+    "external": 4456829,
+    "arrayBuffers": 520838
   },
   {
-    "timestamp": 1783639819158,
+    "timestamp": 1783672494367,
     "label": "After app.set(io)",
-    "heapUsed": 158811912,
-    "heapTotal": 299888640,
-    "rss": 260411392,
-    "external": 4456828,
-    "arrayBuffers": 520837
+    "heapUsed": 158932288,
+    "heapTotal": 299364352,
+    "rss": 374927360,
+    "external": 4456829,
+    "arrayBuffers": 520838
   }
 ]

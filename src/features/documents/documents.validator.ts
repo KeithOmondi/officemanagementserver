@@ -119,6 +119,9 @@ export const acknowledgeMarkSchema = z.object({
 
 // ── Filters ─────────────────────────────────────────────────────────────────
 
+// src/features/documents/documents.validator.ts
+// Add `has_bring_up_date` inside documentFiltersSchema's `query` object.
+
 export const documentFiltersSchema = z.object({
   query: z.object({
     search: z.string().trim().max(100).optional(),
@@ -127,7 +130,7 @@ export const documentFiltersSchema = z.object({
     status: documentStatusEnum.optional(),
     assigned_to: z.string().uuid().optional(),
     department_id: z.string().uuid().optional(),
-    folder_id: z.string().uuid().optional(), // ✅ NEW: Filter by folder
+    folder_id: z.string().uuid().optional(),
     for_my_action: z
       .enum(['true', 'false'])
       .transform((v) => v === 'true')
@@ -136,6 +139,12 @@ export const documentFiltersSchema = z.object({
       .enum(['true', 'false'])
       .transform((v) => v === 'true')
       .optional(),
+    // ── NEW ──────────────────────────────────────────────────────────────
+    has_bring_up_date: z
+      .enum(['true', 'false'])
+      .transform((v) => v === 'true')
+      .optional(),
+    // ─────────────────────────────────────────────────────────────────────
     page: z
       .string()
       .regex(/^\d+$/)
@@ -275,10 +284,9 @@ export const updateMarkSchema = z.object({
 //  NEW: Folder Redirection schemas
 // ════════════════════════════════════════════════════════════════════════
 
+// documents.validator.ts
+
 export const redirectToFolderSchema = z.object({
-  params: z.object({
-    id: z.string().uuid('Document ID must be a valid UUID'),
-  }),
   body: z
     .object({
       folder_id: z.string().uuid('Folder ID must be a valid UUID'),
@@ -288,9 +296,6 @@ export const redirectToFolderSchema = z.object({
 });
 
 export const removeFromFolderSchema = z.object({
-  params: z.object({
-    id: z.string().uuid('Document ID must be a valid UUID'),
-  }),
   body: z
     .object({
       note: z.string().max(500).trim().optional(),

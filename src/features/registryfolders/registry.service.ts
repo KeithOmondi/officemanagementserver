@@ -337,41 +337,30 @@ export class RegistryService {
     // ── Get Folder Documents ──────────────────────────────────────────────
 
     static async getFolderDocuments(
-        folderId: string,
-        limit?: number,
-        offset?: number
-    ): Promise<any[]> {
-        const folder = await this.findById(folderId);
-        if (!folder) {
-            throw new AppError(404, 'Folder not found');
-        }
+    folderId: string,
+    limit?: number,
+    offset?: number
+): Promise<any[]> {
+    const folder = await this.findById(folderId);
+    if (!folder) throw new AppError(404, 'Folder not found');
 
-        let query = `
-            SELECT d.*, u.full_name as uploaded_by_name
-            FROM helpdesk_documents d
-            LEFT JOIN users u ON d.uploaded_by = u.id
-            WHERE d.entity_id = $1
-              AND d.entity_type = 'rhc_folder'
-              AND d.is_active = true
-            ORDER BY d.created_at DESC
-        `;
+    let query = `
+        SELECT d.id, d.title AS subject, d.reference_no AS ref,
+               d.file_url, d.mime_type AS format, d.created_at, d.updated_at,
+               d.created_by AS uploaded_by, u.full_name AS uploaded_by_name
+        FROM documents d
+        LEFT JOIN users u ON u.id = d.created_by
+        WHERE d.folder_id = $1 AND d.is_active = true
+        ORDER BY d.created_at DESC
+    `;
+    const params: unknown[] = [folderId];
+    let p = 2;
+    if (limit) { query += ` LIMIT $${p}`; params.push(limit); p++; }
+    if (offset) { query += ` OFFSET $${p}`; params.push(offset); }
 
-        const params: unknown[] = [folderId];
-        let p = 2;
-
-        if (limit) {
-            query += ` LIMIT $${p}`;
-            params.push(limit);
-            p++;
-        }
-        if (offset) {
-            query += ` OFFSET $${p}`;
-            params.push(offset);
-        }
-
-        const { rows } = await pool.query(query, params);
-        return rows;
-    }
+    const { rows } = await pool.query(query, params);
+    return rows;
+}
 
     // ── Search Folders ─────────────────────────────────────────────────────
 

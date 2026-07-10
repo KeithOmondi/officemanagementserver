@@ -223,6 +223,7 @@ export class DocumentService {
     const {
       search, type, category, status, assigned_to,
       department_id, folder_id, for_my_action,
+      has_bring_up_date,
       page = 1, limit = 20,
       sort_by = 'created_at', sort_order = 'DESC',
     } = filters;
@@ -235,18 +236,14 @@ export class DocumentService {
     const values: unknown[] = [];
     let p = 1;
 
-    // ✅ FIX: Super admins see ALL documents, others see only their own or non-draft
     if (requestingUserRole === 'super_admin') {
-      // Super admins see everything - no additional condition
       console.log('[FindAll] Super admin - showing all documents');
     } else {
-      // Non-super admins: show their own drafts + all non-draft documents
       conditions.push(`(d.is_draft = false OR d.created_by = $${p})`);
       values.push(requestingUserId);
       p++;
     }
 
-    // Filter by folder - if folder_id is provided, only show documents in that folder
     if (folder_id) {
       conditions.push(`d.folder_id = $${p}`);
       values.push(folder_id);
@@ -276,10 +273,22 @@ export class DocumentService {
       p++;
     }
 
+    // Filter to documents whose active mark has a bring-up date set.
+    // Requires MARK_JOIN on both the count and data queries below, since
+    // bring_up_date lives on document_marks, not documents.
+    if (has_bring_up_date) {
+      conditions.push(`m.bring_up_date IS NOT NULL`);
+    }
+
     const where = `WHERE ${conditions.join(' AND ')}`;
 
     const [countResult, dataResult] = await Promise.all([
-      pool.query(`SELECT COUNT(*) AS total ${DOC_JOIN} ${where}`, values),
+      // MARK_JOIN is now included here too (not just the data query) so that
+      // m.* conditions like has_bring_up_date resolve correctly. It's a
+      // LEFT JOIN scoped to m.is_active = true, so this only changes the
+      // count if a document can have more than one active mark — which the
+      // rest of the app already assumes is not the case.
+      pool.query(`SELECT COUNT(*) AS total ${DOC_JOIN} ${MARK_JOIN} ${where}`, values),
       pool.query(
         `SELECT 
           ${DOC_SELECT},

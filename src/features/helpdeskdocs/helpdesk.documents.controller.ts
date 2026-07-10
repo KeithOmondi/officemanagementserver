@@ -4,7 +4,6 @@ import { Request, Response, NextFunction } from 'express';
 import { HelpdeskDocumentsService } from './helpdesk.documents.service';
 import type {
     UploadHelpdeskDocumentBody,
-    UpdateDocumentStatusBody,
     SubmitDocumentForApprovalBody,
     ApproveDocumentBody,
     RejectDocumentBody,

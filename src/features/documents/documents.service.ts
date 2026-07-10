@@ -1504,4 +1504,73 @@ export class DocumentService {
       totalPages: Math.ceil(total / limit),
     };
   }
+
+
+  // ── Bring-Up Date Reminders ──────────────────────────────────────────────
+  //
+  // Called once a day (see src/jobs/bringUpReminders.job.ts). Finds every
+  // active, not-yet-completed mark whose bring_up_date is tomorrow and that
+  // hasn't already been reminded, and notifies whoever it's assigned to —
+  // falling back to whoever marked it, if it's unassigned — one day ahead
+  // so the bring-up date doesn't get missed.
+
+  static async sendBringUpDateReminders(io?: any): Promise<number> {
+    const { rows } = await pool.query(
+      `SELECT
+         m.id AS mark_id,
+         m.document_id,
+         m.assigned_to,
+         m.marked_by,
+         m.bring_up_date,
+         m.instructions,
+         d.title AS document_title,
+         d.reference_no
+       FROM document_marks m
+       JOIN documents d ON d.id = m.document_id
+       WHERE m.is_active = true
+         AND m.completed_at IS NULL
+         AND m.bring_up_reminder_sent_at IS NULL
+         AND m.bring_up_date = (CURRENT_DATE + INTERVAL '1 day')::date`
+    );
+
+    if (!rows.length) return 0;
+
+    for (const row of rows) {
+      const recipientId = row.assigned_to ?? row.marked_by;
+      if (!recipientId) continue;
+
+      const dueDate = new Date(row.bring_up_date).toLocaleDateString('en-KE', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+      });
+
+      try {
+        await NotificationsService.createNotification(
+          {
+            user_id: recipientId,
+            type_name: 'bring_up_reminder',
+            title: `Bring-up reminder: ${row.document_title}`,
+            message: `"${row.document_title}"${row.reference_no ? ` (${row.reference_no})` : ''} is due for bring-up tomorrow (${dueDate}).${row.instructions ? `\n\nInstructions: ${row.instructions}` : ''}`,
+            icon: 'Clock',
+            color: '#c9a84c',
+            link: `/documents/${row.document_id}`,
+            priority: 'high',
+            metadata: { document_id: row.document_id, mark_id: row.mark_id, type: 'bring_up_reminder' },
+            send_email: true,
+          },
+          io
+        );
+
+        await pool.query(
+          `UPDATE document_marks SET bring_up_reminder_sent_at = NOW() WHERE id = $1`,
+          [row.mark_id]
+        );
+      } catch (error) {
+        console.error(`[BringUpReminder] Failed to notify user ${recipientId} for mark ${row.mark_id}:`, error);
+      }
+    }
+
+    return rows.length;
+  }
 }

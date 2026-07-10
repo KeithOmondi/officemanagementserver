@@ -6,7 +6,8 @@ import app from './app';
 import { connectDB } from './config/db';
 import { env } from './config/env';
 import { setupWebSocket } from './socket';
-import { Server } from 'http';
+//import { Server } from 'http';
+import { scheduleBringUpReminders } from './jobs/bringUpReminders.job';
 
 profileImport('After imports');
 
@@ -159,6 +160,12 @@ const startServer = async () => {
     // Make io available to routes
     app.set('io', io);
     profiler.takeSnapshot('After app.set(io)');
+
+    // ── Schedule Background Jobs ─────────────────────────────────────────────
+    console.log('⏰ Scheduling background jobs...');
+    scheduleBringUpReminders(io);
+    console.log('✅ Bring-up date reminder job scheduled (daily 07:00)');
+    profiler.takeSnapshot('After background jobs scheduled');
 
     // ── Check final memory ──────────────────────────────────────────────────
     const finalHeap = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);

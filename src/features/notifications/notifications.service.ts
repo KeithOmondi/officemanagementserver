@@ -4,13 +4,10 @@ import { sendMail } from '../../utils/sendMail';
 import type {
     Notification,
     NotificationPreferences,
-    NotificationDeliveryLog,
     NotificationStats,
     CreateNotificationInput,
-    UpdateNotificationInput,
     UpdatePreferencesInput,
     NotificationFilters,
-    NotificationPriority,
 } from './notifications.types';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────

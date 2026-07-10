@@ -15,6 +15,8 @@ router.get('/my-marked', documentController.getMyMarked);
 router.get('/received', documentController.getReceivedDocuments);
 router.get('/:id', documentController.getById);
 router.get('/:id/mark-history', documentController.getMarkHistory);
+router.get('/:id/flow', documentController.getFlowHistory);
+router.get('/:id/responses', documentController.getResponses);
 
 // ── Create ────────────────────────────────────────────────────────────────────
 router.post('/compose', requireRole('staff'), documentController.createComposed);
@@ -48,17 +50,39 @@ router.delete('/:id/annotations/:annotationId', requireRole('staff'), documentCo
 // ── Draft lifecycle / document flow ──────────────────────────────────────────
 router.post('/:id/finalize-draft', requireRole('dept_head'), documentController.finalizeDraft);
 router.post('/:id/return', requireRole('super_admin'), documentController.returnDocument);
-router.get('/:id/flow', documentController.getFlowHistory);
 
 // ── Response thread ───────────────────────────────────────────────────────────
 router.post('/:id/respond', upload.single('file'), documentController.respond);
-router.get('/:id/responses', documentController.getResponses);
 
-// ── NEW: Update Mark (instructions & bring_up_date) ──────────────────────────
+// ── Update Mark (instructions & bring_up_date) ──────────────────────────────
 router.patch(
   '/marks/:markId',
-  requireRole('super_admin'), // Only super admins can edit the note
+  requireRole('super_admin'),
   documentController.updateMark
+);
+
+// ════════════════════════════════════════════════════════════════════════════
+//  NEW: Folder Operations
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── Redirect Document to Folder ────────────────────────────────────────────
+router.post(
+  '/:id/redirect-to-folder',
+  requireRole('super_admin', 'dept_head'),
+  documentController.redirectToFolder
+);
+
+// ── Remove Document from Folder ────────────────────────────────────────────
+router.delete(
+  '/:id/remove-from-folder',
+  requireRole('super_admin', 'dept_head'),
+  documentController.removeFromFolder
+);
+
+// ── Get Documents by Folder ────────────────────────────────────────────────
+router.get(
+  '/folder/:folderId',
+  documentController.getDocumentsByFolder
 );
 
 export default router;

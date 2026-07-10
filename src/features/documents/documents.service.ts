@@ -24,6 +24,8 @@ import type {
   ComposeMemoInput,
   ComposeLetterInput,
   UpdateMarkInput,
+  RedirectToFolderInput,
+  RemoveFromFolderInput,
 } from './documents.validator';
 import axios from 'axios';
 import { generateOTP } from '../../utils/SendOTP';
@@ -40,6 +42,7 @@ const DOC_SELECT = `
   d.assigned_to,    au.full_name  AS assigned_to_name,
   d.created_by,     cu.full_name  AS created_by_name,
   d.department_id,  dep.name      AS department_name,
+  d.folder_id,      f.name        AS folder_name,
   d.is_signed,
   d.signed_by,      su.full_name  AS signed_by_name,
   d.signed_at, d.is_sent, d.sent_at,
@@ -54,6 +57,7 @@ const DOC_JOIN = `
   LEFT JOIN users cu       ON cu.id  = d.created_by
   LEFT JOIN users su       ON su.id  = d.signed_by
   LEFT JOIN departments dep ON dep.id = d.department_id
+  LEFT JOIN rhc_folders f  ON f.id   = d.folder_id
 `;
 
 const ANNOTATION_SELECT = `
@@ -72,7 +76,7 @@ const MARK_SELECT = `
   m.assigned_to AS mark_assigned_to,
   mu.full_name AS mark_assigned_to_name,
   m.instructions AS mark_instructions,
-  m.bring_up_date AS mark_bring_up_date,   -- ✅ new
+  m.bring_up_date AS mark_bring_up_date,
   m.priority AS mark_priority,
   m.marked_at AS mark_marked_at,
   m.acknowledged_at AS mark_acknowledged_at,
@@ -93,7 +97,7 @@ const MARK_SELECT_DETAIL = `
   m.marked_to_dept, md.name       AS marked_to_dept_name,
   m.assigned_to,    mu.full_name  AS assigned_to_name,
   m.instructions,
-  m.bring_up_date,   -- ✅ new
+  m.bring_up_date,
   m.priority,
   m.marked_at, m.acknowledged_at, m.completed_at,
   m.is_active
@@ -213,11 +217,12 @@ export class DocumentService {
 
   static async findAll(
     filters: DocumentFilters,
-    requestingUserId: string
+    requestingUserId: string,
+    requestingUserRole?: string
   ): Promise<DocumentPaginationResponse> {
     const {
       search, type, category, status, assigned_to,
-      department_id, for_my_action,
+      department_id, folder_id, for_my_action,
       page = 1, limit = 20,
       sort_by = 'created_at', sort_order = 'DESC',
     } = filters;
@@ -230,9 +235,23 @@ export class DocumentService {
     const values: unknown[] = [];
     let p = 1;
 
-    conditions.push(`(d.is_draft = false OR d.created_by = $${p})`);
-    values.push(requestingUserId);
-    p++;
+    // ✅ FIX: Super admins see ALL documents, others see only their own or non-draft
+    if (requestingUserRole === 'super_admin') {
+      // Super admins see everything - no additional condition
+      console.log('[FindAll] Super admin - showing all documents');
+    } else {
+      // Non-super admins: show their own drafts + all non-draft documents
+      conditions.push(`(d.is_draft = false OR d.created_by = $${p})`);
+      values.push(requestingUserId);
+      p++;
+    }
+
+    // Filter by folder - if folder_id is provided, only show documents in that folder
+    if (folder_id) {
+      conditions.push(`d.folder_id = $${p}`);
+      values.push(folder_id);
+      p++;
+    }
 
     if (search) {
       conditions.push(`(d.title ILIKE $${p} OR d.reference_no ILIKE $${p} OR d.original_name ILIKE $${p})`);
@@ -296,6 +315,8 @@ export class DocumentService {
         created_by_name: row.created_by_name,
         department_id: row.department_id,
         department_name: row.department_name,
+        folder_id: row.folder_id,
+        folder_name: row.folder_name,
         is_signed: row.is_signed,
         signed_by: row.signed_by,
         signed_by_name: row.signed_by_name,
@@ -316,7 +337,7 @@ export class DocumentService {
           assigned_to: row.mark_assigned_to,
           assigned_to_name: row.mark_assigned_to_name,
           instructions: row.mark_instructions,
-          bring_up_date: row.mark_bring_up_date,   // ✅ new
+          bring_up_date: row.mark_bring_up_date,
           priority: row.mark_priority,
           marked_at: row.mark_marked_at,
           acknowledged_at: row.mark_acknowledged_at,
@@ -1125,7 +1146,7 @@ export class DocumentService {
   }
 
   // ════════════════════════════════════════════════════════════════════════════
-  //  NEW: Memo & Letter generation with PDF
+  //  Memo & Letter generation with PDF
   // ════════════════════════════════════════════════════════════════════════════
 
   private static async getUserDisplayName(userId: string): Promise<string> {
@@ -1293,7 +1314,7 @@ export class DocumentService {
   }
 
   // ════════════════════════════════════════════════════════════════════════════
-  //  NEW: Update Mark (instructions & bring_up_date)
+  //  Update Mark (instructions & bring_up_date)
   // ════════════════════════════════════════════════════════════════════════════
 
   static async updateMark(markId: string, input: UpdateMarkInput): Promise<DocumentMark> {
@@ -1328,5 +1349,150 @@ export class DocumentService {
     );
     if (!rows.length) throw new AppError(404, 'Mark not found');
     return rows[0];
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  //  NEW: Folder Operations
+  // ════════════════════════════════════════════════════════════════════════════
+
+  // ── Redirect to Folder ──────────────────────────────────────────────────────
+
+  static async redirectToFolder(
+    documentId: string,
+    folderId: string,
+    userId: string,
+    note?: string
+  ): Promise<Document> {
+    const doc = await this.findById(documentId);
+    if (!doc) throw new AppError(404, 'Document not found');
+
+    // Check if folder exists
+    const { rows: folderRows } = await pool.query(
+      `SELECT id, name FROM rhc_folders WHERE id = $1 AND is_active = true`,
+      [folderId]
+    );
+    if (!folderRows.length) {
+      throw new AppError(404, 'Folder not found or inactive');
+    }
+
+    // Update document with folder_id
+    await pool.query(
+      `UPDATE documents 
+       SET folder_id = $1, updated_at = NOW()
+       WHERE id = $2`,
+      [folderId, documentId]
+    );
+
+    // Log the action
+    await this.logFlow(
+      pool,
+      documentId,
+      'redirected_to_folder',
+      userId,
+      null,
+      `Document redirected to folder: ${folderRows[0].name}${note ? ` - ${note}` : ''}`
+    );
+
+    return (await this.findById(documentId))!;
+  }
+
+  // ── Remove from Folder ─────────────────────────────────────────────────────
+
+  static async removeFromFolder(
+    documentId: string,
+    userId: string,
+    note?: string
+  ): Promise<Document> {
+    const doc = await this.findById(documentId);
+    if (!doc) throw new AppError(404, 'Document not found');
+
+    if (!doc.folder_id) {
+      throw new AppError(400, 'Document is not in a folder');
+    }
+
+    await pool.query(
+      `UPDATE documents 
+       SET folder_id = NULL, updated_at = NOW()
+       WHERE id = $1`,
+      [documentId]
+    );
+
+    await this.logFlow(
+      pool,
+      documentId,
+      'removed_from_folder',
+      userId,
+      null,
+      `Document removed from folder${note ? ` - ${note}` : ''}`
+    );
+
+    return (await this.findById(documentId))!;
+  }
+
+  // ── Get Documents by Folder ──────────────────────────────────────────────
+
+  static async getDocumentsByFolder(
+    folderId: string,
+    page: number = 1,
+    limit: number = 20,
+    search?: string,
+    type?: string,
+    status?: string
+  ): Promise<DocumentPaginationResponse> {
+    const offset = (page - 1) * limit;
+
+    // Check if folder exists
+    const { rows: folderRows } = await pool.query(
+      `SELECT id, name FROM rhc_folders WHERE id = $1 AND is_active = true`,
+      [folderId]
+    );
+    if (!folderRows.length) {
+      throw new AppError(404, 'Folder not found');
+    }
+
+    const conditions: string[] = ['d.folder_id = $1', 'd.is_active = true'];
+    const values: unknown[] = [folderId];
+    let p = 2;
+
+    if (search) {
+      conditions.push(`(d.title ILIKE $${p} OR d.reference_no ILIKE $${p} OR d.original_name ILIKE $${p})`);
+      values.push(`%${search}%`);
+      p++;
+    }
+    if (type) {
+      conditions.push(`d.type = $${p}`);
+      values.push(type);
+      p++;
+    }
+    if (status) {
+      conditions.push(`d.status = $${p}`);
+      values.push(status);
+      p++;
+    }
+
+    const where = `WHERE ${conditions.join(' AND ')}`;
+
+    const [countResult, dataResult] = await Promise.all([
+      pool.query(
+        `SELECT COUNT(*) AS total ${DOC_JOIN} ${where}`,
+        values
+      ),
+      pool.query(
+        `SELECT ${DOC_SELECT} ${DOC_JOIN}
+         ${where}
+         ORDER BY d.created_at DESC
+         LIMIT $${p} OFFSET $${p + 1}`,
+        [...values, limit, offset]
+      ),
+    ]);
+
+    const total = parseInt(countResult.rows[0]?.total ?? '0', 10);
+    return {
+      data: dataResult.rows,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 }

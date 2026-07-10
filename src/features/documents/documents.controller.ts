@@ -19,7 +19,10 @@ import {
   sendToUserSchema,
   composeMemoSchema,
   composeLetterSchema,
-  updateMarkSchema,   // ✅ new import
+  updateMarkSchema,
+  redirectToFolderSchema,
+  removeFromFolderSchema,
+  getFolderDocumentsSchema,
 } from './documents.validator';
 
 export const documentController = {
@@ -91,9 +94,14 @@ export const documentController = {
   // ── Read ──────────────────────────────────────────────────────────────────────
 
   getAll: asyncHandler(async (req: Request, res: Response) => {
-    const result = documentFiltersSchema.safeParse({ query: req.query });
-    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid filters');
-    const docs = await DocumentService.findAll(result.data.query, req.user!.id);
+    if (!req.user) throw new AppError(401, 'Unauthorized');
+
+    const parsed = documentFiltersSchema.safeParse({ query: req.query });
+    if (!parsed.success) throw new AppError(400, parsed.error.issues[0]?.message ?? 'Invalid filters');
+
+    const filters = parsed.data.query;
+    const docs = await DocumentService.findAll(filters, req.user.id, req.user.role);
+
     return sendSuccess(res, docs, 'Documents retrieved successfully');
   }),
 
@@ -279,7 +287,7 @@ export const documentController = {
     return sendSuccess(res, doc, 'Document signed successfully');
   }),
 
-  // ── NEW: Update Mark ─────────────────────────────────────────────────────────
+  // ── Update Mark ─────────────────────────────────────────────────────────
 
   updateMark: asyncHandler(async (req: Request, res: Response) => {
     const paramsResult = updateMarkSchema.shape.params.safeParse(req.params);
@@ -295,5 +303,65 @@ export const documentController = {
       bodyResult.data
     );
     return sendSuccess(res, updatedMark, 'Mark updated successfully');
+  }),
+
+  // ── Folder Operations ────────────────────────────────────────────────────────
+
+  // ── Redirect Document to Folder ──────────────────────────────────────────
+
+  redirectToFolder: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = documentIdSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    
+    const bodyResult = redirectToFolderSchema.safeParse({ body: req.body });
+    if (!bodyResult.success) throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+    
+    const doc = await DocumentService.redirectToFolder(
+      paramsResult.data.params.id,
+      bodyResult.data.body.folder_id,
+      req.user!.id,
+      bodyResult.data.body.note
+    );
+    return sendSuccess(res, doc, 'Document redirected to folder successfully');
+  }),
+
+  // ── Remove Document from Folder ──────────────────────────────────────────
+
+  removeFromFolder: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = documentIdSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    
+    const bodyResult = removeFromFolderSchema.safeParse({ body: req.body });
+    if (!bodyResult.success) throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+    
+    const doc = await DocumentService.removeFromFolder(
+      paramsResult.data.params.id,
+      req.user!.id,
+      bodyResult.data.body?.note
+    );
+    return sendSuccess(res, doc, 'Document removed from folder successfully');
+  }),
+
+  // ── Get Documents by Folder ──────────────────────────────────────────────
+
+  getDocumentsByFolder: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = getFolderDocumentsSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid folder ID');
+    
+    const queryResult = getFolderDocumentsSchema.safeParse({ query: req.query });
+    if (!queryResult.success) throw new AppError(400, queryResult.error.issues[0]?.message ?? 'Invalid query parameters');
+    
+    const folderId = paramsResult.data.params.folderId;
+    const { page, limit, search, type, status } = queryResult.data.query;
+    
+    const result = await DocumentService.getDocumentsByFolder(
+      folderId,
+      page || 1,
+      limit || 20,
+      search,
+      type,
+      status
+    );
+    return sendSuccess(res, result, 'Folder documents retrieved successfully');
   }),
 };

@@ -344,7 +344,7 @@ export class TicketService {
     };
   }
 
-  // ── Update ───────────────────────────────────────────────────────────────────
+    // ── Update ───────────────────────────────────────────────────────────────────
 
   static async update(id: string, input: UpdateTicketInput, userId: string): Promise<Ticket> {
     const existing = await this.findById(id);
@@ -491,13 +491,39 @@ export class TicketService {
         [userId, id]
       );
 
+      // Cascade: approving the ticket must approve every document attached
+      // to it, not just the one the reviewer happened to stamp from the
+      // Document Viewer modal. Without this, sibling documents on the same
+      // ticket stay stuck at 'pending_approval' forever — which was the bug.
+      //
+      // NOTE: column/table names here are inferred from the HelpdeskDocument
+      // frontend type (helpdeskDocumentsSlice / DocumentViewerModal), not
+      // from a migration file. Verify against your actual schema — if your
+      // table is named differently, or uses `ticket_id` instead of
+      // `entity_type`/`entity_id`, adjust the WHERE clause accordingly.
+      const { rowCount: documentsApprovedCount } = await client.query(
+        `UPDATE helpdesk_documents
+         SET status = 'approved',
+             approved_by = $1,
+             approved_at = NOW(),
+             updated_at = NOW()
+         WHERE entity_type = 'ticket'
+           AND entity_id = $2
+           AND status = 'pending_approval'`,
+        [userId, id]
+      );
+
       // Pass the transaction client
       await this.addApprovalHistory(
         id,
         'approved',
         userId,
         ticket.created_by,
-        input.comments ?? null,
+        input.comments
+          ? `${input.comments}${documentsApprovedCount ? ` (${documentsApprovedCount} document(s) auto-approved)` : ''}`
+          : documentsApprovedCount
+            ? `${documentsApprovedCount} document(s) auto-approved with ticket.`
+            : null,
         client
       );
 
@@ -550,14 +576,16 @@ export class TicketService {
     try {
       await client.query('BEGIN');
 
-      await client.query(
-        `UPDATE tickets
-         SET status = 'rejected',
-             rejected_reason = $1,
-             updated_at = NOW()
-         WHERE id = $2`,
-        [input.reason, id]
-      );
+      // inside TicketService.rejectTicket, right after the tickets UPDATE, same transaction:
+  await client.query(
+    `UPDATE helpdesk_documents
+     SET status = 'rejected',
+         updated_at = NOW()
+     WHERE entity_type = 'ticket'
+       AND entity_id = $1
+       AND status = 'pending_approval'`,
+    [id]
+  );
 
       // Pass the transaction client
       await this.addApprovalHistory(

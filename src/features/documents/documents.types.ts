@@ -37,7 +37,7 @@ export interface DocumentMark {
   assigned_to: string | null;
   assigned_to_name: string | null;
   instructions: string | null;
-  bring_up_date: string | null;      // ✅ NEW: ISO date string (YYYY-MM-DD)
+  bring_up_date: string | null;      // ISO date string (YYYY-MM-DD)
   priority: RoutePriority;
   marked_at: Date;
   acknowledged_at: Date | null;
@@ -98,6 +98,8 @@ export interface Document {
   created_by_name: string;
   department_id: string | null;
   department_name: string | null;
+  folder_id: string | null;           // ✅ NEW: Reference to RHC folder
+  folder_name: string | null;         // ✅ NEW: Name of the folder
   is_signed: boolean;
   signed_by: string | null;
   signed_by_name: string | null;
@@ -136,4 +138,20 @@ export interface DocumentFlowEntry {
   to_user_name: string | null;
   note: string | null;
   created_at: Date;
+}
+
+// ── Document Folder Operations ─────────────────────────────────────────────
+
+export interface RedirectToFolderInput {
+  folder_id: string;
+  note?: string;
+}
+
+export interface FolderDocumentFilters {
+  folder_id: string;
+  page?: number;
+  limit?: number;
+  search?: string;
+  type?: DocumentType;
+  status?: DocumentStatus;
 }

@@ -127,6 +127,7 @@ export const documentFiltersSchema = z.object({
     status: documentStatusEnum.optional(),
     assigned_to: z.string().uuid().optional(),
     department_id: z.string().uuid().optional(),
+    folder_id: z.string().uuid().optional(), // ✅ NEW: Filter by folder
     for_my_action: z
       .enum(['true', 'false'])
       .transform((v) => v === 'true')
@@ -270,6 +271,57 @@ export const updateMarkSchema = z.object({
     }),
 });
 
+// ════════════════════════════════════════════════════════════════════════
+//  NEW: Folder Redirection schemas
+// ════════════════════════════════════════════════════════════════════════
+
+export const redirectToFolderSchema = z.object({
+  params: z.object({
+    id: z.string().uuid('Document ID must be a valid UUID'),
+  }),
+  body: z
+    .object({
+      folder_id: z.string().uuid('Folder ID must be a valid UUID'),
+      note: z.string().max(500).trim().optional(),
+    })
+    .strict(),
+});
+
+export const removeFromFolderSchema = z.object({
+  params: z.object({
+    id: z.string().uuid('Document ID must be a valid UUID'),
+  }),
+  body: z
+    .object({
+      note: z.string().max(500).trim().optional(),
+    })
+    .strict()
+    .optional(),
+});
+
+export const getFolderDocumentsSchema = z.object({
+  params: z.object({
+    folderId: z.string().uuid('Folder ID must be a valid UUID'),
+  }),
+  query: z.object({
+    page: z
+      .string()
+      .regex(/^\d+$/)
+      .transform(Number)
+      .pipe(z.number().int().min(1))
+      .optional(),
+    limit: z
+      .string()
+      .regex(/^\d+$/)
+      .transform(Number)
+      .pipe(z.number().int().min(1).max(100))
+      .optional(),
+    search: z.string().trim().max(100).optional(),
+    type: documentTypeEnum.optional(),
+    status: documentStatusEnum.optional(),
+  }),
+});
+
 // ── Inferred types ─────────────────────────────────────────────────────────
 
 export type CreateComposedDocumentInput = z.infer<
@@ -300,3 +352,9 @@ export type ComposeMemoInput = z.infer<typeof composeMemoSchema>['body'];
 export type ComposeLetterInput = z.infer<typeof composeLetterSchema>['body'];
 
 export type UpdateMarkInput = z.infer<typeof updateMarkSchema>['body'];
+
+// ── Folder types ──────────────────────────────────────────────────────────
+
+export type RedirectToFolderInput = z.infer<typeof redirectToFolderSchema>['body'];
+export type RemoveFromFolderInput = z.infer<typeof removeFromFolderSchema>['body'];
+export type GetFolderDocumentsQuery = z.infer<typeof getFolderDocumentsSchema>['query'];

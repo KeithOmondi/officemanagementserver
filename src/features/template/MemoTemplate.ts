@@ -2,24 +2,29 @@
 
 export interface MemoData {
   to: string;
-  from: string;
+  from: string;        // This is the department/office name (e.g., "HIGH COURT SUPPORT OFFICE")
   ref: string;
   date: string;
   subject: string;
   body: string;
-  signatureName: string;
-  signatureTitle: string;
-  draftedByInitials?: string; // e.g. "JM" — initials of the logged-in user drafting the memo
+  signatureName: string;  // ✅ The actual person's name (e.g., "Keith Dennis")
+  signatureTitle: string; // ✅ The person's title (e.g., "Registrar, High Court")
+  draftedByInitials?: string;
   logoUrl?: string;
   footerEmblemUrl?: string;
+  footerAddress?: string;
+  footerContact?: string;
+  footerTagline?: string;
 }
 
 export function getMemoHTML(data: MemoData): string {
-  // Combined Kenya Coat of Arms + Judiciary crest (single header image, as in the sample)
   const logoUrl = data.logoUrl || 'https://res.cloudinary.com/do0yflasl/image/upload/v1781759596/JOB_LOGO_ubls4m.jpg';
-
-  // Small "Social Transformation" emblem used in the footer of the sample
   const footerEmblemUrl = data.footerEmblemUrl || 'https://res.cloudinary.com/do0yflasl/image/upload/v1782893389/footer-emblem_n0ncm9.jpg';
+
+  // ✅ Default footer content - always visible
+  const footerAddress = data.footerAddress || 'Milimani Law Courts | 3rd Floor, Chamber 337 | P.O. Box 30041-00100 | Nairobi';
+  const footerContact = data.footerContact || 'Tel. +254 0730 181478 | registrarhighcourt@court.go.ke | www.judiciary.go.ke';
+  const footerTagline = data.footerTagline || 'Justice Be Our Shield and Defender';
 
   return `
     <!DOCTYPE html>
@@ -40,16 +45,6 @@ export function getMemoHTML(data: MemoData): string {
           background: white;
         }
 
-        /* All page spacing lives here, not on 'body'. Because of the global
-           box-sizing: border-box rule above, this padding is now INCLUDED
-           inside min-height: 1123px (A4 height at 96dpi) instead of being
-           added on top of it. Previously the padding sat on 'body', outside
-           '.page', so the true required height was 1123px + body's padding
-           — taller than a single A4 page — which is what was spilling a
-           blank page 2 into the PDF.
-           The bottom padding is intentionally large (170px, not 40px) to
-           reserve room for the fixed footer below so body content never
-           runs into it. */
         .page {
           max-width: 794px;
           min-height: 1123px;
@@ -58,7 +53,6 @@ export function getMemoHTML(data: MemoData): string {
           position: relative;
         }
 
-        /* Header — single combined crest, centered */
         .header {
           text-align: center;
           margin-bottom: 20px;
@@ -70,7 +64,6 @@ export function getMemoHTML(data: MemoData): string {
           display: inline-block;
         }
 
-        /* Title block */
         .title-block {
           text-align: center;
           margin: 18px 0 22px 0;
@@ -84,13 +77,11 @@ export function getMemoHTML(data: MemoData): string {
           line-height: 1.4;
         }
 
-        /* Thick rule directly under the title, matching the sample */
         .top-rule {
           border-top: 2.5px solid #000000;
           margin-bottom: 10px;
         }
 
-        /* Fields block — bracketed by the top rule above and bottom rule below */
         .fields {
           margin: 10px 0 0 0;
         }
@@ -123,7 +114,6 @@ export function getMemoHTML(data: MemoData): string {
           margin-bottom: 40px;
         }
 
-        /* Body Content */
         .body-content {
           margin: 0 0 40px 0;
           font-size: 13.5px;
@@ -136,26 +126,26 @@ export function getMemoHTML(data: MemoData): string {
           margin-bottom: 10px;
         }
 
-        /* Sign-off block */
+        /* ✅ Sign-off section - properly separated from FROM field */
         .signature {
           margin-top: 40px;
           font-size: 13.5px;
         }
 
-        /* Signatory's actual name — bold, plain (not underlined) */
+        /* ✅ The actual person's name - bold, uppercase */
         .signature .signatory-name {
           font-weight: bold;
+          text-transform: uppercase;
           margin-bottom: 4px;
         }
 
-        /* Org/unit line — bold, underlined, uppercase */
+        /* ✅ The person's title - bold, underlined, uppercase */
         .signature .org-unit {
           font-weight: bold;
           text-decoration: underline;
           text-transform: uppercase;
         }
 
-        /* rhc/initials line for the drafting user — directly under the org unit */
         .signature .drafted-by {
           font-weight: normal;
           text-transform: lowercase;
@@ -164,18 +154,6 @@ export function getMemoHTML(data: MemoData): string {
           color: #333333;
         }
 
-        /* Footer — pinned to the bottom of the page.
-           'position: fixed' is intentional: Chromium's print/PDF engine
-           (which is what Puppeteer's page.pdf() uses) keeps fixed-position
-           elements anchored to the same spot on every physical page — the
-           standard way to get a footer glued to the bottom of a
-           Puppeteer-generated PDF. There is deliberately no @media print
-           override here: a previous version reset this to
-           'position: static; margin-top: 60px;' under @media print, which
-           — since Puppeteer renders in print mode by default — pulled the
-           footer back into normal document flow, making it appear right
-           after the signature block instead of at the bottom of the page,
-           and adding enough extra height to spill a blank second page. */
         .footer {
           position: fixed;
           bottom: 30px;
@@ -222,7 +200,6 @@ export function getMemoHTML(data: MemoData): string {
           margin-top: 8px;
         }
 
-        /* Responsive (screen preview only — irrelevant to PDF output) */
         @media (max-width: 600px) {
           .page { padding: 30px 20px 170px 20px; }
           .field { flex-direction: row; }
@@ -235,7 +212,7 @@ export function getMemoHTML(data: MemoData): string {
     </head>
     <body>
       <div class="page">
-        <!-- Header: single combined crest -->
+        <!-- Header -->
         <div class="header">
           <img src="${logoUrl}" alt="Republic of Kenya / Judiciary Crest" />
         </div>
@@ -283,25 +260,25 @@ export function getMemoHTML(data: MemoData): string {
           ${data.body ? data.body.replace(/\n/g, '<br/>') : '<p>&nbsp;</p>'}
         </div>
 
-        <!-- Sign-off: signatory name, org unit (bold underlined), then rhc/initials of drafter -->
+        <!-- ✅ Sign-off: Uses signatureName (person) and signatureTitle (their title) -->
         <div class="signature">
-          <div class="signatory-name">${escapeHtml(data.signatureName)}</div>
-          <div class="org-unit">${escapeHtml(data.signatureTitle)}</div>
+          <div class="signatory-name">${escapeHtml(data.signatureName || data.from || '')}</div>
+          <div class="org-unit">${escapeHtml(data.signatureTitle || 'Registrar, High Court')}</div>
           ${data.draftedByInitials ? `<div class="drafted-by">rhc/${escapeHtml(data.draftedByInitials)}</div>` : ''}
         </div>
 
-        <!-- Footer -->
+        <!-- ✅ Footer with default content -->
         <div class="footer">
           <div class="footer-top">
             <div class="footer-emblem">
               <img src="${footerEmblemUrl}" alt="Social Transformation Emblem" />
             </div>
             <div class="footer-text">
-              <p>Milimani Law Courts | 3rd Floor, Chamber 337 | P.O. Box 30041-00100 | Nairobi</p>
-              <p>Tel. +254 0730 181478 | registrarhighcourt@court.go.ke | www.judiciary.go.ke</p>
+              <p>${escapeHtml(footerAddress)}</p>
+              <p>${escapeHtml(footerContact)}</p>
             </div>
           </div>
-          <div class="footer-tagline">Justice Be Our Shield and Defender</div>
+          <div class="footer-tagline">${escapeHtml(footerTagline)}</div>
         </div>
       </div>
     </body>
@@ -309,7 +286,6 @@ export function getMemoHTML(data: MemoData): string {
   `;
 }
 
-// Helper function to escape HTML special characters
 function escapeHtml(text: string): string {
   if (!text) return '';
   const map: Record<string, string> = {
@@ -322,7 +298,6 @@ function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, function(m) { return map[m]; });
 }
 
-// For backward compatibility with existing code
 export function getMemoTemplate(data: MemoData): string {
   return getMemoHTML(data);
 }

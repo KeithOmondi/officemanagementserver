@@ -119,9 +119,6 @@ export const acknowledgeMarkSchema = z.object({
 
 // ── Filters ─────────────────────────────────────────────────────────────────
 
-// src/features/documents/documents.validator.ts
-// Add `has_bring_up_date` inside documentFiltersSchema's `query` object.
-
 export const documentFiltersSchema = z.object({
   query: z.object({
     search: z.string().trim().max(100).optional(),
@@ -139,12 +136,10 @@ export const documentFiltersSchema = z.object({
       .enum(['true', 'false'])
       .transform((v) => v === 'true')
       .optional(),
-    // ── NEW ──────────────────────────────────────────────────────────────
     has_bring_up_date: z
       .enum(['true', 'false'])
       .transform((v) => v === 'true')
       .optional(),
-    // ─────────────────────────────────────────────────────────────────────
     page: z
       .string()
       .regex(/^\d+$/)
@@ -239,12 +234,14 @@ export const sendToUserSchema = z.object({
 //  NEW: Memo & Letter composition schemas
 // ════════════════════════════════════════════════════════════════════════
 
+// ✅ Updated baseComposeSchema with signatureName
 const baseComposeSchema = z.object({
   title: z.string().min(1, 'Title is required').max(255).trim(),
   to: z.string().min(1, 'Recipient is required').max(255).trim(),
   date: z.string().datetime().optional(),
   body: z.string().min(1, 'Body content is required'),
   from: z.string().optional(),
+  signatureName: z.string().optional(), // ✅ NEW: The person signing
   signatureTitle: z.string().optional(),
   department_id: z.string().uuid().optional(),
   reference_no: z.string().max(100).trim().optional(),
@@ -272,7 +269,7 @@ export const updateMarkSchema = z.object({
   body: z
     .object({
       instructions: z.string().max(2000).trim().optional(),
-      bring_up_date: z.string().nullable().optional(), // ISO date or null
+      bring_up_date: z.string().nullable().optional(),
     })
     .strict()
     .refine((b) => b.instructions !== undefined || b.bring_up_date !== undefined, {
@@ -283,8 +280,6 @@ export const updateMarkSchema = z.object({
 // ════════════════════════════════════════════════════════════════════════
 //  NEW: Folder Redirection schemas
 // ════════════════════════════════════════════════════════════════════════
-
-// documents.validator.ts
 
 export const redirectToFolderSchema = z.object({
   body: z

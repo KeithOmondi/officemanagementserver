@@ -273,9 +273,6 @@ export class DocumentService {
       p++;
     }
 
-    // Filter to documents whose active mark has a bring-up date set.
-    // Requires MARK_JOIN on both the count and data queries below, since
-    // bring_up_date lives on document_marks, not documents.
     if (has_bring_up_date) {
       conditions.push(`m.bring_up_date IS NOT NULL`);
     }
@@ -283,11 +280,6 @@ export class DocumentService {
     const where = `WHERE ${conditions.join(' AND ')}`;
 
     const [countResult, dataResult] = await Promise.all([
-      // MARK_JOIN is now included here too (not just the data query) so that
-      // m.* conditions like has_bring_up_date resolve correctly. It's a
-      // LEFT JOIN scoped to m.is_active = true, so this only changes the
-      // count if a document can have more than one active mark — which the
-      // rest of the app already assumes is not the case.
       pool.query(`SELECT COUNT(*) AS total ${DOC_JOIN} ${MARK_JOIN} ${where}`, values),
       pool.query(
         `SELECT 
@@ -533,7 +525,7 @@ export class DocumentService {
           input.assigned_to ?? null,
           input.instructions ?? null,
           input.priority,
-          null, // bring_up_date initially null
+          null,
         ]
       );
 
@@ -1204,8 +1196,22 @@ export class DocumentService {
     return (await this.findById(rows[0].id))!;
   }
 
+  /**
+   * Generate a memo PDF from the provided input.
+   * 
+   * The 'from' field represents the department/office (e.g., "HIGH COURT SUPPORT OFFICE")
+   * The 'signatureName' field represents the actual person signing (e.g., "Keith Dennis")
+   * This separation ensures the memo shows the department in the FROM field
+   * and the person's name in the signature block.
+   */
   static async generateMemo(input: ComposeMemoInput, createdBy: string): Promise<Document> {
-    const sender = input.from || (await this.getUserDisplayName(createdBy));
+    // Get the department/office name from the 'from' field
+    const fromDepartment = input.from || (await this.getUserDisplayName(createdBy));
+    
+    // Get the signatory name - use signatureName if provided, otherwise fallback to from
+    const signatureName = input.signatureName || fromDepartment;
+    const signatureTitle = input.signatureTitle || 'Registrar, High Court';
+    
     const ref = input.reference_no || `RHC/MEMO/${new Date().getFullYear()}/${Date.now().toString().slice(-6)}`;
 
     const logoUrl = process.env.MEMO_LOGO_URL || undefined;
@@ -1213,7 +1219,7 @@ export class DocumentService {
 
     const pdfBuffer = await generateDocumentFromTemplate('memo', {
       to: input.to,
-      from: sender,
+      from: fromDepartment, // The department/office name
       ref: ref,
       date: input.date ? new Date(input.date).toLocaleDateString('en-KE', {
         year: 'numeric',
@@ -1226,8 +1232,8 @@ export class DocumentService {
       }),
       subject: input.title,
       body: input.body,
-      signatureName: sender,
-      signatureTitle: input.signatureTitle || 'Registrar, High Court',
+      signatureName: signatureName, // The person's name
+      signatureTitle: signatureTitle, // The person's title
       logoUrl: logoUrl,
       footerEmblemUrl: footerEmblemUrl
     });
@@ -1235,8 +1241,19 @@ export class DocumentService {
     return await this.saveDocument(input.title, 'memo', ref, input.body, pdfBuffer, createdBy, input.department_id);
   }
 
+  /**
+   * Generate a letter PDF from the provided input.
+   * 
+   * The 'from' field represents the department/office (e.g., "HIGH COURT SUPPORT OFFICE")
+   * The 'signatureName' field represents the actual person signing (e.g., "Keith Dennis")
+   */
   static async generateLetter(input: ComposeLetterInput, createdBy: string): Promise<Document> {
-    const sender = input.from || (await this.getUserDisplayName(createdBy));
+    // Get the department/office name from the 'from' field
+    const fromDepartment = input.from || (await this.getUserDisplayName(createdBy));
+    
+    // Get the signatory name - use signatureName if provided, otherwise fallback to from
+    const signatureName = input.signatureName || fromDepartment;
+    const signatureTitle = input.signatureTitle || 'Registrar, High Court';
     const ref = input.reference_no || `RHC/LTR/${new Date().getFullYear()}/${Date.now().toString().slice(-6)}`;
 
     const logoUrl = process.env.LETTER_LOGO_URL || undefined;
@@ -1254,11 +1271,11 @@ export class DocumentService {
         day: 'numeric'
       }),
       to: input.to,
-      from: sender,
+      from: fromDepartment, // The department/office name
       subject: input.title,
       body: input.body,
-      sender: sender,
-      senderTitle: input.signatureTitle || 'Registrar, High Court',
+      sender: signatureName, // The person's name
+      senderTitle: signatureTitle, // The person's title
       cc: input.cc || '',
       enclosures: input.enclosures || '',
       logoUrl: logoUrl,
@@ -1351,7 +1368,6 @@ export class DocumentService {
       values
     );
 
-    // Fetch updated mark
     const { rows } = await pool.query(
       `SELECT ${MARK_SELECT_DETAIL} ${MARK_JOIN_DETAIL} WHERE m.id = $1`,
       [markId]
@@ -1375,7 +1391,6 @@ export class DocumentService {
     const doc = await this.findById(documentId);
     if (!doc) throw new AppError(404, 'Document not found');
 
-    // Check if folder exists
     const { rows: folderRows } = await pool.query(
       `SELECT id, name FROM rhc_folders WHERE id = $1 AND is_active = true`,
       [folderId]
@@ -1384,7 +1399,6 @@ export class DocumentService {
       throw new AppError(404, 'Folder not found or inactive');
     }
 
-    // Update document with folder_id
     await pool.query(
       `UPDATE documents 
        SET folder_id = $1, updated_at = NOW()
@@ -1392,7 +1406,6 @@ export class DocumentService {
       [folderId, documentId]
     );
 
-    // Log the action
     await this.logFlow(
       pool,
       documentId,
@@ -1450,7 +1463,6 @@ export class DocumentService {
   ): Promise<DocumentPaginationResponse> {
     const offset = (page - 1) * limit;
 
-    // Check if folder exists
     const { rows: folderRows } = await pool.query(
       `SELECT id, name FROM rhc_folders WHERE id = $1 AND is_active = true`,
       [folderId]
@@ -1505,14 +1517,7 @@ export class DocumentService {
     };
   }
 
-
   // ── Bring-Up Date Reminders ──────────────────────────────────────────────
-  //
-  // Called once a day (see src/jobs/bringUpReminders.job.ts). Finds every
-  // active, not-yet-completed mark whose bring_up_date is tomorrow and that
-  // hasn't already been reminded, and notifies whoever it's assigned to —
-  // falling back to whoever marked it, if it's unassigned — one day ahead
-  // so the bring-up date doesn't get missed.
 
   static async sendBringUpDateReminders(io?: any): Promise<number> {
     const { rows } = await pool.query(

@@ -1519,25 +1519,54 @@ export class DocumentService {
 
   // ── Bring-Up Date Reminders ──────────────────────────────────────────────
 
-  static async sendBringUpDateReminders(io?: any): Promise<number> {
-    const { rows } = await pool.query(
-      `SELECT
-         m.id AS mark_id,
-         m.document_id,
-         m.assigned_to,
-         m.marked_by,
-         m.bring_up_date,
-         m.instructions,
-         d.title AS document_title,
-         d.reference_no
-       FROM document_marks m
-       JOIN documents d ON d.id = m.document_id
-       WHERE m.is_active = true
-         AND m.completed_at IS NULL
-         AND m.bring_up_reminder_sent_at IS NULL
-         AND m.bring_up_date = (CURRENT_DATE + INTERVAL '1 day')::date`
+  // ── Bring-Up Date Reminders ──────────────────────────────────────────────
+
+  static async sendBringUpDateReminders(io?: any): Promise<{ dueToday: number; dueTomorrow: number }> {
+    const [dueTodayResult, dueTomorrowResult] = await Promise.all([
+      pool.query(
+        `SELECT
+           m.id AS mark_id, m.document_id, m.assigned_to, m.marked_by,
+           m.bring_up_date, m.instructions,
+           d.title AS document_title, d.reference_no
+         FROM document_marks m
+         JOIN documents d ON d.id = m.document_id
+         WHERE m.is_active = true
+           AND m.completed_at IS NULL
+           AND m.bring_up_due_reminder_sent_at IS NULL
+           AND m.bring_up_date = CURRENT_DATE`
+      ),
+      pool.query(
+        `SELECT
+           m.id AS mark_id, m.document_id, m.assigned_to, m.marked_by,
+           m.bring_up_date, m.instructions,
+           d.title AS document_title, d.reference_no
+         FROM document_marks m
+         JOIN documents d ON d.id = m.document_id
+         WHERE m.is_active = true
+           AND m.completed_at IS NULL
+           AND m.bring_up_reminder_sent_at IS NULL
+           AND m.bring_up_date = (CURRENT_DATE + INTERVAL '1 day')::date`
+      ),
+    ]);
+
+    const dueToday = await this.dispatchBringUpNotifications(
+      dueTodayResult.rows, 'due_today', 'bring_up_due_reminder_sent_at', io
+    );
+    const dueTomorrow = await this.dispatchBringUpNotifications(
+      dueTomorrowResult.rows, 'due_tomorrow', 'bring_up_reminder_sent_at', io
     );
 
+    return { dueToday, dueTomorrow };
+  }
+
+  // ── Bring-Up Notification Dispatch (helper) ───────────────────────────────
+
+  private static async dispatchBringUpNotifications(
+    rows: any[],
+    kind: 'due_today' | 'due_tomorrow',
+    sentColumn: 'bring_up_reminder_sent_at' | 'bring_up_due_reminder_sent_at',
+    io?: any
+  ): Promise<number> {
     if (!rows.length) return 0;
 
     for (const row of rows) {
@@ -1550,29 +1579,34 @@ export class DocumentService {
         year: 'numeric',
       });
 
+      const titlePrefix = kind === 'due_today' ? 'Bring-up due today' : 'Bring-up reminder';
+      const messageSuffix = kind === 'due_today'
+        ? `is due for bring-up today (${dueDate}).`
+        : `is due for bring-up tomorrow (${dueDate}).`;
+
       try {
         await NotificationsService.createNotification(
           {
             user_id: recipientId,
             type_name: 'bring_up_reminder',
-            title: `Bring-up reminder: ${row.document_title}`,
-            message: `"${row.document_title}"${row.reference_no ? ` (${row.reference_no})` : ''} is due for bring-up tomorrow (${dueDate}).${row.instructions ? `\n\nInstructions: ${row.instructions}` : ''}`,
+            title: `${titlePrefix}: ${row.document_title}`,
+            message: `"${row.document_title}"${row.reference_no ? ` (${row.reference_no})` : ''} ${messageSuffix}${row.instructions ? `\n\nInstructions: ${row.instructions}` : ''}`,
             icon: 'Clock',
-            color: '#c9a84c',
+            color: kind === 'due_today' ? '#b91c1c' : '#c9a84c',
             link: `/documents/${row.document_id}`,
             priority: 'high',
-            metadata: { document_id: row.document_id, mark_id: row.mark_id, type: 'bring_up_reminder' },
+            metadata: { document_id: row.document_id, mark_id: row.mark_id, type: 'bring_up_reminder', kind },
             send_email: true,
           },
           io
         );
 
         await pool.query(
-          `UPDATE document_marks SET bring_up_reminder_sent_at = NOW() WHERE id = $1`,
+          `UPDATE document_marks SET ${sentColumn} = NOW() WHERE id = $1`,
           [row.mark_id]
         );
       } catch (error) {
-        console.error(`[BringUpReminder] Failed to notify user ${recipientId} for mark ${row.mark_id}:`, error);
+        console.error(`[BringUpReminder:${kind}] Failed to notify user ${recipientId} for mark ${row.mark_id}:`, error);
       }
     }
 

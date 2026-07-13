@@ -8,14 +8,14 @@ const router = Router();
 router.use(protect);
 
 // ── Read ──────────────────────────────────────────────────────────────────────
-router.get('/', requireRole('super_admin', 'dept_head'), ticketController.getAll);
-router.get('/:id', requireRole('super_admin', 'dept_head'), ticketController.getById);
+router.get('/', requireRole('super_admin', 'dept_head', 'staff'), ticketController.getAll);
+router.get('/:id', requireRole('super_admin', 'dept_head', 'staff'), ticketController.getById);
 
 // ── Create ────────────────────────────────────────────────────────────────────
-router.post('/', requireRole('dept_head'), ticketController.create);
+router.post('/', requireRole('dept_head', 'staff'), ticketController.create);
 
 // ── Update ────────────────────────────────────────────────────────────────────
-router.put('/:id', requireRole('dept_head'), ticketController.update);
+router.put('/:id', requireRole('dept_head', 'staff'), ticketController.update);
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
 router.post('/:id/submit', ticketController.submitForApproval);

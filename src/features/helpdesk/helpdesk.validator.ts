@@ -4,12 +4,13 @@ import { z } from 'zod';
 
 const statusEnum = z.enum(['Pending', 'Signed', 'Rejected', 'In Progress', 'Completed', 'Active', 'Resolved', 'Cancelled']);
 const utilityTypeEnum = z.enum(['Electricity', 'Water', 'Internet', 'Fuel', 'Other']);
-const requestModeEnum = z.enum(['Letter', 'Email', 'Verbal', 'Other']);
 const visaTypeEnum = z.enum(['Official', 'Conference', 'Personal', 'Other']);
+const paymentStatusEnum = z.enum(['Pending', 'In Process', 'Paid', 'Payment NA']);
 
 const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
-// DSA Detail schema
+// ─── DSA Detail Schema ──────────────────────────────────────────────────────
+
 const dsaDetailSchema = z.object({
     judge_name: z.string().min(1).max(100),
     pj_number: z.string().min(1).max(50),
@@ -17,6 +18,14 @@ const dsaDetailSchema = z.object({
     days: z.number().int().min(1),
     notes: z.string().optional(),
     designation: z.string().optional(),
+    date_of_request: dateStringSchema.optional(),
+    date_of_ticket_facilitation: dateStringSchema.optional(),
+    date_of_conference_facilitation: dateStringSchema.optional(),
+    travel_date: dateStringSchema.optional(),
+    travel_back: dateStringSchema.optional(),
+    requisition_number: z.string().max(50).optional(),
+    requisition_initiation_date: dateStringSchema.optional(),
+    payment_status: paymentStatusEnum.optional(),
 });
 
 // ─── Judge Utilities ──────────────────────────────────────────────────────────
@@ -183,6 +192,19 @@ export const updatePartHeardSchema = z.object({
     }).strict(),
 });
 
+// ─── Service Weeks ────────────────────────────────────────────────────────────
+
+export const createServiceWeekSchema = z.object({
+    body: z.object({
+        name: z.string().min(1).max(200),
+        week_number: z.string().min(1).max(20),
+        year: z.string().min(4).max(4),
+        start_date: dateStringSchema,
+        end_date: dateStringSchema,
+        dsa_details: z.array(dsaDetailSchema).optional(),
+    }).strict(),
+});
+
 // ─── Medical Expense Claims ──────────────────────────────────────────────────
 
 export const createMedicalClaimSchema = z.object({
@@ -242,18 +264,24 @@ export const createProtocolEventSchema = z.object({
     }).strict(),
 });
 
-// ─── Service Week ────────────────────────────────────────────────────────────
+// ─── Report Filters ──────────────────────────────────────────────────────────
 
-export const createServiceWeekSchema = z.object({
-    body: z.object({
-        name: z.string().min(1).max(200),
-        week_number: z.string().min(1).max(20),
-        year: z.string().min(4).max(4),
-        start_date: dateStringSchema,
-        end_date: dateStringSchema,
-        dsa_details: z.array(dsaDetailSchema).optional(),
+const reportModuleEnum = z.enum(['circuit', 'special_bench', 'part_heard', 'service_week', 'other_payment']);
+
+export const dsaReportFiltersSchema = z.object({
+    query: z.object({
+        modules: z.string().optional(), // comma-separated, split in controller
+        judge_name: z.string().optional(),
+        payment_status: paymentStatusEnum.optional(),
+        travel_start: dateStringSchema.optional(),
+        travel_end: dateStringSchema.optional(),
+        limit: z.string().regex(/^\d+$/).optional().transform(Number),
+        offset: z.string().regex(/^\d+$/).optional().transform(Number),
     }).strict(),
 });
+
+export type DSAReportFilters = z.infer<typeof dsaReportFiltersSchema>['query'];
+export { reportModuleEnum };
 
 // ─── Filters ─────────────────────────────────────────────────────────────────
 
@@ -297,3 +325,4 @@ export type CreateProtocolEventInput = z.infer<typeof createProtocolEventSchema>
 export type HelpDeskFilters = z.infer<typeof helpDeskFiltersSchema>['query'];
 export type UpdateCircuitDSADetailsInput = z.infer<typeof updateCircuitDSASchema>['body'];
 export type UpdateOtherPaymentDSADetailsInput = z.infer<typeof updateOtherPaymentDSASchema>['body'];
+export type CreateServiceWeekInput = z.infer<typeof createServiceWeekSchema>['body'];

@@ -24,7 +24,11 @@ import {
     createServiceWeekSchema,
     createOtherPaymentSchema,
     updateOtherPaymentDSASchema,
+    dsaReportFiltersSchema,
+    reportModuleEnum,
 } from './helpdesk.validator';
+import type { ReportModule, DSAReportFilters } from './helpdesk.types';
+import { generateDSAReportExcel } from './helpdesk-report.excel';
 
 export const helpDeskController = {
 
@@ -756,5 +760,70 @@ export const helpDeskController = {
         }
         await HelpDeskService.deleteOtherPayment(result.data.params.id);
         return sendSuccess(res, null, 'Other payment deleted');
+    }),
+
+    // ─── DSA Report ──────────────────────────────────────────────────────────
+
+    getDSAReport: asyncHandler(async (req: Request, res: Response) => {
+        const result = dsaReportFiltersSchema.safeParse({ query: req.query });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid report filters');
+        }
+
+        // Build filters object with proper types
+        const filters: DSAReportFilters = {};
+        const query = result.data.query;
+
+        if (query.limit !== undefined) filters.limit = query.limit;
+        if (query.offset !== undefined) filters.offset = query.offset;
+        if (query.judge_name) filters.judge_name = query.judge_name;
+        if (query.payment_status) filters.payment_status = query.payment_status;
+        if (query.travel_start) filters.travel_start = query.travel_start;
+        if (query.travel_end) filters.travel_end = query.travel_end;
+
+        // Parse modules from comma-separated string if provided
+        if (query.modules) {
+            const moduleList = query.modules.split(',').filter(
+                (m) => ['circuit', 'special_bench', 'part_heard', 'service_week', 'other_payment'].includes(m)
+            ) as ReportModule[];
+            if (moduleList.length > 0) {
+                filters.modules = moduleList;
+            }
+        }
+
+        const report = await HelpDeskService.getDSAReport(filters);
+        return sendSuccess(res, report, 'DSA report retrieved');
+    }),
+
+    exportDSAReport: asyncHandler(async (req: Request, res: Response) => {
+        const result = dsaReportFiltersSchema.safeParse({ query: req.query });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid report filters');
+        }
+
+        const filters: DSAReportFilters = {};
+        const query = result.data.query;
+
+        if (query.judge_name) filters.judge_name = query.judge_name;
+        if (query.payment_status) filters.payment_status = query.payment_status;
+        if (query.travel_start) filters.travel_start = query.travel_start;
+        if (query.travel_end) filters.travel_end = query.travel_end;
+
+        if (query.modules) {
+            const moduleList = query.modules.split(',').filter(
+                (m) => ['circuit', 'special_bench', 'part_heard', 'service_week', 'other_payment'].includes(m)
+            ) as ReportModule[];
+            if (moduleList.length > 0) {
+                filters.modules = moduleList;
+            }
+        }
+        // Note: no limit/offset here — export should return the full filtered set, not a page
+
+        const report = await HelpDeskService.getDSAReport(filters);
+        const buffer = await generateDSAReportExcel(report);
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="dsa-report-${Date.now()}.xlsx"`);
+        return res.send(buffer);
     }),
 };

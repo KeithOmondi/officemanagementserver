@@ -2,6 +2,8 @@ export type UtilityType = 'Electricity' | 'Water' | 'Internet' | 'Fuel' | 'Other
 export type RequestMode = 'Letter' | 'Email' | 'Verbal' | 'Other';
 export type VisaType = 'Official' | 'Conference' | 'Personal' | 'Other';
 export type Status = 'Pending' | 'Signed' | 'Rejected' | 'In Progress' | 'Completed' | 'Active' | 'Resolved' | 'Cancelled';
+export type DSAPaymentStatus = 'Pending' | 'In Process' | 'Paid' | 'Payment NA';
+export type ReportModule = 'circuit' | 'special_bench' | 'part_heard' | 'service_week' | 'other_payment';
 
 // ─── Judge Utilities ──────────────────────────────────────────────────────────
 
@@ -131,6 +133,14 @@ export interface DSADetail {
     total: number;
     notes: string | null;
     designation: string | null;
+    date_of_request: string | null;
+    date_of_ticket_facilitation: string | null;
+    date_of_conference_facilitation: string | null;
+    travel_date: string | null;
+    travel_back: string | null;
+    requisition_number: string | null;
+    requisition_initiation_date: string | null;
+    payment_status: DSAPaymentStatus;
 }
 
 export type DSADetailInput = {
@@ -140,6 +150,14 @@ export type DSADetailInput = {
     days: number;
     notes?: string;
     designation?: string;
+    date_of_request?: string;
+    date_of_ticket_facilitation?: string;
+    date_of_conference_facilitation?: string;
+    travel_date?: string;
+    travel_back?: string;
+    requisition_number?: string;
+    requisition_initiation_date?: string;
+    payment_status?: DSAPaymentStatus;
 };
 
 // ─── Circuits ────────────────────────────────────────────────────────────────
@@ -402,6 +420,40 @@ export interface CreateProtocolEventInput {
     notes?: string;
     dsa_required?: boolean;
     dsa_details?: DSADetailInput[];
+}
+
+// ─── Reports ──────────────────────────────────────────────────────────────────
+
+export interface DSAReportRow {
+    module: ReportModule;
+    parent_id: string;
+    dsa_detail_id: string;
+    activity: string;
+    parent_status: Status;
+    judge_name: string;
+    pj_number: string;
+    designation: string | null;
+    date_of_request: string | null;
+    date_of_ticket_facilitation: string | null;
+    date_of_conference_facilitation: string | null;
+    travel_date: string | null;
+    travel_back: string | null;
+    dsa_per_day: number;
+    days: number;
+    total: number;
+    requisition_number: string | null;
+    requisition_initiation_date: string | null;
+    payment_status: DSAPaymentStatus;
+}
+
+export interface DSAReportFilters {
+    modules?: ReportModule[];
+    judge_name?: string;
+    payment_status?: DSAPaymentStatus;
+    travel_start?: string;
+    travel_end?: string;
+    limit?: number;
+    offset?: number;
 }
 
 // ─── Audit & Stats ──────────────────────────────────────────────────────────

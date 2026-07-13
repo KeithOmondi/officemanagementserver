@@ -11,6 +11,9 @@ router.use(protect);
 router.get('/stats', helpDeskController.getStats);
 router.get('/audit', helpDeskController.getAuditLog);
 
+// ─── Reports ─────────────────────────────────────────────────────────────────
+router.get('/reports/dsa', helpDeskController.getDSAReport);
+
 // ─── Judge Utilities ─────────────────────────────────────────────────────────
 router.get('/utilities', helpDeskController.getAllUtilities);
 router.get('/utilities/:id', helpDeskController.getUtilityById);

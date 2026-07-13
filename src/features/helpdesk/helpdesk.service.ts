@@ -34,6 +34,10 @@ import type {
     CreateOtherPaymentInput,
     UpdateBenchInput,
     UpdatePartHeardInput,
+    DSAReportRow,
+    DSAReportFilters,
+    ReportModule,
+    DSAPaymentStatus,
 } from './helpdesk.types';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -100,13 +104,27 @@ const PROTOCOL_SELECT = `
 `;
 
 const DSA_DETAIL_SELECT = `
-    id, judge_name, pj_number, designation, dsa_per_day, days, total, notes
+    id, judge_name, pj_number, designation, dsa_per_day::float8 AS dsa_per_day,
+    days, total::float8 AS total, notes,
+    date_of_request, date_of_ticket_facilitation, date_of_conference_facilitation,
+    travel_date, travel_back, requisition_number, requisition_initiation_date, payment_status
 `;
 
 const OTHER_PAYMENT_SELECT = `
     id, name, description, start_date, end_date, total_dsa, status,
     created_by, created_at, updated_at
 `;
+
+const REPORT_MODULE_CONFIG: Record<
+    ReportModule,
+    { parentTable: string; dsaTable: string; fk: string; activityCol: string }
+> = {
+    circuit: { parentTable: 'circuits', dsaTable: 'circuit_dsa_details', fk: 'circuit_id', activityCol: 'name' },
+    special_bench: { parentTable: 'special_benches', dsaTable: 'special_bench_dsa_details', fk: 'bench_id', activityCol: 'name' },
+    part_heard: { parentTable: 'part_heards', dsaTable: 'part_heard_dsa_details', fk: 'part_heard_id', activityCol: 'case_reference' },
+    service_week: { parentTable: 'service_weeks', dsaTable: 'service_week_dsa_details', fk: 'service_week_id', activityCol: 'name' },
+    other_payment: { parentTable: 'other_payments', dsaTable: 'other_payment_dsa_details', fk: 'other_payment_id', activityCol: 'name' },
+};
 
 // ─── Service Class ────────────────────────────────────────────────────────────
 
@@ -515,6 +533,53 @@ export class HelpDeskService {
         }
     }
 
+    // ─── DSA Helper: Create/Update DSA Details ──────────────────────────────
+
+    private static async upsertDSADetails(
+        client: any,
+        table: string,
+        foreignKey: string,
+        parentId: string,
+        details: DSADetailInput[]
+    ): Promise<void> {
+        // Soft delete existing
+        await client.query(
+            `UPDATE ${table} SET is_active = false WHERE ${foreignKey} = $1`,
+            [parentId]
+        );
+
+        if (details && details.length > 0) {
+            for (const detail of details) {
+                const total = detail.dsa_per_day * detail.days;
+                await client.query(
+                    `INSERT INTO ${table} (
+                        ${foreignKey}, judge_name, pj_number, designation, dsa_per_day, days, total, notes,
+                        date_of_request, date_of_ticket_facilitation, date_of_conference_facilitation,
+                        travel_date, travel_back, requisition_number, requisition_initiation_date, payment_status
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+                    [
+                        parentId,
+                        detail.judge_name.trim(),
+                        detail.pj_number.trim(),
+                        detail.designation || null,
+                        detail.dsa_per_day,
+                        detail.days,
+                        total,
+                        detail.notes || null,
+                        detail.date_of_request || null,
+                        detail.date_of_ticket_facilitation || null,
+                        detail.date_of_conference_facilitation || null,
+                        detail.travel_date || null,
+                        detail.travel_back || null,
+                        detail.requisition_number || null,
+                        detail.requisition_initiation_date || null,
+                        detail.payment_status || 'Pending',
+                    ]
+                );
+            }
+        }
+    }
+
     // ─── Circuits ────────────────────────────────────────────────────────────
 
     static async findAllCircuits(filters: HelpDeskFilters = {}): Promise<Circuit[]> {
@@ -599,24 +664,13 @@ export class HelpDeskService {
             const circuitId = rows[0].id;
 
             if (input.dsa_details && input.dsa_details.length > 0) {
-                for (const detail of input.dsa_details) {
-                    const total = detail.dsa_per_day * detail.days;
-                    await client.query(
-                        `INSERT INTO circuit_dsa_details (
-                            circuit_id, judge_name, pj_number, designation, dsa_per_day, days, total, notes
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-                        [
-                            circuitId,
-                            detail.judge_name.trim(),
-                            detail.pj_number.trim(),
-                            detail.designation || null,
-                            detail.dsa_per_day,
-                            detail.days,
-                            total,
-                            detail.notes || null,
-                        ]
-                    );
-                }
+                await this.upsertDSADetails(
+                    client,
+                    'circuit_dsa_details',
+                    'circuit_id',
+                    circuitId,
+                    input.dsa_details
+                );
             }
 
             await client.query('COMMIT');
@@ -666,31 +720,13 @@ export class HelpDeskService {
                 throw new AppError(404, 'Circuit not found');
             }
 
-            await client.query(
-                `UPDATE circuit_dsa_details SET is_active = false WHERE circuit_id = $1`,
-                [circuitId]
+            await this.upsertDSADetails(
+                client,
+                'circuit_dsa_details',
+                'circuit_id',
+                circuitId,
+                dsaDetails
             );
-
-            if (dsaDetails && dsaDetails.length > 0) {
-                for (const detail of dsaDetails) {
-                    const total = detail.dsa_per_day * detail.days;
-                    await client.query(
-                        `INSERT INTO circuit_dsa_details (
-                            circuit_id, judge_name, pj_number, designation, dsa_per_day, days, total, notes
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-                        [
-                            circuitId,
-                            detail.judge_name.trim(),
-                            detail.pj_number.trim(),
-                            detail.designation || null,
-                            detail.dsa_per_day,
-                            detail.days,
-                            total,
-                            detail.notes || null,
-                        ]
-                    );
-                }
-            }
 
             await client.query('COMMIT');
 
@@ -816,24 +852,13 @@ export class HelpDeskService {
             const benchId = rows[0].id;
 
             if (input.dsa_details && input.dsa_details.length > 0) {
-                for (const detail of input.dsa_details) {
-                    const total = detail.dsa_per_day * detail.days;
-                    await client.query(
-                        `INSERT INTO special_bench_dsa_details (
-                            bench_id, judge_name, pj_number, designation, dsa_per_day, days, total, notes
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-                        [
-                            benchId,
-                            detail.judge_name.trim(),
-                            detail.pj_number.trim(),
-                            detail.designation || null,
-                            detail.dsa_per_day,
-                            detail.days,
-                            total,
-                            detail.notes || null,
-                        ]
-                    );
-                }
+                await this.upsertDSADetails(
+                    client,
+                    'special_bench_dsa_details',
+                    'bench_id',
+                    benchId,
+                    input.dsa_details
+                );
             }
 
             await client.query('COMMIT');
@@ -894,33 +919,13 @@ export class HelpDeskService {
 
             // Update DSA details if provided
             if (input.dsa_details !== undefined) {
-                // Soft delete existing DSA details
-                await client.query(
-                    `UPDATE special_bench_dsa_details SET is_active = false WHERE bench_id = $1`,
-                    [id]
+                await this.upsertDSADetails(
+                    client,
+                    'special_bench_dsa_details',
+                    'bench_id',
+                    id,
+                    input.dsa_details
                 );
-
-                // Insert new DSA details
-                if (input.dsa_details.length > 0) {
-                    for (const detail of input.dsa_details) {
-                        const total = detail.dsa_per_day * detail.days;
-                        await client.query(
-                            `INSERT INTO special_bench_dsa_details (
-                                bench_id, judge_name, pj_number, designation, dsa_per_day, days, total, notes
-                            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-                            [
-                                id,
-                                detail.judge_name.trim(),
-                                detail.pj_number.trim(),
-                                detail.designation || null,
-                                detail.dsa_per_day,
-                                detail.days,
-                                total,
-                                detail.notes || null,
-                            ]
-                        );
-                    }
-                }
             }
 
             await client.query('COMMIT');
@@ -1066,24 +1071,13 @@ export class HelpDeskService {
             const phId = rows[0].id;
 
             if (input.dsa_details && input.dsa_details.length > 0) {
-                for (const detail of input.dsa_details) {
-                    const total = detail.dsa_per_day * detail.days;
-                    await client.query(
-                        `INSERT INTO part_heard_dsa_details (
-                            part_heard_id, judge_name, pj_number, designation, dsa_per_day, days, total, notes
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-                        [
-                            phId,
-                            detail.judge_name.trim(),
-                            detail.pj_number.trim(),
-                            detail.designation || null,
-                            detail.dsa_per_day,
-                            detail.days,
-                            total,
-                            detail.notes || null,
-                        ]
-                    );
-                }
+                await this.upsertDSADetails(
+                    client,
+                    'part_heard_dsa_details',
+                    'part_heard_id',
+                    phId,
+                    input.dsa_details
+                );
             }
 
             await client.query('COMMIT');
@@ -1144,33 +1138,13 @@ export class HelpDeskService {
 
             // Update DSA details if provided
             if (input.dsa_details !== undefined) {
-                // Soft delete existing DSA details
-                await client.query(
-                    `UPDATE part_heard_dsa_details SET is_active = false WHERE part_heard_id = $1`,
-                    [id]
+                await this.upsertDSADetails(
+                    client,
+                    'part_heard_dsa_details',
+                    'part_heard_id',
+                    id,
+                    input.dsa_details
                 );
-
-                // Insert new DSA details
-                if (input.dsa_details.length > 0) {
-                    for (const detail of input.dsa_details) {
-                        const total = detail.dsa_per_day * detail.days;
-                        await client.query(
-                            `INSERT INTO part_heard_dsa_details (
-                                part_heard_id, judge_name, pj_number, designation, dsa_per_day, days, total, notes
-                            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-                            [
-                                id,
-                                detail.judge_name.trim(),
-                                detail.pj_number.trim(),
-                                detail.designation || null,
-                                detail.dsa_per_day,
-                                detail.days,
-                                total,
-                                detail.notes || null,
-                            ]
-                        );
-                    }
-                }
             }
 
             await client.query('COMMIT');
@@ -1317,24 +1291,13 @@ export class HelpDeskService {
             const weekId = rows[0].id;
 
             if (input.dsa_details && input.dsa_details.length > 0) {
-                for (const detail of input.dsa_details) {
-                    const total = detail.dsa_per_day * detail.days;
-                    await client.query(
-                        `INSERT INTO service_week_dsa_details (
-                            service_week_id, judge_name, pj_number, designation, dsa_per_day, days, total, notes
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-                        [
-                            weekId,
-                            detail.judge_name.trim(),
-                            detail.pj_number.trim(),
-                            detail.designation || null,
-                            detail.dsa_per_day,
-                            detail.days,
-                            total,
-                            detail.notes || null,
-                        ]
-                    );
-                }
+                await this.upsertDSADetails(
+                    client,
+                    'service_week_dsa_details',
+                    'service_week_id',
+                    weekId,
+                    input.dsa_details
+                );
             }
 
             await client.query('COMMIT');
@@ -1799,24 +1762,13 @@ export class HelpDeskService {
             const eventId = rows[0].id;
 
             if (input.dsa_details && input.dsa_details.length > 0) {
-                for (const detail of input.dsa_details) {
-                    const total = detail.dsa_per_day * detail.days;
-                    await client.query(
-                        `INSERT INTO protocol_dsa_details (
-                            protocol_event_id, judge_name, pj_number, designation, dsa_per_day, days, total, notes
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-                        [
-                            eventId,
-                            detail.judge_name.trim(),
-                            detail.pj_number.trim(),
-                            detail.designation || null,
-                            detail.dsa_per_day,
-                            detail.days,
-                            total,
-                            detail.notes || null,
-                        ]
-                    );
-                }
+                await this.upsertDSADetails(
+                    client,
+                    'protocol_dsa_details',
+                    'protocol_event_id',
+                    eventId,
+                    input.dsa_details
+                );
             }
 
             await client.query('COMMIT');
@@ -1967,24 +1919,13 @@ export class HelpDeskService {
             const paymentId = rows[0].id;
 
             if (input.dsa_details && input.dsa_details.length > 0) {
-                for (const detail of input.dsa_details) {
-                    const total = detail.dsa_per_day * detail.days;
-                    await client.query(
-                        `INSERT INTO other_payment_dsa_details (
-                            other_payment_id, judge_name, pj_number, designation, dsa_per_day, days, total, notes
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-                        [
-                            paymentId,
-                            detail.judge_name.trim(),
-                            detail.pj_number.trim(),
-                            detail.designation || null,
-                            detail.dsa_per_day,
-                            detail.days,
-                            total,
-                            detail.notes || null,
-                        ]
-                    );
-                }
+                await this.upsertDSADetails(
+                    client,
+                    'other_payment_dsa_details',
+                    'other_payment_id',
+                    paymentId,
+                    input.dsa_details
+                );
             }
 
             await client.query('COMMIT');
@@ -2034,31 +1975,13 @@ export class HelpDeskService {
                 throw new AppError(404, 'Other payment not found');
             }
 
-            await client.query(
-                `UPDATE other_payment_dsa_details SET is_active = false WHERE other_payment_id = $1`,
-                [paymentId]
+            await this.upsertDSADetails(
+                client,
+                'other_payment_dsa_details',
+                'other_payment_id',
+                paymentId,
+                dsaDetails
             );
-
-            if (dsaDetails && dsaDetails.length > 0) {
-                for (const detail of dsaDetails) {
-                    const total = detail.dsa_per_day * detail.days;
-                    await client.query(
-                        `INSERT INTO other_payment_dsa_details (
-                            other_payment_id, judge_name, pj_number, designation, dsa_per_day, days, total, notes
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-                        [
-                            paymentId,
-                            detail.judge_name.trim(),
-                            detail.pj_number.trim(),
-                            detail.designation || null,
-                            detail.dsa_per_day,
-                            detail.days,
-                            total,
-                            detail.notes || null,
-                        ]
-                    );
-                }
-            }
 
             await client.query('COMMIT');
 
@@ -2102,5 +2025,73 @@ export class HelpDeskService {
         } finally {
             client.release();
         }
+    }
+
+    // ─── DSA Report ──────────────────────────────────────────────────────────
+
+    static async getDSAReport(filters: DSAReportFilters = {}): Promise<DSAReportRow[]> {
+        const modules = filters.modules
+            ? (filters.modules.filter((m) => m in REPORT_MODULE_CONFIG) as ReportModule[])
+            : (Object.keys(REPORT_MODULE_CONFIG) as ReportModule[]);
+
+        const allRows: DSAReportRow[] = [];
+
+        for (const moduleKey of modules) {
+            const { parentTable, dsaTable, fk, activityCol } = REPORT_MODULE_CONFIG[moduleKey];
+
+            let query = `
+                SELECT
+                    '${moduleKey}' AS module,
+                    p.id AS parent_id,
+                    d.id AS dsa_detail_id,
+                    p.${activityCol} AS activity,
+                    p.status AS parent_status,
+                    d.judge_name, d.pj_number, d.designation,
+                    d.date_of_request, d.date_of_ticket_facilitation, d.date_of_conference_facilitation,
+                    d.travel_date, d.travel_back,
+                    d.dsa_per_day::float8 AS dsa_per_day, d.days, d.total::float8 AS total,
+                    d.requisition_number, d.requisition_initiation_date, d.payment_status
+                FROM ${dsaTable} d
+                JOIN ${parentTable} p ON p.id = d.${fk}
+                WHERE d.is_active = true AND p.is_active = true
+            `;
+            const params: unknown[] = [];
+            let paramCount = 1;
+
+            if (filters.judge_name) {
+                query += ` AND d.judge_name ILIKE $${paramCount}`;
+                params.push(`%${filters.judge_name}%`);
+                paramCount++;
+            }
+            if (filters.payment_status) {
+                query += ` AND d.payment_status = $${paramCount}`;
+                params.push(filters.payment_status);
+                paramCount++;
+            }
+            if (filters.travel_start) {
+                query += ` AND d.travel_date >= $${paramCount}`;
+                params.push(filters.travel_start);
+                paramCount++;
+            }
+            if (filters.travel_end) {
+                query += ` AND d.travel_date <= $${paramCount}`;
+                params.push(filters.travel_end);
+                paramCount++;
+            }
+
+            query += ` ORDER BY p.created_at DESC, d.created_at ASC`;
+
+            const { rows } = await pool.query(query, params);
+            allRows.push(...rows);
+        }
+
+        // Global pagination applied after merging, since each module is queried separately
+        if (filters.offset !== undefined && filters.offset > 0) {
+            return allRows.slice(filters.offset, filters.limit ? filters.offset + filters.limit : undefined);
+        }
+        if (filters.limit !== undefined && filters.limit > 0) {
+            return allRows.slice(0, filters.limit);
+        }
+        return allRows;
     }
 }

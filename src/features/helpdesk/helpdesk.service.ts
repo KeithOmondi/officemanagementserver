@@ -92,7 +92,7 @@ const GENERAL_REQUEST_SELECT = `
 `;
 
 const VISA_SELECT = `
-    id, s_no, name, destination_country, date_of_travel, date_of_return,
+    id, s_no, judge_name, destination_country, date_of_travel, date_of_return,
     visa_type, purpose_of_travel, remarks, status, notes,
     created_by, created_at, updated_at
 `;
@@ -1560,122 +1560,128 @@ export class HelpDeskService {
 
     // ─── Visa Support ────────────────────────────────────────────────────────
 
-    static async findAllVisaRequests(filters: HelpDeskFilters = {}): Promise<VisaRequest[]> {
-        let query = `SELECT ${VISA_SELECT} FROM visa_requests WHERE is_active = true`;
-        const params: unknown[] = [];
-        let paramCount = 1;
 
-        if (filters.search) {
-            query += ` AND (name ILIKE $${paramCount} OR destination_country ILIKE $${paramCount})`;
-            params.push(`%${filters.search}%`);
-            paramCount++;
-        }
-        if (filters.status) {
-            query += ` AND status = $${paramCount}`;
-            params.push(filters.status);
-            paramCount++;
-        }
+static async findAllVisaRequests(filters: HelpDeskFilters = {}): Promise<VisaRequest[]> {
+    let query = `SELECT ${VISA_SELECT} FROM visa_requests WHERE is_active = true`;
+    const params: unknown[] = [];
+    let paramCount = 1;
 
-        query += ` ORDER BY created_at DESC`;
-        if (filters.limit) {
-            query += ` LIMIT $${paramCount}`;
-            params.push(filters.limit);
-            paramCount++;
-        }
-        if (filters.offset) {
-            query += ` OFFSET $${paramCount}`;
-            params.push(filters.offset);
-        }
-
-        const { rows } = await pool.query(query, params);
-
-        for (const visa of rows) {
-            const { rows: docRows } = await pool.query(
-                `SELECT * FROM visa_documents WHERE visa_request_id = $1 AND is_active = true`,
-                [visa.id]
-            );
-            visa.documents = docRows;
-        }
-
-        return rows;
+    if (filters.search) {
+        query += ` AND (judge_name ILIKE $${paramCount} OR destination_country ILIKE $${paramCount})`;
+        params.push(`%${filters.search}%`);
+        paramCount++;
+    }
+    if (filters.status) {
+        query += ` AND status = $${paramCount}`;
+        params.push(filters.status);
+        paramCount++;
+    }
+    if (filters.judge_name) {
+        query += ` AND judge_name ILIKE $${paramCount}`;
+        params.push(`%${filters.judge_name}%`);
+        paramCount++;
     }
 
-    static async findVisaRequestById(id: string): Promise<VisaRequest | null> {
-        const { rows } = await pool.query(
-            `SELECT ${VISA_SELECT} FROM visa_requests WHERE id = $1 AND is_active = true`,
-            [id]
-        );
+    query += ` ORDER BY created_at DESC`;
+    if (filters.limit) {
+        query += ` LIMIT $${paramCount}`;
+        params.push(filters.limit);
+        paramCount++;
+    }
+    if (filters.offset) {
+        query += ` OFFSET $${paramCount}`;
+        params.push(filters.offset);
+    }
 
-        if (rows.length === 0) return null;
+    const { rows } = await pool.query(query, params);
 
-        const visa = rows[0];
+    for (const visa of rows) {
         const { rows: docRows } = await pool.query(
             `SELECT * FROM visa_documents WHERE visa_request_id = $1 AND is_active = true`,
-            [id]
+            [visa.id]
         );
         visa.documents = docRows;
-
-        return visa;
     }
 
-    static async createVisaRequest(
-        input: CreateVisaRequestInput,
-        userId: string
-    ): Promise<VisaRequest> {
-        const { rows } = await pool.query(
-            `INSERT INTO visa_requests (
-                s_no, name, destination_country, date_of_travel, date_of_return,
-                visa_type, purpose_of_travel, remarks, notes, created_by
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            RETURNING id`,
-            [
-                input.s_no || null,
-                input.name.trim(),
-                input.destination_country.trim(),
-                input.date_of_travel || null,
-                input.date_of_return || null,
-                input.visa_type,
-                input.purpose_of_travel || null,
-                input.remarks || null,
-                input.notes || null,
-                userId,
-            ]
-        );
+    return rows;
+}
 
-        const visa = await this.findVisaRequestById(rows[0].id);
-        if (!visa) throw new AppError(500, 'Failed to create visa request');
-        return visa;
+static async findVisaRequestById(id: string): Promise<VisaRequest | null> {
+    const { rows } = await pool.query(
+        `SELECT ${VISA_SELECT} FROM visa_requests WHERE id = $1 AND is_active = true`,
+        [id]
+    );
+
+    if (rows.length === 0) return null;
+
+    const visa = rows[0];
+    const { rows: docRows } = await pool.query(
+        `SELECT * FROM visa_documents WHERE visa_request_id = $1 AND is_active = true`,
+        [id]
+    );
+    visa.documents = docRows;
+
+    return visa;
+}
+
+static async createVisaRequest(
+    input: CreateVisaRequestInput,
+    userId: string
+): Promise<VisaRequest> {
+    const { rows } = await pool.query(
+        `INSERT INTO visa_requests (
+            s_no, judge_name, request_date, destination_country, date_of_travel, date_of_return,
+            visa_type, purpose_of_travel, remarks, notes, created_by
+        ) VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, $6, $7, $8, $9, $10)
+        RETURNING id`,
+        [
+            input.s_no || null,
+            input.judge_name.trim(),
+            input.destination_country.trim(),
+            input.date_of_travel || null,
+            input.date_of_return || null,
+            input.visa_type,
+            input.purpose_of_travel || null,
+            input.remarks || null,
+            input.notes || null,
+            userId,
+        ]
+    );
+
+    const visa = await this.findVisaRequestById(rows[0].id);
+    if (!visa) throw new AppError(500, 'Failed to create visa request');
+    return visa;
+}
+
+static async updateVisaStatus(
+    id: string,
+    input: UpdateStatusInput
+): Promise<VisaRequest> {
+    const existing = await this.findVisaRequestById(id);
+    if (!existing) {
+        throw new AppError(404, 'Visa request not found');
     }
 
-    static async updateVisaStatus(
-        id: string,
-        input: UpdateStatusInput
-    ): Promise<VisaRequest> {
-        const existing = await this.findVisaRequestById(id);
-        if (!existing) {
-            throw new AppError(404, 'Visa request not found');
-        }
+    await pool.query(
+        `UPDATE visa_requests SET status = $1, notes = COALESCE($2, notes)
+         WHERE id = $3 AND is_active = true`,
+        [input.status, input.notes || null, id]
+    );
 
-        await pool.query(
-            `UPDATE visa_requests SET status = $1, notes = COALESCE($2, notes)
-             WHERE id = $3`,
-            [input.status, input.notes || null, id]
-        );
+    const updated = await this.findVisaRequestById(id);
+    if (!updated) throw new AppError(500, 'Failed to update visa status');
+    return updated;
+}
 
-        const updated = await this.findVisaRequestById(id);
-        if (!updated) throw new AppError(500, 'Failed to update visa status');
-        return updated;
+static async deleteVisaRequest(id: string): Promise<void> {
+    const { rows } = await pool.query(
+        `UPDATE visa_requests SET is_active = false WHERE id = $1 RETURNING id`,
+        [id]
+    );
+    if (rows.length === 0) {
+        throw new AppError(404, 'Visa request not found');
     }
-
-    static async deleteVisaRequest(id: string): Promise<void> {
-        const { rows } = await pool.query(
-            `UPDATE visa_requests SET is_active = false WHERE id = $1 RETURNING id`,
-            [id]
-        );
-        if (rows.length === 0) {
-            throw new AppError(404, 'Visa request not found');
-        }
-    }
+}
 
     // ─── Protocol Support ────────────────────────────────────────────────────
 

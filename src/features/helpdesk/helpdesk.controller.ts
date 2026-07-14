@@ -25,7 +25,7 @@ import {
     createOtherPaymentSchema,
     updateOtherPaymentDSASchema,
     dsaReportFiltersSchema,
-    reportModuleEnum,
+    //sreportModuleEnum,
 } from './helpdesk.validator';
 import type { ReportModule, DSAReportFilters } from './helpdesk.types';
 import { generateDSAReportExcel } from './helpdesk-report.excel';
@@ -577,60 +577,60 @@ export const helpDeskController = {
 
     // ─── Visa Support ────────────────────────────────────────────────────────
 
-    getAllVisaRequests: asyncHandler(async (req: Request, res: Response) => {
-        const result = helpDeskFiltersSchema.safeParse({ query: req.query });
-        if (!result.success) {
-            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid filters');
-        }
-        const visas = await HelpDeskService.findAllVisaRequests(result.data.query);
-        return sendSuccess(res, visas, 'Visa requests retrieved');
-    }),
+getAllVisaRequests: asyncHandler(async (req: Request, res: Response) => {
+    const result = helpDeskFiltersSchema.safeParse({ query: req.query });
+    if (!result.success) {
+        throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid filters');
+    }
+    const visas = await HelpDeskService.findAllVisaRequests(result.data.query);
+    return sendSuccess(res, visas, 'Visa requests retrieved');
+}),
 
-    getVisaRequestById: asyncHandler(async (req: Request, res: Response) => {
-        const result = idSchema.safeParse({ params: req.params });
-        if (!result.success) {
-            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
-        }
-        const visa = await HelpDeskService.findVisaRequestById(result.data.params.id);
-        if (!visa) {
-            throw new AppError(404, 'Visa request not found');
-        }
-        return sendSuccess(res, visa, 'Visa request retrieved');
-    }),
+getVisaRequestById: asyncHandler(async (req: Request, res: Response) => {
+    const result = idSchema.safeParse({ params: req.params });
+    if (!result.success) {
+        throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    }
+    const visa = await HelpDeskService.findVisaRequestById(result.data.params.id);
+    if (!visa) {
+        throw new AppError(404, 'Visa request not found');
+    }
+    return sendSuccess(res, visa, 'Visa request retrieved');
+}),
 
-    createVisaRequest: asyncHandler(async (req: Request, res: Response) => {
-        const result = createVisaRequestSchema.safeParse({ body: req.body });
-        if (!result.success) {
-            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
-        }
-        const visa = await HelpDeskService.createVisaRequest(result.data.body, req.user!.id);
-        return sendSuccess(res, visa, 'Visa request created', 201);
-    }),
+createVisaRequest: asyncHandler(async (req: Request, res: Response) => {
+    const result = createVisaRequestSchema.safeParse({ body: req.body });
+    if (!result.success) {
+        throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
+    }
+    const visa = await HelpDeskService.createVisaRequest(result.data.body, req.user!.id);
+    return sendSuccess(res, visa, 'Visa request created', 201);
+}),
 
-    updateVisaStatus: asyncHandler(async (req: Request, res: Response) => {
-        const paramsResult = idSchema.safeParse({ params: req.params });
-        if (!paramsResult.success) {
-            throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
-        }
-        const { status, notes } = req.body;
-        if (!status) {
-            throw new AppError(400, 'Status is required');
-        }
-        const visa = await HelpDeskService.updateVisaStatus(
-            paramsResult.data.params.id,
-            { status, notes }
-        );
-        return sendSuccess(res, visa, 'Visa status updated');
-    }),
+updateVisaStatus: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = idSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) {
+        throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    }
+    const { status, notes } = req.body;
+    if (!status) {
+        throw new AppError(400, 'Status is required');
+    }
+    const visa = await HelpDeskService.updateVisaStatus(
+        paramsResult.data.params.id,
+        { status, notes }
+    );
+    return sendSuccess(res, visa, 'Visa status updated');
+}),
 
-    deleteVisaRequest: asyncHandler(async (req: Request, res: Response) => {
-        const result = idSchema.safeParse({ params: req.params });
-        if (!result.success) {
-            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
-        }
-        await HelpDeskService.deleteVisaRequest(result.data.params.id);
-        return sendSuccess(res, null, 'Visa request deleted');
-    }),
+deleteVisaRequest: asyncHandler(async (req: Request, res: Response) => {
+    const result = idSchema.safeParse({ params: req.params });
+    if (!result.success) {
+        throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    }
+    await HelpDeskService.deleteVisaRequest(result.data.params.id);
+    return sendSuccess(res, null, 'Visa request deleted');
+}),
 
     // ─── Protocol Support ────────────────────────────────────────────────────
 

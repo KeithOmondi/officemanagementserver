@@ -237,7 +237,8 @@ export const createGeneralRequestSchema = z.object({
 export const createVisaRequestSchema = z.object({
     body: z.object({
         s_no: z.number().int().min(1).optional(),
-        name: z.string().min(1).max(100),
+        judge_name: z.string().min(1).max(100),
+        request_date: dateStringSchema.optional(), // Add this
         destination_country: z.string().min(1).max(100),
         date_of_travel: dateStringSchema.optional(),
         date_of_return: dateStringSchema.optional(),
@@ -320,7 +321,7 @@ export type CreatePartHeardInput = z.infer<typeof createPartHeardSchema>['body']
 export type UpdatePartHeardInput = z.infer<typeof updatePartHeardSchema>['body'];
 export type CreateMedicalClaimInput = z.infer<typeof createMedicalClaimSchema>['body'];
 export type CreateGeneralRequestInput = z.infer<typeof createGeneralRequestSchema>['body'];
-export type CreateVisaRequestInput = z.infer<typeof createVisaRequestSchema>['body'];
+export type CreateVisaRequestInput = z.infer<typeof createVisaRequestSchema>['body'];  // ✅ Now uses judge_name
 export type CreateProtocolEventInput = z.infer<typeof createProtocolEventSchema>['body'];
 export type HelpDeskFilters = z.infer<typeof helpDeskFiltersSchema>['query'];
 export type UpdateCircuitDSADetailsInput = z.infer<typeof updateCircuitDSASchema>['body'];

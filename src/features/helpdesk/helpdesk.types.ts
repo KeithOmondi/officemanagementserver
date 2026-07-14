@@ -352,10 +352,12 @@ export interface CreateGeneralRequestInput {
 
 // ─── Visa Support ────────────────────────────────────────────────────────────
 
+// ─── Visa Support ────────────────────────────────────────────────────────────
+
 export interface VisaRequest {
     id: string;
     s_no: number | null;
-    name: string;
+    judge_name: string;  // Changed from 'name'
     destination_country: string;
     date_of_travel: string | null;
     date_of_return: string | null;
@@ -380,9 +382,10 @@ export interface VisaDocument {
 
 export interface CreateVisaRequestInput {
     s_no?: number;
-    name: string;
+    judge_name: string;  // Changed from 'name'
     destination_country: string;
     date_of_travel?: string;
+    request_date?: string;
     date_of_return?: string;
     visa_type: VisaType;
     purpose_of_travel?: string;

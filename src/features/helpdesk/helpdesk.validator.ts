@@ -207,9 +207,9 @@ export const createServiceWeekSchema = z.object({
 
 // ─── Medical Expense Claims ──────────────────────────────────────────────────
 
+// s_no removed - auto-generated
 export const createMedicalClaimSchema = z.object({
     body: z.object({
-        s_no: z.number().int().min(1).optional(),
         officer_name: z.string().min(1).max(100),
         claim_amount: z.number().min(0),
         date_forwarded_dhr: dateStringSchema.optional(),
@@ -220,25 +220,28 @@ export const createMedicalClaimSchema = z.object({
 
 // ─── General Requests ────────────────────────────────────────────────────────
 
+// s_no removed - auto-generated
+// Added email and send_email for manual control
 export const createGeneralRequestSchema = z.object({
     body: z.object({
-        s_no: z.number().int().min(1).optional(),
         judge_name: z.string().min(1).max(100),
         request: z.string().min(1),
         date_received: dateStringSchema.optional(),
         officer_assigned: z.string().optional(),
         status: statusEnum.optional(),
         remarks: z.string().optional(),
+        email: z.string().email('Valid email is required for notifications').optional(),
+        send_email: z.boolean().default(false), // Manual control - dep_head decides
     }).strict(),
 });
 
 // ─── Visa Support ────────────────────────────────────────────────────────────
 
+// s_no removed - auto-generated
 export const createVisaRequestSchema = z.object({
     body: z.object({
-        s_no: z.number().int().min(1).optional(),
         judge_name: z.string().min(1).max(100),
-        request_date: dateStringSchema.optional(), // Add this
+        request_date: dateStringSchema.optional(),
         destination_country: z.string().min(1).max(100),
         date_of_travel: dateStringSchema.optional(),
         date_of_return: dateStringSchema.optional(),
@@ -249,11 +252,30 @@ export const createVisaRequestSchema = z.object({
     }).strict(),
 });
 
+// ─── Visa Document Tracking ──────────────────────────────────────────────────
+
+// Schema for marking a document as viewed
+export const markDocumentViewedSchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Document ID must be a valid UUID'),
+    }),
+});
+
+// Schema for getting document view status
+export const documentViewStatusSchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Document ID must be a valid UUID'),
+    }),
+    query: z.object({
+        include_viewers: z.string().optional().transform(val => val === 'true'),
+    }).optional(),
+});
+
 // ─── Protocol Support ─────────────────────────────────────────────────────────
 
+// s_no removed - auto-generated
 export const createProtocolEventSchema = z.object({
     body: z.object({
-        s_no: z.number().int().min(1).optional(),
         activity: z.string().min(1).max(200),
         period_from: dateStringSchema.optional(),
         period_to: dateStringSchema.optional(),
@@ -321,9 +343,11 @@ export type CreatePartHeardInput = z.infer<typeof createPartHeardSchema>['body']
 export type UpdatePartHeardInput = z.infer<typeof updatePartHeardSchema>['body'];
 export type CreateMedicalClaimInput = z.infer<typeof createMedicalClaimSchema>['body'];
 export type CreateGeneralRequestInput = z.infer<typeof createGeneralRequestSchema>['body'];
-export type CreateVisaRequestInput = z.infer<typeof createVisaRequestSchema>['body'];  // ✅ Now uses judge_name
+export type CreateVisaRequestInput = z.infer<typeof createVisaRequestSchema>['body'];
 export type CreateProtocolEventInput = z.infer<typeof createProtocolEventSchema>['body'];
 export type HelpDeskFilters = z.infer<typeof helpDeskFiltersSchema>['query'];
 export type UpdateCircuitDSADetailsInput = z.infer<typeof updateCircuitDSASchema>['body'];
 export type UpdateOtherPaymentDSADetailsInput = z.infer<typeof updateOtherPaymentDSASchema>['body'];
 export type CreateServiceWeekInput = z.infer<typeof createServiceWeekSchema>['body'];
+export type MarkDocumentViewedInput = z.infer<typeof markDocumentViewedSchema>['params'];
+export type DocumentViewStatusInput = z.infer<typeof documentViewStatusSchema>['params'];

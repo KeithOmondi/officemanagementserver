@@ -1,5 +1,6 @@
 import { pool } from '../../config/db';
 import { AppError } from '../../utils/response';
+import { sendGeneralRequestAcknowledgement } from '../../utils/sendMail';
 import type {
     JudgeUtility,
     UtilityItem,
@@ -38,6 +39,7 @@ import type {
     DSAReportFilters,
     ReportModule,
     DSAPaymentStatus,
+    DocumentView,
 } from './helpdesk.types';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -87,7 +89,7 @@ const MEDICAL_CLAIM_SELECT = `
 `;
 
 const GENERAL_REQUEST_SELECT = `
-    id, s_no, judge_name, request, date_received, officer_assigned, status, remarks,
+    id, s_no, ticket_number, judge_name, request, date_received, officer_assigned, status, remarks,
     created_by, created_at, updated_at
 `;
 
@@ -95,6 +97,10 @@ const VISA_SELECT = `
     id, s_no, judge_name, destination_country, date_of_travel, date_of_return,
     visa_type, purpose_of_travel, remarks, status, notes,
     created_by, created_at, updated_at
+`;
+
+const VISA_DOCUMENT_SELECT = `
+    id, visa_request_id, document_name, document_url, viewed_at, view_count, created_at
 `;
 
 const PROTOCOL_SELECT = `
@@ -125,6 +131,39 @@ const REPORT_MODULE_CONFIG: Record<
     service_week: { parentTable: 'service_weeks', dsaTable: 'service_week_dsa_details', fk: 'service_week_id', activityCol: 'name' },
     other_payment: { parentTable: 'other_payments', dsaTable: 'other_payment_dsa_details', fk: 'other_payment_id', activityCol: 'name' },
 };
+
+// ─── Helper Functions ─────────────────────────────────────────────────────────
+
+/**
+ * Generates a sequential serial number for a table
+ * Returns 6-digit number (e.g., 000001, 000002, etc.)
+ */
+async function generateSerialNumber(table: string): Promise<number> {
+    const { rows } = await pool.query(
+        `SELECT COALESCE(MAX(s_no), 0) + 1 as next_serial FROM ${table} WHERE is_active = true`
+    );
+    return rows[0].next_serial;
+}
+
+/**
+ * Generates a ticket number for general requests
+ * Format: GR-YYYYMMDD-XXXX (where XXXX is 4-digit sequential per day)
+ */
+async function generateTicketNumber(): Promise<string> {
+    const today = new Date();
+    const dateStr = today.getFullYear() +
+        String(today.getMonth() + 1).padStart(2, '0') +
+        String(today.getDate()).padStart(2, '0');
+    
+    const { rows } = await pool.query(
+        `SELECT COUNT(*)::int as count FROM general_requests 
+         WHERE DATE(created_at) = CURRENT_DATE AND is_active = true`
+    );
+    
+    const count = rows[0].count + 1;
+    const seq = String(count).padStart(4, '0');
+    return `GR-${dateStr}-${seq}`;
+}
 
 // ─── Service Class ────────────────────────────────────────────────────────────
 
@@ -1408,13 +1447,15 @@ export class HelpDeskService {
         input: CreateMedicalClaimInput,
         userId: string
     ): Promise<MedicalClaim> {
+        const s_no = await generateSerialNumber('medical_claims');
+
         const { rows } = await pool.query(
             `INSERT INTO medical_claims (
                 s_no, officer_name, claim_amount, date_forwarded_dhr, status, remarks, created_by
             ) VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id`,
             [
-                input.s_no || null,
+                s_no,
                 input.officer_name.trim(),
                 input.claim_amount,
                 input.date_forwarded_dhr || null,
@@ -1468,7 +1509,7 @@ export class HelpDeskService {
         let paramCount = 1;
 
         if (filters.search) {
-            query += ` AND (judge_name ILIKE $${paramCount} OR request ILIKE $${paramCount})`;
+            query += ` AND (judge_name ILIKE $${paramCount} OR request ILIKE $${paramCount} OR ticket_number ILIKE $${paramCount})`;
             params.push(`%${filters.search}%`);
             paramCount++;
         }
@@ -1505,26 +1546,61 @@ export class HelpDeskService {
         input: CreateGeneralRequestInput,
         userId: string
     ): Promise<GeneralRequest> {
-        const { rows } = await pool.query(
-            `INSERT INTO general_requests (
-                s_no, judge_name, request, date_received, officer_assigned, status, remarks, created_by
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            RETURNING id`,
-            [
-                input.s_no || null,
-                input.judge_name.trim(),
-                input.request.trim(),
-                input.date_received || null,
-                input.officer_assigned || null,
-                input.status || 'Pending',
-                input.remarks || null,
-                userId,
-            ]
-        );
+        const client = await pool.connect();
+        
+        try {
+            await client.query('BEGIN');
 
-        const request = await this.findGeneralRequestById(rows[0].id);
-        if (!request) throw new AppError(500, 'Failed to create general request');
-        return request;
+            const s_no = await generateSerialNumber('general_requests');
+            const ticketNumber = await generateTicketNumber();
+
+            const { rows } = await client.query(
+                `INSERT INTO general_requests (
+                    s_no, ticket_number, judge_name, request, date_received, 
+                    officer_assigned, status, remarks, created_by
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                RETURNING id`,
+                [
+                    s_no,
+                    ticketNumber,
+                    input.judge_name.trim(),
+                    input.request.trim(),
+                    input.date_received || null,
+                    input.officer_assigned || null,
+                    input.status || 'Pending',
+                    input.remarks || null,
+                    userId,
+                ]
+            );
+
+            await client.query('COMMIT');
+
+            const request = await this.findGeneralRequestById(rows[0].id);
+            if (!request) throw new AppError(500, 'Failed to create general request');
+
+            // Send email only if send_email is true and email is provided (manual control by dep_head)
+            if (input.send_email && input.email) {
+                try {
+                    await sendGeneralRequestAcknowledgement({
+                        to: input.email,
+                        ticketNumber,
+                        judgeName: input.judge_name,
+                        request: input.request,
+                    });
+                } catch (emailError) {
+                    console.error('[EMAIL ERROR] Failed to send general request acknowledgement:', emailError);
+                    // Don't throw - we don't want to fail the request creation if email fails
+                }
+            }
+
+            return request;
+            
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
     }
 
     static async updateGeneralRequestStatus(
@@ -1560,128 +1636,223 @@ export class HelpDeskService {
 
     // ─── Visa Support ────────────────────────────────────────────────────────
 
+    static async findAllVisaRequests(filters: HelpDeskFilters = {}): Promise<VisaRequest[]> {
+        let query = `SELECT ${VISA_SELECT} FROM visa_requests WHERE is_active = true`;
+        const params: unknown[] = [];
+        let paramCount = 1;
 
-static async findAllVisaRequests(filters: HelpDeskFilters = {}): Promise<VisaRequest[]> {
-    let query = `SELECT ${VISA_SELECT} FROM visa_requests WHERE is_active = true`;
-    const params: unknown[] = [];
-    let paramCount = 1;
+        if (filters.search) {
+            query += ` AND (judge_name ILIKE $${paramCount} OR destination_country ILIKE $${paramCount})`;
+            params.push(`%${filters.search}%`);
+            paramCount++;
+        }
+        if (filters.status) {
+            query += ` AND status = $${paramCount}`;
+            params.push(filters.status);
+            paramCount++;
+        }
+        if (filters.judge_name) {
+            query += ` AND judge_name ILIKE $${paramCount}`;
+            params.push(`%${filters.judge_name}%`);
+            paramCount++;
+        }
 
-    if (filters.search) {
-        query += ` AND (judge_name ILIKE $${paramCount} OR destination_country ILIKE $${paramCount})`;
-        params.push(`%${filters.search}%`);
-        paramCount++;
-    }
-    if (filters.status) {
-        query += ` AND status = $${paramCount}`;
-        params.push(filters.status);
-        paramCount++;
-    }
-    if (filters.judge_name) {
-        query += ` AND judge_name ILIKE $${paramCount}`;
-        params.push(`%${filters.judge_name}%`);
-        paramCount++;
+        query += ` ORDER BY created_at DESC`;
+        if (filters.limit) {
+            query += ` LIMIT $${paramCount}`;
+            params.push(filters.limit);
+            paramCount++;
+        }
+        if (filters.offset) {
+            query += ` OFFSET $${paramCount}`;
+            params.push(filters.offset);
+        }
+
+        const { rows } = await pool.query(query, params);
+
+        for (const visa of rows) {
+            const { rows: docRows } = await pool.query(
+                `SELECT ${VISA_DOCUMENT_SELECT} FROM visa_documents WHERE visa_request_id = $1 AND is_active = true`,
+                [visa.id]
+            );
+            visa.documents = docRows;
+        }
+
+        return rows;
     }
 
-    query += ` ORDER BY created_at DESC`;
-    if (filters.limit) {
-        query += ` LIMIT $${paramCount}`;
-        params.push(filters.limit);
-        paramCount++;
-    }
-    if (filters.offset) {
-        query += ` OFFSET $${paramCount}`;
-        params.push(filters.offset);
-    }
+    static async findVisaRequestById(id: string): Promise<VisaRequest | null> {
+        const { rows } = await pool.query(
+            `SELECT ${VISA_SELECT} FROM visa_requests WHERE id = $1 AND is_active = true`,
+            [id]
+        );
 
-    const { rows } = await pool.query(query, params);
+        if (rows.length === 0) return null;
 
-    for (const visa of rows) {
+        const visa = rows[0];
         const { rows: docRows } = await pool.query(
-            `SELECT * FROM visa_documents WHERE visa_request_id = $1 AND is_active = true`,
-            [visa.id]
+            `SELECT ${VISA_DOCUMENT_SELECT} FROM visa_documents WHERE visa_request_id = $1 AND is_active = true`,
+            [id]
         );
         visa.documents = docRows;
+
+        return visa;
     }
 
-    return rows;
-}
+    static async createVisaRequest(
+        input: CreateVisaRequestInput,
+        userId: string
+    ): Promise<VisaRequest> {
+        const s_no = await generateSerialNumber('visa_requests');
 
-static async findVisaRequestById(id: string): Promise<VisaRequest | null> {
-    const { rows } = await pool.query(
-        `SELECT ${VISA_SELECT} FROM visa_requests WHERE id = $1 AND is_active = true`,
-        [id]
-    );
+        const { rows } = await pool.query(
+            `INSERT INTO visa_requests (
+                s_no, judge_name, request_date, destination_country, date_of_travel, date_of_return,
+                visa_type, purpose_of_travel, remarks, notes, created_by
+            ) VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, $6, $7, $8, $9, $10)
+            RETURNING id`,
+            [
+                s_no,
+                input.judge_name.trim(),
+                input.destination_country.trim(),
+                input.date_of_travel || null,
+                input.date_of_return || null,
+                input.visa_type,
+                input.purpose_of_travel || null,
+                input.remarks || null,
+                input.notes || null,
+                userId,
+            ]
+        );
 
-    if (rows.length === 0) return null;
-
-    const visa = rows[0];
-    const { rows: docRows } = await pool.query(
-        `SELECT * FROM visa_documents WHERE visa_request_id = $1 AND is_active = true`,
-        [id]
-    );
-    visa.documents = docRows;
-
-    return visa;
-}
-
-static async createVisaRequest(
-    input: CreateVisaRequestInput,
-    userId: string
-): Promise<VisaRequest> {
-    const { rows } = await pool.query(
-        `INSERT INTO visa_requests (
-            s_no, judge_name, request_date, destination_country, date_of_travel, date_of_return,
-            visa_type, purpose_of_travel, remarks, notes, created_by
-        ) VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, $6, $7, $8, $9, $10)
-        RETURNING id`,
-        [
-            input.s_no || null,
-            input.judge_name.trim(),
-            input.destination_country.trim(),
-            input.date_of_travel || null,
-            input.date_of_return || null,
-            input.visa_type,
-            input.purpose_of_travel || null,
-            input.remarks || null,
-            input.notes || null,
-            userId,
-        ]
-    );
-
-    const visa = await this.findVisaRequestById(rows[0].id);
-    if (!visa) throw new AppError(500, 'Failed to create visa request');
-    return visa;
-}
-
-static async updateVisaStatus(
-    id: string,
-    input: UpdateStatusInput
-): Promise<VisaRequest> {
-    const existing = await this.findVisaRequestById(id);
-    if (!existing) {
-        throw new AppError(404, 'Visa request not found');
+        const visa = await this.findVisaRequestById(rows[0].id);
+        if (!visa) throw new AppError(500, 'Failed to create visa request');
+        return visa;
     }
 
-    await pool.query(
-        `UPDATE visa_requests SET status = $1, notes = COALESCE($2, notes)
-         WHERE id = $3 AND is_active = true`,
-        [input.status, input.notes || null, id]
-    );
+    static async updateVisaStatus(
+        id: string,
+        input: UpdateStatusInput
+    ): Promise<VisaRequest> {
+        const existing = await this.findVisaRequestById(id);
+        if (!existing) {
+            throw new AppError(404, 'Visa request not found');
+        }
 
-    const updated = await this.findVisaRequestById(id);
-    if (!updated) throw new AppError(500, 'Failed to update visa status');
-    return updated;
-}
+        await pool.query(
+            `UPDATE visa_requests SET status = $1, notes = COALESCE($2, notes)
+             WHERE id = $3 AND is_active = true`,
+            [input.status, input.notes || null, id]
+        );
 
-static async deleteVisaRequest(id: string): Promise<void> {
-    const { rows } = await pool.query(
-        `UPDATE visa_requests SET is_active = false WHERE id = $1 RETURNING id`,
-        [id]
-    );
-    if (rows.length === 0) {
-        throw new AppError(404, 'Visa request not found');
+        const updated = await this.findVisaRequestById(id);
+        if (!updated) throw new AppError(500, 'Failed to update visa status');
+        return updated;
     }
-}
+
+    static async deleteVisaRequest(id: string): Promise<void> {
+        const { rows } = await pool.query(
+            `UPDATE visa_requests SET is_active = false WHERE id = $1 RETURNING id`,
+            [id]
+        );
+        if (rows.length === 0) {
+            throw new AppError(404, 'Visa request not found');
+        }
+    }
+
+    // ─── Visa Document Tracking ──────────────────────────────────────────────
+
+    /**
+     * Mark a visa document as viewed
+     * Updates viewed_at and increments view_count
+     */
+    static async markDocumentViewed(
+        documentId: string,
+        userId: string,
+        userName: string,
+        ipAddress?: string,
+        userAgent?: string
+    ): Promise<void> {
+        const client = await pool.connect();
+        
+        try {
+            await client.query('BEGIN');
+
+            // Update the document view count
+            const { rows } = await client.query(
+                `UPDATE visa_documents 
+                 SET view_count = COALESCE(view_count, 0) + 1,
+                     viewed_at = COALESCE(viewed_at, NOW())
+                 WHERE id = $1 AND is_active = true
+                 RETURNING id, visa_request_id, view_count`,
+                [documentId]
+            );
+
+            if (rows.length === 0) {
+                throw new AppError(404, 'Document not found');
+            }
+
+            // Log the view in the document_views table
+            await client.query(
+                `INSERT INTO document_views (
+                    document_id, document_type, viewer_id, viewer_name, 
+                    viewed_at, ip_address, user_agent
+                ) VALUES ($1, $2, $3, $4, NOW(), $5, $6)`,
+                [
+                    documentId,
+                    'visa_document',
+                    userId,
+                    userName,
+                    ipAddress || null,
+                    userAgent || null,
+                ]
+            );
+
+            await client.query('COMMIT');
+            
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    /**
+     * Get document view status with optional viewer history
+     */
+    static async getDocumentViewStatus(
+        documentId: string,
+        includeViewers: boolean = false
+    ): Promise<any> {
+        // Get document details
+        const { rows: docRows } = await pool.query(
+            `SELECT id, document_name, document_url, viewed_at, view_count, created_at
+             FROM visa_documents 
+             WHERE id = $1 AND is_active = true`,
+            [documentId]
+        );
+
+        if (docRows.length === 0) {
+            throw new AppError(404, 'Document not found');
+        }
+
+        const document = docRows[0];
+
+        // Get viewers if requested
+        if (includeViewers) {
+            const { rows: viewerRows } = await pool.query(
+                `SELECT id, viewer_id, viewer_name, viewed_at, ip_address, user_agent
+                 FROM document_views 
+                 WHERE document_id = $1
+                 ORDER BY viewed_at DESC`,
+                [documentId]
+            );
+            document.viewers = viewerRows;
+        }
+
+        return document;
+    }
 
     // ─── Protocol Support ────────────────────────────────────────────────────
 
@@ -1746,6 +1917,8 @@ static async deleteVisaRequest(id: string): Promise<void> {
         try {
             await client.query('BEGIN');
 
+            const s_no = await generateSerialNumber('protocol_events');
+
             const { rows } = await client.query(
                 `INSERT INTO protocol_events (
                     s_no, activity, period_from, period_to, officers_assigned, remarks,
@@ -1753,7 +1926,7 @@ static async deleteVisaRequest(id: string): Promise<void> {
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 RETURNING id`,
                 [
-                    input.s_no || null,
+                    s_no,
                     input.activity.trim(),
                     input.period_from || null,
                     input.period_to || null,

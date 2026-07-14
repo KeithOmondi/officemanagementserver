@@ -13,6 +13,7 @@ router.get('/audit', helpDeskController.getAuditLog);
 
 // ─── Reports ─────────────────────────────────────────────────────────────────
 router.get('/reports/dsa', helpDeskController.getDSAReport);
+router.get('/reports/dsa/export', helpDeskController.exportDSAReport);
 
 // ─── Judge Utilities ─────────────────────────────────────────────────────────
 router.get('/utilities', helpDeskController.getAllUtilities);
@@ -81,6 +82,10 @@ router.get('/visa/:id', helpDeskController.getVisaRequestById);
 router.post('/visa', requireRole('dept_head', 'super_admin'), helpDeskController.createVisaRequest);
 router.put('/visa/:id/status', requireRole('dept_head', 'super_admin'), helpDeskController.updateVisaStatus);
 router.delete('/visa/:id', requireRole('super_admin', 'dept_head'), helpDeskController.deleteVisaRequest);
+
+// ─── Visa Document Tracking ─────────────────────────────────────────────────
+router.post('/visa/documents/:id/view', helpDeskController.markDocumentViewed);
+router.get('/visa/documents/:id/status', helpDeskController.getDocumentViewStatus);
 
 // ─── Protocol Support ────────────────────────────────────────────────────────
 router.get('/protocol', helpDeskController.getAllProtocolEvents);

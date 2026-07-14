@@ -4,13 +4,14 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "build": "tsc",
-    "start": "node --max-old-space-size=4096 --expose-gc dist/server.js",
-    "dev": "nodemon --watch src --ext ts --exec \"node --max-old-space-size=4096 --expose-gc -r @swc-node/register src/server.ts\"",
-    "dev:debug": "nodemon --watch src --ext ts --exec \"node --max-old-space-size=4096 --expose-gc --inspect -r @swc-node/register src/server.ts\"",
-    "test:imports": "node --max-old-space-size=4096 --expose-gc -r ts-node/register src/test-imports.ts",
-    "migrate": "ts-node src/config/migrate.ts"
-  },
+  "build": "tsc",
+  "start": "node --max-old-space-size=4096 --expose-gc dist/server.js",
+  "dev": "nodemon --watch src --ext ts --exec \"node --max-old-space-size=4096 --expose-gc -r @swc-node/register src/server.ts\"",
+  "dev:debug": "nodemon --watch src --ext ts --exec \"node --max-old-space-size=4096 --expose-gc --inspect -r @swc-node/register src/server.ts\"",
+  "test:imports": "node --max-old-space-size=4096 --expose-gc -r ts-node/register src/test-imports.ts",
+  "migrate": "ts-node src/config/migrate.ts",
+  "postinstall": "npx puppeteer browsers install chrome"
+},
   "keywords": [],
   "author": "",
   "license": "ISC",

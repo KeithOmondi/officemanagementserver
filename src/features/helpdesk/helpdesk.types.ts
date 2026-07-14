@@ -315,8 +315,8 @@ export interface MedicalClaim {
     updated_at: string;
 }
 
+// s_no removed from input - auto-generated
 export interface CreateMedicalClaimInput {
-    s_no?: number;
     officer_name: string;
     claim_amount: number;
     date_forwarded_dhr?: string;
@@ -329,6 +329,7 @@ export interface CreateMedicalClaimInput {
 export interface GeneralRequest {
     id: string;
     s_no: number | null;
+    ticket_number: string | null;  // Added ticket number
     judge_name: string;
     request: string;
     date_received: string | null;
@@ -340,24 +341,25 @@ export interface GeneralRequest {
     updated_at: string;
 }
 
+// s_no removed from input - auto-generated
+// send_email added for manual control
 export interface CreateGeneralRequestInput {
-    s_no?: number;
     judge_name: string;
     request: string;
     date_received?: string;
     officer_assigned?: string;
     status?: Status;
     remarks?: string;
+    email?: string;           // Recipient email for notification
+    send_email?: boolean;     // Manual control: true = send email, false = don't send
 }
-
-// ─── Visa Support ────────────────────────────────────────────────────────────
 
 // ─── Visa Support ────────────────────────────────────────────────────────────
 
 export interface VisaRequest {
     id: string;
     s_no: number | null;
-    judge_name: string;  // Changed from 'name'
+    judge_name: string;
     destination_country: string;
     date_of_travel: string | null;
     date_of_return: string | null;
@@ -377,12 +379,14 @@ export interface VisaDocument {
     visa_request_id: string;
     document_name: string;
     document_url: string;
+    viewed_at: string | null;  // When the document was first viewed
+    view_count: number;        // Number of times viewed
     created_at: string;
 }
 
+// s_no removed from input - auto-generated
 export interface CreateVisaRequestInput {
-    s_no?: number;
-    judge_name: string;  // Changed from 'name'
+    judge_name: string;
     destination_country: string;
     date_of_travel?: string;
     request_date?: string;
@@ -413,8 +417,8 @@ export interface ProtocolEvent {
     updated_at: string;
 }
 
+// s_no removed from input - auto-generated
 export interface CreateProtocolEventInput {
-    s_no?: number;
     activity: string;
     period_from?: string;
     period_to?: string;
@@ -495,4 +499,29 @@ export interface UpdateStatusInput {
     status: Status;
     notes?: string;
     remarks?: string;
+}
+
+// ─── Document Tracking ──────────────────────────────────────────────────────
+
+export interface DocumentView {
+    id: string;
+    document_id: string;
+    document_type: string;  // e.g., 'visa_document', 'utility_document', etc.
+    viewer_id: string;      // User ID who viewed
+    viewer_name: string;    // User name who viewed
+    viewed_at: string;
+    ip_address: string | null;
+    user_agent: string | null;
+}
+
+export interface DocumentWithViewStatus {
+    id: string;
+    document_name: string;
+    document_url: string;
+    created_at: string;
+    viewed_at: string | null;
+    view_count: number;
+    last_viewed_by: string | null;
+    last_viewed_at: string | null;
+    viewers: DocumentView[];  // Full view history
 }

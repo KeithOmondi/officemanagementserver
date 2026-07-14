@@ -36,6 +36,11 @@ const envSchema = z.object({
   GOOGLE_CLIENT_ID:     z.string().min(1, { message: 'GOOGLE_CLIENT_ID is required for Google Calendar integration' }),
   GOOGLE_CLIENT_SECRET: z.string().min(1, { message: 'GOOGLE_CLIENT_SECRET is required for Google Calendar integration' }),
   GOOGLE_REDIRECT_URI:  z.string().min(1, { message: 'GOOGLE_REDIRECT_URI is required (e.g. http://localhost:8000/api/v1/calendar/google/callback)' }),
+
+  // Infobip (SMS)
+  INFOBIP_BASE_URL:   z.string().url({ message: 'INFOBIP_BASE_URL must be a valid URL (e.g. https://api.infobip.com)' }),
+  INFOBIP_API_KEY:    z.string().min(1, { message: 'INFOBIP_API_KEY is required' }),
+  INFOBIP_SENDER_ID:  z.string().min(1, { message: 'INFOBIP_SENDER_ID is required (e.g. MyApp)' }),
 });
 
 const parseEnv = () => {

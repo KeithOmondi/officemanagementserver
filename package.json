@@ -10,7 +10,7 @@
   "dev:debug": "nodemon --watch src --ext ts --exec \"node --max-old-space-size=4096 --expose-gc --inspect -r @swc-node/register src/server.ts\"",
   "test:imports": "node --max-old-space-size=4096 --expose-gc -r ts-node/register src/test-imports.ts",
   "migrate": "ts-node src/config/migrate.ts",
-  "postinstall": "npx puppeteer browsers install chrome"
+  "postinstall": "node -e \"if (!process.env.RENDER) { require('child_process').execSync('npx puppeteer browsers install chrome', { stdio: 'inherit' }); }\""
 },
   "keywords": [],
   "author": "",
@@ -22,6 +22,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
     "@getbrevo/brevo": "^5.0.4",
+    "@sparticuz/chromium": "^149.0.0",
     "adm-zip": "^0.5.18",
     "axios": "^1.18.0",
     "bcrypt": "^6.0.0",
@@ -46,7 +47,7 @@
     "pdfjs-dist": "^4.10.38",
     "pg": "^8.21.0",
     "pizzip": "^3.2.0",
-    "puppeteer": "^25.3.0",
+    "puppeteer-core": "^25.3.0",
     "qrcode": "^1.5.4",
     "react-router-dom": "^7.17.0",
     "sharp": "^0.35.2",
@@ -70,6 +71,7 @@
     "@types/sharp": "^0.31.1",
     "@types/uuid": "^10.0.0",
     "nodemon": "^3.1.14",
+    "puppeteer": "^25.3.0",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.3"
   }

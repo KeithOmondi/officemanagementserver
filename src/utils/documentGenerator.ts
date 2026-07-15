@@ -1,6 +1,6 @@
 // src/utils/documentGenerator.ts
 
-import puppeteer, { Browser } from 'puppeteer';
+import type { Browser } from 'puppeteer';
 import pLimit from 'p-limit';
 import { AppError } from './response';
 import { getMemoHTML, MemoData } from '../features/template/MemoTemplate';
@@ -14,20 +14,52 @@ const limit = pLimit(3);
 // Singleton browser — reused across calls instead of relaunched each time
 let browserInstance: Browser | null = null;
 
+// In production (Render), use puppeteer-core + @sparticuz/chromium: a
+// prebuilt binary bundled with the package itself, with no separate
+// download-and-cache step to survive between build and runtime. Locally,
+// use full `puppeteer`, which manages its own bundled Chromium and
+// already works fine in dev.
+//
+// Render sets RENDER=true automatically in its environment, so we key
+// off that rather than NODE_ENV (some setups run NODE_ENV=production
+// locally too, which would otherwise pick the wrong branch).
+const IS_RENDER = !!process.env.RENDER;
+
+async function launchBrowser(): Promise<Browser> {
+  const commonArgs = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-accelerated-2d-canvas',
+    '--disable-gpu',
+    '--font-render-hinting=none',
+    '--js-flags=--max-old-space-size=512',
+  ];
+
+  if (IS_RENDER) {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const chromium = require('@sparticuz/chromium');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const puppeteerCore = require('puppeteer-core');
+
+    return puppeteerCore.launch({
+      headless: chromium.headless,
+      args: [...chromium.args, ...commonArgs],
+      executablePath: await chromium.executablePath(),
+    });
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const puppeteer = require('puppeteer');
+  return puppeteer.launch({
+    headless: true,
+    args: commonArgs,
+  });
+}
+
 async function getBrowser(): Promise<Browser> {
   if (!browserInstance || !browserInstance.connected) {
-    browserInstance = await puppeteer.launch({
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--disable-gpu',
-        '--font-render-hinting=none',
-        '--js-flags=--max-old-space-size=512',
-      ],
-    });
+    browserInstance = await launchBrowser();
   }
   return browserInstance;
 }

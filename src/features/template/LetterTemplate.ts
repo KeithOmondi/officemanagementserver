@@ -158,16 +158,68 @@ export function getLetterHTML(data: LetterData): string {
           margin-top: 2px;
         }
 
-        /* CC and Enclosures */
-        .cc-enclosures {
+        /* CC ("Copy to:") — numbered list, each entry's last line
+           (typically the station/location) rendered bold + underlined.
+           NOTE: .cc-block itself is intentionally NOT page-break-inside:
+           avoid. If it were, Chromium would push the *entire* block to
+           the next page whenever it doesn't fully fit in the remaining
+           space on the current page — leaving a large dead gap above
+           the footer, like a Word doc bug. Instead, only individual
+           .cc-entry items are protected from splitting, so the block
+           flows naturally: as many entries as fit stay on the current
+           page, the rest continue on the next, exactly like Word. */
+        .cc-block {
           margin-top: 30px;
+          font-size: 13px;
+          line-height: 1.5;
+          display: flex;
+        }
+
+        .cc-block .cc-label {
+          flex: 0 0 90px;
+          font-style: italic;
+          text-decoration: underline;
+        }
+
+        .cc-block .cc-entries {
+          flex: 1;
+        }
+
+        .cc-entry {
+          display: flex;
+          margin-bottom: 16px;
+          page-break-inside: avoid;
+          break-inside: avoid;
+        }
+
+        .cc-entry:last-child {
+          margin-bottom: 0;
+        }
+
+        .cc-entry .cc-number {
+          flex: 0 0 24px;
+        }
+
+        .cc-entry .cc-text p {
+          margin: 0;
+          line-height: 1.5;
+        }
+
+        .cc-entry .cc-text .cc-location {
+          font-weight: bold;
+          text-decoration: underline;
+        }
+
+        /* Enclosures kept as a simple label:value line */
+        .enclosures-block {
+          margin-top: 20px;
           font-size: 12px;
           line-height: 1.6;
           page-break-inside: avoid;
           break-inside: avoid;
         }
 
-        .cc-enclosures .label {
+        .enclosures-block .label {
           font-weight: bold;
         }
 
@@ -190,12 +242,12 @@ export function getLetterHTML(data: LetterData): string {
         }
 
         .footer-emblem {
-          flex: 0 0 70px;
+          flex: 0 0 90px;
         }
 
         .footer-emblem img {
-          width: 70px;
-          height: 70px;
+          width: 90px;
+          height: 90px;
           display: block;
           object-fit: contain;
         }
@@ -229,6 +281,8 @@ export function getLetterHTML(data: LetterData): string {
           .footer { left: 20px; right: 20px; }
           .footer-top { flex-direction: column; text-align: center; gap: 10px; }
           .footer-text, .footer-tagline { text-align: center; }
+          .cc-block { flex-direction: column; }
+          .cc-block .cc-label { margin-bottom: 8px; }
         }
       </style>
     </head>
@@ -262,13 +316,9 @@ export function getLetterHTML(data: LetterData): string {
           <div class="title">${escapeHtml(data.senderTitle || 'Registrar, High Court')}</div>
         </div>
 
-        ${data.cc ? `
-          <div class="cc-enclosures">
-            <span class="label">CC:</span> ${escapeHtml(data.cc)}
-          </div>
-        ` : ''}
+        ${data.cc ? formatCC(data.cc) : ''}
         ${data.enclosures ? `
-          <div class="cc-enclosures">
+          <div class="enclosures-block">
             <span class="label">Enclosures:</span> ${escapeHtml(data.enclosures)}
           </div>
         ` : ''}
@@ -316,6 +366,61 @@ function formatBody(html: string): string {
     .replace(/(?:<p>\s*(?:<br\s*\/?>)?\s*<\/p>\s*){2,}/gi, '<p><br></p>')
     // 3+ raw stacked <br> tags -> a single paragraph-sized gap
     .replace(/(?:<br\s*\/?>\s*){3,}/gi, '<br/><br/>');
+}
+
+// CC input format: entries separated by a blank line (double newline).
+// Within each entry, lines are separated by a single newline; the LAST
+// line of each entry is treated as the station/location and rendered
+// bold + underlined (matching the "NAIROBI" / "High Court of Kenya"
+// styling in the reference template). Falls back to a single unnumbered
+// entry if no blank-line separators are present, so existing plain
+// single-line CC values (e.g. "The Registrar, Milimani Law Courts")
+// still render sensibly.
+//
+// Composer-side: each CC recipient should be entered as its own
+// multi-line block, separated from the next recipient by a blank line,
+// e.g.:
+//   Presiding Judge,
+//   Civil Division
+//   NAIROBI
+//
+//   Presiding Judge,
+//   Tribunals Appeal Division,
+//   NAIROBI
+function formatCC(cc: string): string {
+  const entries = cc
+    .split(/\n\s*\n/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+  if (entries.length === 0) return '';
+
+  const entriesHtml = entries
+    .map((entry, index) => {
+      const lines = entry.split('\n').map((line) => line.trim()).filter(Boolean);
+      const locationLine = lines[lines.length - 1] || '';
+      const bodyLines = lines.slice(0, -1);
+
+      const bodyHtml = bodyLines.map((line) => `<p>${escapeHtml(line)}</p>`).join('');
+      const locationHtml = locationLine
+        ? `<p class="cc-location">${escapeHtml(locationLine)}</p>`
+        : '';
+
+      return `
+        <div class="cc-entry">
+          <span class="cc-number">${index + 1}.</span>
+          <span class="cc-text">${bodyHtml}${locationHtml}</span>
+        </div>
+      `;
+    })
+    .join('');
+
+  return `
+    <div class="cc-block">
+      <span class="cc-label">Copy to:</span>
+      <div class="cc-entries">${entriesHtml}</div>
+    </div>
+  `;
 }
 
 function escapeHtml(text: string): string {

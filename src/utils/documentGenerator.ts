@@ -19,10 +19,6 @@ let browserInstance: Browser | null = null;
 // download-and-cache step to survive between build and runtime. Locally,
 // use full `puppeteer`, which manages its own bundled Chromium and
 // already works fine in dev.
-//
-// Render sets RENDER=true automatically in its environment, so we key
-// off that rather than NODE_ENV (some setups run NODE_ENV=production
-// locally too, which would otherwise pick the wrong branch).
 const IS_RENDER = !!process.env.RENDER;
 
 async function launchBrowser(): Promise<Browser> {
@@ -37,17 +33,31 @@ async function launchBrowser(): Promise<Browser> {
   ];
 
   if (IS_RENDER) {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const chromium = require('@sparticuz/chromium');
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const puppeteerCore = require('puppeteer-core');
+  // @sparticuz/chromium's own type declarations don't line up with its
+  // actual runtime shape when loaded via dynamic import() — TypeScript
+  // resolves the default export to `typeof Chromium` (the module/class
+  // shape) rather than the real instance object, so properties like
+  // `.headless` and `.args` fail type-checking even though they exist
+  // fine at runtime. Typed as `any` here; the Array.isArray guard below
+  // is what actually protects us at runtime, not the (broken) types.
+  const chromiumImport: any = await import('@sparticuz/chromium');
+  const chromium = chromiumImport.default ?? chromiumImport;
 
-    return puppeteerCore.launch({
-      headless: chromium.headless,
-      args: [...chromium.args, ...commonArgs],
-      executablePath: await chromium.executablePath(),
-    });
+  const { default: puppeteerCore } = await import('puppeteer-core');
+
+  if (!Array.isArray(chromium.args)) {
+    throw new Error(
+      `@sparticuz/chromium loaded but chromium.args is not an array (got ${typeof chromium.args}). ` +
+      `Check the installed @sparticuz/chromium / puppeteer-core version compatibility.`
+    );
   }
+
+  return puppeteerCore.launch({
+    headless: chromium.headless,
+    args: [...chromium.args, ...commonArgs],
+    executablePath: await chromium.executablePath(),
+  });
+}
 
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const puppeteer = require('puppeteer');
@@ -88,28 +98,15 @@ export async function generateDocumentFromTemplate(
           deviceScaleFactor: 1,
         });
 
-        // 'networkidle0' is only valid for page.goto(); setContent() only
-        // supports 'load' | 'domcontentloaded'.
         await page.setContent(html, {
           waitUntil: 'load',
         });
 
-        // page.waitForTimeout() was removed in newer puppeteer versions —
-        // use a plain delay instead. This still gives fonts/images a beat
-        // to finish rendering before the PDF snapshot.
         await delay(500);
 
         const pdfBuffer = await page.pdf({
           format: 'A4',
           printBackground: true,
-          // All page spacing (header/body/footer margins) is handled by
-          // the template's own `.page { padding: ... }` CSS. Setting a
-          // non-zero margin here as well used to double-count that
-          // spacing — Puppeteer's `margin` carves physical space out of
-          // the page IN ADDITION TO the CSS padding, not instead of it —
-          // which was pushing content past one A4 page and spilling a
-          // blank page 2 into every generated memo/letter. Keep this at
-          // zero and let the template CSS own all spacing.
           margin: {
             top: '0px',
             bottom: '0px',
@@ -117,16 +114,12 @@ export async function generateDocumentFromTemplate(
             right: '0px',
           },
           displayHeaderFooter: false,
-          // Removed preferCSSPageSize: true — neither template declares an
-          // @page rule, so this had no well-defined source of truth to
-          // prefer and just added ambiguity. `format: 'A4'` above is now
-          // the single, unambiguous source of the physical page size.
         });
 
         console.log(`✅ ${type} PDF generated successfully! Size: ${Math.round(pdfBuffer.length / 1024)}KB`);
         return Buffer.from(pdfBuffer);
       } finally {
-        await page.close(); // always close the page, keep the browser alive
+        await page.close();
       }
     } catch (error) {
       console.error(`❌ Failed to generate ${type} PDF:`, error);
@@ -135,7 +128,6 @@ export async function generateDocumentFromTemplate(
   });
 }
 
-// Optional: call this on server shutdown (SIGTERM/SIGINT handler)
 export async function closeBrowser() {
   if (browserInstance) {
     await browserInstance.close();
@@ -143,7 +135,6 @@ export async function closeBrowser() {
   }
 }
 
-// For backward compatibility with existing code that expects DOCX
 export async function generateDocumentFromTemplateAsDocx(
   type: TemplateType,
   data: MemoData | LetterData

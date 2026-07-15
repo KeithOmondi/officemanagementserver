@@ -33,8 +33,16 @@ router.post('/:id/send-to-user', requireRole('staff', 'super_admin'), documentCo
 // ── Edit / lifecycle ──────────────────────────────────────────────────────────
 router.put('/:id', requireRole('staff'), documentController.update);
 router.delete('/:id', requireRole('dept_head'), documentController.delete);
+
+// ── E-Sign ────────────────────────────────────────────────────────────────────
 router.post('/:id/request-sign-otp', requireRole('super_admin'), documentController.requestSignOtp);
 router.post('/:id/sign', requireRole('dept_head'), documentController.sign);
+
+// ── Release Document (Super Admin only) ──────────────────────────────────────
+// ⚠️ IMPORTANT: This must come BEFORE the generic /:id/send route
+router.post('/:id/release', requireRole('super_admin'), documentController.releaseDocument);
+
+// ── Send ──────────────────────────────────────────────────────────────────────
 router.post('/:id/send', requireRole('dept_head'), documentController.send);
 
 // ── Marking to Departments ───────────────────────────────────────────────────
@@ -63,7 +71,7 @@ router.patch(
 );
 
 // ════════════════════════════════════════════════════════════════════════════
-//  NEW: Folder Operations
+//  Folder Operations
 // ════════════════════════════════════════════════════════════════════════════
 
 // ── Redirect Document to Folder ────────────────────────────────────────────

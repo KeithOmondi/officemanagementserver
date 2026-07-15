@@ -16,7 +16,9 @@ export type DocumentStatus =
   | 'marked'
   | 'in_progress'
   | 'completed'
-  | 'filed';
+  | 'filed'
+  | 'ready_to_release'  // ✅ NEW: Signed and ready for release
+  | 'released';         // ✅ NEW: Released to admin side
 
 export type DocumentCategory =
   | 'judgments' | 'rulings' | 'correspondence' | 'orders' | 'drafts' | 'general';
@@ -104,6 +106,9 @@ export interface Document {
   signed_by: string | null;
   signed_by_name: string | null;
   signed_at: Date | null;
+  released_at: Date | null;
+  released_by: string | null;
+  released_by_name: string | null;  // ✅ ADD THIS - matches SQL alias
   is_sent: boolean;
   sent_at: Date | null;
   is_draft: boolean;
@@ -113,15 +118,15 @@ export interface Document {
   active_mark: DocumentMark | null;
   response_count?: number;
 
-  // ✅ Memo/Letter specific fields (editable by super admin)
-  to_recipient: string | null;        // TO field
-  from_sender: string | null;         // FROM field
-  document_date: string | null;       // DATE field
-  subject: string | null;             // SUBJECT field
-  cc: string | null;                  // CC field (letter only)
-  enclosures: string | null;          // Enclosures field (letter only)
-  signature_name: string | null;      // Person signing
-  signature_title: string | null;     // Person's title
+  // Memo/Letter specific fields
+  to_recipient: string | null;
+  from_sender: string | null;
+  document_date: string | null;
+  subject: string | null;
+  cc: string | null;
+  enclosures: string | null;
+  signature_name: string | null;
+  signature_title: string | null;
 }
 
 export interface DocumentWithAnnotations extends Document {

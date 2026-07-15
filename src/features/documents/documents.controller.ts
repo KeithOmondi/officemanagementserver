@@ -23,6 +23,8 @@ import {
   redirectToFolderSchema,
   removeFromFolderSchema,
   getFolderDocumentsSchema,
+  signDocumentSchema,
+  releaseDocumentSchema,
 } from './documents.validator';
 
 export const documentController = {
@@ -133,7 +135,7 @@ export const documentController = {
     const bodyResult = updateDocumentSchema.safeParse({ body: req.body });
     if (!bodyResult.success) throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
 
-    // ✅ Check if document is memo or letter and user is super admin for editing extra fields
+    // Check if document is memo or letter and user is super admin for editing extra fields
     const doc = await DocumentService.findById(paramsResult.data.params.id);
     if (!doc) throw new AppError(404, 'Document not found');
     
@@ -300,16 +302,47 @@ export const documentController = {
     await DocumentService.requestSignOtp(result.data.params.id, req.user!.id);
     return sendSuccess(res, null, 'OTP sent to your email');
   }),
-  
 
   sign: asyncHandler(async (req: Request, res: Response) => {
     const paramsResult = documentIdSchema.safeParse({ params: req.params });
     if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    
+    // Validate OTP
     const otp = req.body?.otp as string | undefined;
     if (!otp) throw new AppError(400, 'OTP is required');
+    if (!/^\d{6}$/.test(otp)) throw new AppError(400, 'OTP must be exactly 6 digits');
+    
     const doc = await DocumentService.sign(paramsResult.data.params.id, req.user!.id, otp);
-    return sendSuccess(res, doc, 'Document signed successfully');
+    return sendSuccess(res, doc, 'Document signed successfully. Ready for release.');
   }),
+
+  // ── Release Document (Super Admin only) ──────────────────────────────────────
+
+ // src/features/documents/documents.controller.ts
+
+releaseDocument: asyncHandler(async (req: Request, res: Response) => {
+  // Only Super Admin can release documents
+  if (req.user!.role !== 'super_admin') {
+    throw new AppError(403, 'Only Super Administrators can release documents.');
+  }
+
+  const paramsResult = documentIdSchema.safeParse({ params: req.params });
+  if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+  
+  // ✅ Extract both note and recipient_id from body
+  const note = req.body?.note;
+  const recipientId = req.body?.recipient_id;
+  
+  console.log(`[Release] Document ${paramsResult.data.params.id} being released by user ${req.user!.id} (${req.user!.role})${note ? ` — note: "${note}"` : ''}${recipientId ? ` — assigned to: ${recipientId}` : ''}`);
+  
+  const doc = await DocumentService.releaseDocument(
+    paramsResult.data.params.id,
+    req.user!.id,
+    note,
+    recipientId  // ✅ Pass recipientId
+  );
+  return sendSuccess(res, doc, 'Document released to admin side successfully.');
+}),
 
   // ── Update Mark ─────────────────────────────────────────────────────────
 
@@ -331,8 +364,6 @@ export const documentController = {
 
   // ── Folder Operations ────────────────────────────────────────────────────────
 
-  // ── Redirect Document to Folder ──────────────────────────────────────────
-
   redirectToFolder: asyncHandler(async (req: Request, res: Response) => {
     const paramsResult = documentIdSchema.safeParse({ params: req.params });
     if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
@@ -349,8 +380,6 @@ export const documentController = {
     return sendSuccess(res, doc, 'Document redirected to folder successfully');
   }),
 
-  // ── Remove Document from Folder ──────────────────────────────────────────
-
   removeFromFolder: asyncHandler(async (req: Request, res: Response) => {
     const paramsResult = documentIdSchema.safeParse({ params: req.params });
     if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
@@ -365,8 +394,6 @@ export const documentController = {
     );
     return sendSuccess(res, doc, 'Document removed from folder successfully');
   }),
-
-  // ── Get Documents by Folder ──────────────────────────────────────────────
 
   getDocumentsByFolder: asyncHandler(async (req: Request, res: Response) => {
     const paramsResult = getFolderDocumentsSchema.safeParse({ params: req.params });
@@ -389,10 +416,12 @@ export const documentController = {
     return sendSuccess(res, result, 'Folder documents retrieved successfully');
   }),
 
+  // ── Regenerate PDF ──────────────────────────────────────────────────────────
+
   regeneratePdf: asyncHandler(async (req: Request, res: Response) => {
-  const result = documentIdSchema.safeParse({ params: req.params });
-  if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
-  const doc = await DocumentService.regeneratePdf(result.data.params.id);
-  return sendSuccess(res, doc, 'Document PDF regenerated successfully');
-}),
+    const result = documentIdSchema.safeParse({ params: req.params });
+    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    const doc = await DocumentService.regeneratePdf(result.data.params.id);
+    return sendSuccess(res, doc, 'Document PDF regenerated successfully');
+  }),
 };

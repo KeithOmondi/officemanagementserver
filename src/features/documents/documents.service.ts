@@ -43,7 +43,9 @@ const DOC_SELECT = `
   d.folder_id,      f.name        AS folder_name,
   d.is_signed,
   d.signed_by,      su.full_name  AS signed_by_name,
-  d.signed_at, d.is_sent, d.sent_at,
+  d.signed_at,
+  d.released_at,    ru.full_name  AS released_by_name,
+  d.is_sent, d.sent_at,
   d.is_draft, d.ref_type, d.ref_other_description,
   d.is_active, d.created_at, d.updated_at,
   d.to_recipient, d.from_sender, d.document_date, d.subject, d.cc, d.enclosures,
@@ -56,6 +58,7 @@ const DOC_JOIN = `
   LEFT JOIN users au       ON au.id  = d.assigned_to
   LEFT JOIN users cu       ON cu.id  = d.created_by
   LEFT JOIN users su       ON su.id  = d.signed_by
+  LEFT JOIN users ru       ON ru.id  = d.released_by
   LEFT JOIN departments dep ON dep.id = d.department_id
   LEFT JOIN rhc_folders f  ON f.id   = d.folder_id
 `;
@@ -322,6 +325,9 @@ export class DocumentService {
         signed_by: row.signed_by,
         signed_by_name: row.signed_by_name,
         signed_at: row.signed_at,
+        released_at: row.released_at,
+        released_by: row.released_by,
+        released_by_name: row.released_by_name,
         is_sent: row.is_sent,
         sent_at: row.sent_at,
         is_draft: row.is_draft,
@@ -346,7 +352,6 @@ export class DocumentService {
           is_active: row.mark_is_active,
         } : null,
         response_count: parseInt(row.response_count ?? '0', 10),
-        // Memo/Letter fields
         to_recipient: row.to_recipient || null,
         from_sender: row.from_sender || null,
         document_date: row.document_date || null,
@@ -432,12 +437,16 @@ export class DocumentService {
     if (existing.status === 'filed') {
       throw new AppError(409, 'Filed documents cannot be edited.');
     }
+    
+    // Prevent manual status changes to system-managed statuses
+    if (input.status === 'ready_to_release' || input.status === 'released') {
+      throw new AppError(403, 'Status cannot be manually set to ready_to_release or released. These are system-managed.');
+    }
 
     const updates: string[] = [];
     const values: unknown[] = [];
     let p = 1;
 
-    // Standard fields
     if (input.title !== undefined) { updates.push(`title = $${p++}`); values.push(input.title.trim()); }
     if (input.category !== undefined) { updates.push(`category = $${p++}`); values.push(input.category); }
     if (input.reference_no !== undefined) { updates.push(`reference_no = $${p++}`); values.push(input.reference_no.trim()); }
@@ -445,8 +454,6 @@ export class DocumentService {
     if (input.status !== undefined) { updates.push(`status = $${p++}`); values.push(input.status); }
     if (input.assigned_to !== undefined) { updates.push(`assigned_to = $${p++}`); values.push(input.assigned_to); }
     if (input.department_id !== undefined) { updates.push(`department_id = $${p++}`); values.push(input.department_id); }
-
-    // ✅ Memo/Letter specific fields (editable by super admin)
     if (input.to_recipient !== undefined) { updates.push(`to_recipient = $${p++}`); values.push(input.to_recipient.trim()); }
     if (input.from_sender !== undefined) { updates.push(`from_sender = $${p++}`); values.push(input.from_sender.trim()); }
     if (input.document_date !== undefined) { updates.push(`document_date = $${p++}`); values.push(input.document_date); }
@@ -474,6 +481,9 @@ export class DocumentService {
     const doc = await this.findById(id);
     if (!doc) throw new AppError(404, 'Document not found');
     if (doc.is_sent) throw new AppError(409, 'Document has already been sent');
+    if (doc.status !== 'released') {
+      throw new AppError(400, 'Document must be released before it can be sent/filed.');
+    }
 
     await pool.query(
       `UPDATE documents
@@ -814,54 +824,52 @@ export class DocumentService {
 
   // ── Request sign OTP ──────────────────────────────────────────────────────────
 
-  // ── Request sign OTP ──────────────────────────────────────────────────────────
+  static async requestSignOtp(documentId: string, requestingUserId: string): Promise<void> {
+    const doc = await this.findById(documentId);
+    if (!doc) throw new AppError(404, 'Document not found');
+    if (doc.is_signed) throw new AppError(409, 'Document is already signed');
 
-static async requestSignOtp(documentId: string, requestingUserId: string): Promise<void> {
-  const doc = await this.findById(documentId);
-  if (!doc) throw new AppError(404, 'Document not found');
-  if (doc.is_signed) throw new AppError(409, 'Document is already signed');
+    const { rows } = await pool.query(
+      `SELECT email, full_name FROM users
+       WHERE id = $1 AND role = 'super_admin' AND is_active = true`,
+      [requestingUserId]
+    );
+    const admin = rows[0];
+    if (!admin) throw new AppError(403, 'Only an active super admin can request e-sign for this document');
 
-  const { rows } = await pool.query(
-    `SELECT email, full_name FROM users
-     WHERE id = $1 AND role = 'super_admin' AND is_active = true`,
-    [requestingUserId]
-  );
-  const admin = rows[0];
-  if (!admin) throw new AppError(403, 'Only an active super admin can request e-sign for this document');
+    const { rawOTP, hashedOTP, expiresAt } = generateOTP(5);
 
-  const { rawOTP, hashedOTP, expiresAt } = generateOTP(5);
+    await pool.query(
+      `UPDATE documents
+       SET sign_otp = $1, sign_otp_expires_at = $2
+       WHERE id = $3`,
+      [hashedOTP, expiresAt, documentId]
+    );
 
-  await pool.query(
-    `UPDATE documents
-     SET sign_otp = $1, sign_otp_expires_at = $2
-     WHERE id = $3`,
-    [hashedOTP, expiresAt, documentId]
-  );
+    await sendMail({
+      to: admin.email,
+      subject: 'E-Sign OTP — Document Signing Request',
+      html: `
+        <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:24px;border:1px solid #eee;border-radius:8px;">
+          <h2 style="color:#1E4620;margin-bottom:4px;">Document Signing Request</h2>
+          <p style="color:#555;font-size:14px;">A request was made to e-sign the following document:</p>
+          <p style="font-weight:bold;color:#333;font-size:14px;">"${doc.title}"</p>
 
-  await sendMail({
-    to: admin.email,
-    subject: 'E-Sign OTP — Document Signing Request',
-    html: `
-      <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:24px;border:1px solid #eee;border-radius:8px;">
-        <h2 style="color:#1E4620;margin-bottom:4px;">Document Signing Request</h2>
-        <p style="color:#555;font-size:14px;">A request was made to e-sign the following document:</p>
-        <p style="font-weight:bold;color:#333;font-size:14px;">"${doc.title}"</p>
+          <div style="background:#f4f6f9;padding:16px;text-align:center;border-radius:6px;margin:24px 0;">
+            <p style="font-size:12px;color:#888;margin:0 0 8px;">Your one-time signing PIN</p>
+            <p style="font-size:36px;font-weight:bold;letter-spacing:10px;color:#1E4620;margin:0;">${rawOTP}</p>
+          </div>
 
-        <div style="background:#f4f6f9;padding:16px;text-align:center;border-radius:6px;margin:24px 0;">
-          <p style="font-size:12px;color:#888;margin:0 0 8px;">Your one-time signing PIN</p>
-          <p style="font-size:36px;font-weight:bold;letter-spacing:10px;color:#1E4620;margin:0;">${rawOTP}</p>
+          <p style="font-size:12px;color:#999;">
+            This OTP expires in <strong>5 minutes</strong>.<br/>
+            If you did not request this, ignore this email — no document will be signed.
+          </p>
         </div>
+      `,
+    });
+  }
 
-        <p style="font-size:12px;color:#999;">
-          This OTP expires in <strong>5 minutes</strong>.<br/>
-          If you did not request this, ignore this email — no document will be signed.
-        </p>
-      </div>
-    `,
-  });
-}
-
-  // ── Sign with OTP verification ────────────────────────────────────────────────
+  // ─── Sign with OTP verification ──────────────────────────────────────────────
 
   static async sign(id: string, signedBy: string, otp: string): Promise<Document> {
     const doc = await this.findById(id);
@@ -900,14 +908,21 @@ static async requestSignOtp(documentId: string, requestingUserId: string): Promi
       throw new AppError(400, 'No super admin signature found. Please upload a signature first.');
     }
 
+    // ✅ Set status to 'ready_to_release' (not released yet)
     if (doc.body && !doc.file_url) {
       const signedBody = embedSignatureIntoHTML(doc.body, signer.signature_url);
       await pool.query(
         `UPDATE documents
-         SET body = $1, is_signed = true, signed_by = $2, signed_at = NOW(), updated_at = NOW()
+         SET body = $1, 
+             is_signed = true, 
+             signed_by = $2, 
+             signed_at = NOW(), 
+             status = 'ready_to_release',
+             updated_at = NOW()
          WHERE id = $3`,
         [signedBody, signedBy, id]
       );
+      await this.logFlow(pool, id, 'signed', signedBy, null, 'Document signed. Ready for release.');
       return (await this.findById(id))!;
     }
 
@@ -915,10 +930,15 @@ static async requestSignOtp(documentId: string, requestingUserId: string): Promi
       if (doc.mime_type !== 'application/pdf') {
         await pool.query(
           `UPDATE documents
-           SET is_signed = true, signed_by = $1, signed_at = NOW(), updated_at = NOW()
+           SET is_signed = true, 
+               signed_by = $1, 
+               signed_at = NOW(), 
+               status = 'ready_to_release',
+               updated_at = NOW()
            WHERE id = $2`,
           [signedBy, id]
         );
+        await this.logFlow(pool, id, 'signed', signedBy, null, 'Document signed. Ready for release.');
         return (await this.findById(id))!;
       }
 
@@ -946,24 +966,161 @@ static async requestSignOtp(documentId: string, requestingUserId: string): Promi
 
       await pool.query(
         `UPDATE documents
-         SET file_url = $1, file_public_id = $2, file_size_bytes = $3,
-             is_signed = true, signed_by = $4, signed_at = NOW(), updated_at = NOW()
+         SET file_url = $1, 
+             file_public_id = $2, 
+             file_size_bytes = $3,
+             is_signed = true, 
+             signed_by = $4, 
+             signed_at = NOW(), 
+             status = 'ready_to_release',
+             updated_at = NOW()
          WHERE id = $5`,
         [uploaded.secure_url, uploaded.public_id, signedPdf.length, signedBy, id]
       );
+      await this.logFlow(pool, id, 'signed', signedBy, null, 'Document signed. Ready for release.');
       return (await this.findById(id))!;
     }
 
     await pool.query(
       `UPDATE documents
-       SET is_signed = true, signed_by = $1, signed_at = NOW(), updated_at = NOW()
+       SET is_signed = true, 
+           signed_by = $1, 
+           signed_at = NOW(), 
+           status = 'ready_to_release',
+           updated_at = NOW()
        WHERE id = $2`,
       [signedBy, id]
     );
+    await this.logFlow(pool, id, 'signed', signedBy, null, 'Document signed. Ready for release.');
     return (await this.findById(id))!;
   }
 
-  // ── Flow logging ──────────────────────────────────────────────────────────────
+  // ─── Release Document to Admin Side ──────────────────────────────────────────
+
+ // src/features/documents/documents.service.ts
+
+static async releaseDocument(
+  id: string, 
+  releasedBy: string, 
+  note?: string,
+  recipientId?: string  // ✅ Add recipientId parameter
+): Promise<Document> {
+  const doc = await this.findById(id);
+  if (!doc) throw new AppError(404, 'Document not found');
+  
+  if (doc.status !== 'ready_to_release') {
+    throw new AppError(400, 'Document is not ready to release. It must be signed first.');
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // ✅ Update to set assigned_to if recipientId is provided
+    await client.query(
+      `UPDATE documents
+       SET status = 'released',
+           released_at = NOW(),
+           released_by = $1,
+           assigned_to = COALESCE($2, assigned_to),  -- ✅ Assign to recipient if provided
+           updated_at = NOW()
+       WHERE id = $3`,
+      [releasedBy, recipientId || null, id]
+    );
+
+    await this.logFlow(
+      client,
+      id,
+      'released',
+      releasedBy,
+      recipientId || null,  // ✅ Log the recipient
+      note || 'Document released to admin side.'
+    );
+
+    await client.query('COMMIT');
+
+    // ✅ Notify the recipient if specified
+    if (recipientId) {
+      try {
+        const { rows: userRows } = await pool.query(
+          `SELECT full_name, email FROM users WHERE id = $1 AND is_active = true`,
+          [recipientId]
+        );
+        if (userRows.length > 0) {
+          const recipient = userRows[0];
+          await NotificationsService.createNotification({
+            user_id: recipientId,
+            type_name: doc.type,
+            title: `Document Assigned: ${doc.title}`,
+            message: `A document has been assigned to you by ${doc.created_by_name || 'the Registrar'}.${note ? `\n\nNote: ${note}` : ''}`,
+            icon: doc.type === 'memo' ? 'FileText' : doc.type === 'letter' ? 'Mail' : 'Bell',
+            color: '#1a3d1c',
+            link: `/documents/${id}`,
+            priority: 'high',
+            metadata: { document_id: id, type: doc.type },
+            send_email: true,
+          });
+        }
+      } catch (error) {
+        console.error(`[Release] Failed to notify recipient ${recipientId}:`, error);
+      }
+    }
+
+    // Notify the document creator
+    if (doc.created_by) {
+      try {
+        await NotificationsService.createNotification({
+          user_id: doc.created_by,
+          type_name: doc.type,
+          title: `Document Released: ${doc.title}`,
+          message: `Your document "${doc.title}" has been released and is now available on the admin side.${note ? `\n\nNote: ${note}` : ''}`,
+          icon: doc.type === 'memo' ? 'FileText' : doc.type === 'letter' ? 'Mail' : 'Bell',
+          color: '#1a3d1c',
+          link: `/documents/${id}`,
+          priority: 'high',
+          metadata: { document_id: id, type: doc.type },
+          send_email: true,
+        });
+      } catch (error) {
+        console.error(`[Release] Failed to notify creator ${doc.created_by}:`, error);
+      }
+    }
+
+    return (await this.findById(id))!;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+  // ─── Get Released Documents ──────────────────────────────────────────────────
+
+  static async getReleasedDocuments(userId: string): Promise<Document[]> {
+    const { rows } = await pool.query(
+      `SELECT ${DOC_SELECT} ${DOC_JOIN}
+       WHERE d.is_active = true
+         AND d.status IN ('released', 'filed')
+         AND d.is_draft = false
+       ORDER BY d.released_at DESC NULLS LAST, d.created_at DESC`,
+      []
+    );
+    return rows;
+  }
+
+  // ─── Is Visible to Admin ────────────────────────────────────────────────────
+
+  static async isVisibleToAdmin(documentId: string): Promise<boolean> {
+    const { rows } = await pool.query(
+      `SELECT status FROM documents WHERE id = $1 AND is_active = true`,
+      [documentId]
+    );
+    if (!rows.length) return false;
+    return rows[0].status === 'released' || rows[0].status === 'filed';
+  }
+
+  // ─── Flow logging ──────────────────────────────────────────────────────────────
 
   static async logFlow(
     client: any,
@@ -1182,242 +1339,232 @@ static async requestSignOtp(documentId: string, requestingUserId: string): Promi
   }
 
   private static async saveDocument(params: {
-  title: string;
-  type: string;
-  ref: string;
-  body: string;
-  pdfBuffer: Buffer;
-  createdBy: string;
-  departmentId?: string;
-  toRecipient: string;
-  fromSender: string;
-  documentDate: string;
-  subject: string;
-  cc?: string;
-  enclosures?: string;
-  signatureName: string;
-  signatureTitle: string;
-}): Promise<Document> {
-  const {
-    title, type, ref, body, pdfBuffer, createdBy, departmentId,
-    toRecipient, fromSender, documentDate, subject, cc, enclosures,
-    signatureName, signatureTitle,
-  } = params;
-
-  const multerFile: Express.Multer.File = {
-    buffer: pdfBuffer,
-    originalname: `${type}_${Date.now()}.pdf`,
-    mimetype: 'application/pdf',
-    size: pdfBuffer.length,
-    fieldname: 'file',
-    encoding: '7bit',
-    stream: null as any,
-    destination: '',
-    filename: '',
-    path: '',
-  };
-
-  const uploaded = await uploadToCloudinary(multerFile, `registrar/documents/${type}s`);
-
-  const { rows } = await pool.query(
-    `INSERT INTO documents
-       (title, type, category, reference_no, body, file_url, file_public_id,
-        file_size_bytes, mime_type, original_name, created_by, department_id, status, is_draft,
-        to_recipient, from_sender, document_date, subject, cc, enclosures, signature_name, signature_title)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
-     RETURNING id`,
-    [
-      title, type, null, ref, body, uploaded.secure_url, uploaded.public_id, pdfBuffer.length,
-      'application/pdf', multerFile.originalname, createdBy, departmentId || null, 'draft', true,
-      toRecipient, fromSender, documentDate, subject, cc || null, enclosures || null,
+    title: string;
+    type: string;
+    ref: string;
+    body: string;
+    pdfBuffer: Buffer;
+    createdBy: string;
+    departmentId?: string;
+    toRecipient: string;
+    fromSender: string;
+    documentDate: string;
+    subject: string;
+    cc?: string;
+    enclosures?: string;
+    signatureName: string;
+    signatureTitle: string;
+  }): Promise<Document> {
+    const {
+      title, type, ref, body, pdfBuffer, createdBy, departmentId,
+      toRecipient, fromSender, documentDate, subject, cc, enclosures,
       signatureName, signatureTitle,
-    ]
-  );
+    } = params;
 
-  await this.logFlow(pool, rows[0].id, 'created', createdBy, null);
-  return (await this.findById(rows[0].id))!;
-}
+    const multerFile: Express.Multer.File = {
+      buffer: pdfBuffer,
+      originalname: `${type}_${Date.now()}.pdf`,
+      mimetype: 'application/pdf',
+      size: pdfBuffer.length,
+      fieldname: 'file',
+      encoding: '7bit',
+      stream: null as any,
+      destination: '',
+      filename: '',
+      path: '',
+    };
 
-  /**
-   * Generate a memo PDF from the provided input.
-   * 
-   * The 'from' field represents the department/office (e.g., "HIGH COURT SUPPORT OFFICE")
-   * The 'signatureName' field represents the actual person signing (e.g., "Keith Dennis")
-   * This separation ensures the memo shows the department in the FROM field
-   * and the person's name in the signature block.
-   */
- static async generateMemo(input: ComposeMemoInput, createdBy: string): Promise<Document> {
-  const fromDepartment = input.from || (await this.getUserDisplayName(createdBy));
-  const signatureName = input.signatureName || fromDepartment;
-  const signatureTitle = input.signatureTitle || 'Registrar, High Court';
-  const ref = input.reference_no || `RHC/MEMO/${new Date().getFullYear()}/${Date.now().toString().slice(-6)}`;
-  const documentDateIso = input.date ?? new Date().toISOString();
-  const dateDisplay = new Date(documentDateIso).toLocaleDateString('en-KE', {
-    year: 'numeric', month: 'long', day: 'numeric',
-  });
+    const uploaded = await uploadToCloudinary(multerFile, `registrar/documents/${type}s`);
 
-  const pdfBuffer = await generateDocumentFromTemplate('memo', {
-    to: input.to,
-    from: fromDepartment,
-    ref,
-    date: dateDisplay,
-    subject: input.title,
-    body: input.body,
-    signatureName,
-    signatureTitle,
-    logoUrl: process.env.MEMO_LOGO_URL || undefined,
-    footerEmblemUrl: process.env.MEMO_FOOTER_EMBLEM_URL || undefined,
-  });
+    const { rows } = await pool.query(
+      `INSERT INTO documents
+         (title, type, category, reference_no, body, file_url, file_public_id,
+          file_size_bytes, mime_type, original_name, created_by, department_id, status, is_draft,
+          to_recipient, from_sender, document_date, subject, cc, enclosures, signature_name, signature_title)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+       RETURNING id`,
+      [
+        title, type, null, ref, body, uploaded.secure_url, uploaded.public_id, pdfBuffer.length,
+        'application/pdf', multerFile.originalname, createdBy, departmentId || null, 'draft', true,
+        toRecipient, fromSender, documentDate, subject, cc || null, enclosures || null,
+        signatureName, signatureTitle,
+      ]
+    );
 
-  return await this.saveDocument({
-    title: input.title,
-    type: 'memo',
-    ref,
-    body: input.body,
-    pdfBuffer,
-    createdBy,
-    departmentId: input.department_id,
-    toRecipient: input.to,
-    fromSender: fromDepartment,
-    documentDate: documentDateIso,
-    subject: input.title,
-    signatureName,
-    signatureTitle,
-  });
-}
-
-static async generateLetter(input: ComposeLetterInput, createdBy: string): Promise<Document> {
-  const fromDepartment = input.from || (await this.getUserDisplayName(createdBy));
-  const signatureName = input.signatureName || fromDepartment;
-  const signatureTitle = input.signatureTitle || 'Registrar, High Court';
-  const ref = input.reference_no || `RHC/LTR/${new Date().getFullYear()}/${Date.now().toString().slice(-6)}`;
-  const documentDateIso = input.date ?? new Date().toISOString();
-  const dateDisplay = new Date(documentDateIso).toLocaleDateString('en-KE', {
-    year: 'numeric', month: 'long', day: 'numeric',
-  });
-
-  const pdfBuffer = await generateDocumentFromTemplate('letter', {
-    ref,
-    date: dateDisplay,
-    to: input.to,
-    from: fromDepartment,
-    subject: input.title,
-    body: input.body,
-    sender: signatureName,
-    senderTitle: signatureTitle,
-    cc: input.cc || '',
-    enclosures: input.enclosures || '',
-    logoUrl: process.env.LETTER_LOGO_URL || undefined,
-    footerEmblemUrl: process.env.LETTER_FOOTER_EMBLEM_URL || undefined,
-  });
-
-  return await this.saveDocument({
-    title: input.title,
-    type: 'letter',
-    ref,
-    body: input.body,
-    pdfBuffer,
-    createdBy,
-    departmentId: input.department_id,
-    toRecipient: input.to,
-    fromSender: fromDepartment,
-    documentDate: documentDateIso,
-    subject: input.title,
-    cc: input.cc,
-    enclosures: input.enclosures,
-    signatureName,
-    signatureTitle,
-  });
-}
-
-
-static async regeneratePdf(documentId: string): Promise<Document> {
-  const doc = await this.findById(documentId);
-  if (!doc) throw new AppError(404, 'Document not found');
-  if (doc.type !== 'memo' && doc.type !== 'letter') {
-    throw new AppError(400, 'Only memo and letter documents can be regenerated');
-  }
-  if (doc.status === 'filed') {
-    throw new AppError(409, 'Filed documents cannot be regenerated');
+    await this.logFlow(pool, rows[0].id, 'created', createdBy, null);
+    return (await this.findById(rows[0].id))!;
   }
 
-  const dateDisplay = doc.document_date
-    ? new Date(doc.document_date).toLocaleDateString('en-KE', { year: 'numeric', month: 'long', day: 'numeric' })
-    : new Date().toLocaleDateString('en-KE', { year: 'numeric', month: 'long', day: 'numeric' });
+  static async generateMemo(input: ComposeMemoInput, createdBy: string): Promise<Document> {
+    const fromDepartment = input.from || (await this.getUserDisplayName(createdBy));
+    const signatureName = input.signatureName || fromDepartment;
+    const signatureTitle = input.signatureTitle || 'Registrar, High Court';
+    const ref = input.reference_no || `RHC/MEMO/${new Date().getFullYear()}/${Date.now().toString().slice(-6)}`;
+    const documentDateIso = input.date ?? new Date().toISOString();
+    const dateDisplay = new Date(documentDateIso).toLocaleDateString('en-KE', {
+      year: 'numeric', month: 'long', day: 'numeric',
+    });
 
-  let pdfBuffer: Buffer;
-  if (doc.type === 'memo') {
-    pdfBuffer = await generateDocumentFromTemplate('memo', {
-      to: doc.to_recipient || '',
-      from: doc.from_sender || '',
-      ref: doc.reference_no || '',
+    const pdfBuffer = await generateDocumentFromTemplate('memo', {
+      to: input.to,
+      from: fromDepartment,
+      ref,
       date: dateDisplay,
-      subject: doc.subject || doc.title,
-      body: doc.body || '',
-      signatureName: doc.signature_name || '',
-      signatureTitle: doc.signature_title || 'Registrar, High Court',
+      subject: input.title,
+      body: input.body,
+      signatureName,
+      signatureTitle,
       logoUrl: process.env.MEMO_LOGO_URL || undefined,
       footerEmblemUrl: process.env.MEMO_FOOTER_EMBLEM_URL || undefined,
     });
-  } else {
-    pdfBuffer = await generateDocumentFromTemplate('letter', {
-      ref: doc.reference_no || '',
-      date: dateDisplay,
-      to: doc.to_recipient || '',
-      from: doc.from_sender || '',
-      subject: doc.subject || doc.title,
-      body: doc.body || '',
-      sender: doc.signature_name || '',
-      senderTitle: doc.signature_title || 'Registrar, High Court',
-      cc: doc.cc || '',
-      enclosures: doc.enclosures || '',
-      logoUrl: process.env.LETTER_LOGO_URL || undefined,
-      footerEmblemUrl: process.env.LETTER_FOOTER_EMBLEM_URL || undefined,
+
+    return await this.saveDocument({
+      title: input.title,
+      type: 'memo',
+      ref,
+      body: input.body,
+      pdfBuffer,
+      createdBy,
+      departmentId: input.department_id,
+      toRecipient: input.to,
+      fromSender: fromDepartment,
+      documentDate: documentDateIso,
+      subject: input.title,
+      signatureName,
+      signatureTitle,
     });
   }
 
-  const multerFile: Express.Multer.File = {
-    buffer: pdfBuffer,
-    originalname: `${doc.type}_${Date.now()}.pdf`,
-    mimetype: 'application/pdf',
-    size: pdfBuffer.length,
-    fieldname: 'file',
-    encoding: '7bit',
-    stream: null as any,
-    destination: '',
-    filename: '',
-    path: '',
-  };
+  static async generateLetter(input: ComposeLetterInput, createdBy: string): Promise<Document> {
+    const fromDepartment = input.from || (await this.getUserDisplayName(createdBy));
+    const signatureName = input.signatureName || fromDepartment;
+    const signatureTitle = input.signatureTitle || 'Registrar, High Court';
+    const ref = input.reference_no || `RHC/LTR/${new Date().getFullYear()}/${Date.now().toString().slice(-6)}`;
+    const documentDateIso = input.date ?? new Date().toISOString();
+    const dateDisplay = new Date(documentDateIso).toLocaleDateString('en-KE', {
+      year: 'numeric', month: 'long', day: 'numeric',
+    });
 
-  const uploaded = await uploadToCloudinary(multerFile, `registrar/documents/${doc.type}s`);
-  const oldPublicId = doc.file_public_id;
-  const wasSigned = doc.is_signed;
+    const pdfBuffer = await generateDocumentFromTemplate('letter', {
+      ref,
+      date: dateDisplay,
+      to: input.to,
+      from: fromDepartment,
+      subject: input.title,
+      body: input.body,
+      sender: signatureName,
+      senderTitle: signatureTitle,
+      cc: input.cc || '',
+      enclosures: input.enclosures || '',
+      logoUrl: process.env.LETTER_LOGO_URL || undefined,
+      footerEmblemUrl: process.env.LETTER_FOOTER_EMBLEM_URL || undefined,
+    });
 
-  await pool.query(
-    `UPDATE documents
-     SET file_url = $1, file_public_id = $2, file_size_bytes = $3,
-         mime_type = 'application/pdf', original_name = $4,
-         is_signed = false, signed_by = NULL, signed_at = NULL,
-         updated_at = NOW()
-     WHERE id = $5`,
-    [uploaded.secure_url, uploaded.public_id, pdfBuffer.length, multerFile.originalname, documentId]
-  );
-
-  if (oldPublicId) {
-    await deleteFromCloudinary(oldPublicId).catch(console.error);
+    return await this.saveDocument({
+      title: input.title,
+      type: 'letter',
+      ref,
+      body: input.body,
+      pdfBuffer,
+      createdBy,
+      departmentId: input.department_id,
+      toRecipient: input.to,
+      fromSender: fromDepartment,
+      documentDate: documentDateIso,
+      subject: input.title,
+      cc: input.cc,
+      enclosures: input.enclosures,
+      signatureName,
+      signatureTitle,
+    });
   }
 
-  await this.logFlow(
-    pool, documentId, 'pdf_regenerated', null, null,
-    wasSigned
-      ? 'PDF regenerated from edits — previous signature cleared, re-signing required'
-      : 'PDF regenerated from edits'
-  );
+  static async regeneratePdf(documentId: string): Promise<Document> {
+    const doc = await this.findById(documentId);
+    if (!doc) throw new AppError(404, 'Document not found');
+    if (doc.type !== 'memo' && doc.type !== 'letter') {
+      throw new AppError(400, 'Only memo and letter documents can be regenerated');
+    }
+    if (doc.status === 'filed') {
+      throw new AppError(409, 'Filed documents cannot be regenerated');
+    }
 
-  return (await this.findById(documentId))!;
-}
+    const dateDisplay = doc.document_date
+      ? new Date(doc.document_date).toLocaleDateString('en-KE', { year: 'numeric', month: 'long', day: 'numeric' })
+      : new Date().toLocaleDateString('en-KE', { year: 'numeric', month: 'long', day: 'numeric' });
 
- 
+    let pdfBuffer: Buffer;
+    if (doc.type === 'memo') {
+      pdfBuffer = await generateDocumentFromTemplate('memo', {
+        to: doc.to_recipient || '',
+        from: doc.from_sender || '',
+        ref: doc.reference_no || '',
+        date: dateDisplay,
+        subject: doc.subject || doc.title,
+        body: doc.body || '',
+        signatureName: doc.signature_name || '',
+        signatureTitle: doc.signature_title || 'Registrar, High Court',
+        logoUrl: process.env.MEMO_LOGO_URL || undefined,
+        footerEmblemUrl: process.env.MEMO_FOOTER_EMBLEM_URL || undefined,
+      });
+    } else {
+      pdfBuffer = await generateDocumentFromTemplate('letter', {
+        ref: doc.reference_no || '',
+        date: dateDisplay,
+        to: doc.to_recipient || '',
+        from: doc.from_sender || '',
+        subject: doc.subject || doc.title,
+        body: doc.body || '',
+        sender: doc.signature_name || '',
+        senderTitle: doc.signature_title || 'Registrar, High Court',
+        cc: doc.cc || '',
+        enclosures: doc.enclosures || '',
+        logoUrl: process.env.LETTER_LOGO_URL || undefined,
+        footerEmblemUrl: process.env.LETTER_FOOTER_EMBLEM_URL || undefined,
+      });
+    }
+
+    const multerFile: Express.Multer.File = {
+      buffer: pdfBuffer,
+      originalname: `${doc.type}_${Date.now()}.pdf`,
+      mimetype: 'application/pdf',
+      size: pdfBuffer.length,
+      fieldname: 'file',
+      encoding: '7bit',
+      stream: null as any,
+      destination: '',
+      filename: '',
+      path: '',
+    };
+
+    const uploaded = await uploadToCloudinary(multerFile, `registrar/documents/${doc.type}s`);
+    const oldPublicId = doc.file_public_id;
+    const wasSigned = doc.is_signed;
+
+    await pool.query(
+      `UPDATE documents
+       SET file_url = $1, file_public_id = $2, file_size_bytes = $3,
+           mime_type = 'application/pdf', original_name = $4,
+           is_signed = false, signed_by = NULL, signed_at = NULL,
+           status = 'draft',
+           updated_at = NOW()
+       WHERE id = $5`,
+      [uploaded.secure_url, uploaded.public_id, pdfBuffer.length, multerFile.originalname, documentId]
+    );
+
+    if (oldPublicId) {
+      await deleteFromCloudinary(oldPublicId).catch(console.error);
+    }
+
+    await this.logFlow(
+      pool, documentId, 'pdf_regenerated', null, null,
+      wasSigned
+        ? 'PDF regenerated from edits — previous signature cleared, re-signing required'
+        : 'PDF regenerated from edits'
+    );
+
+    return (await this.findById(documentId))!;
+  }
 
   // ── Notify all active super admins ──────────────────────────────────────────
 
@@ -1514,8 +1661,6 @@ static async regeneratePdf(documentId: string): Promise<Document> {
   //  Folder Operations
   // ════════════════════════════════════════════════════════════════════════════
 
-  // ── Redirect to Folder ──────────────────────────────────────────────────────
-
   static async redirectToFolder(
     documentId: string,
     folderId: string,
@@ -1552,8 +1697,6 @@ static async regeneratePdf(documentId: string): Promise<Document> {
     return (await this.findById(documentId))!;
   }
 
-  // ── Remove from Folder ─────────────────────────────────────────────────────
-
   static async removeFromFolder(
     documentId: string,
     userId: string,
@@ -1584,8 +1727,6 @@ static async regeneratePdf(documentId: string): Promise<Document> {
 
     return (await this.findById(documentId))!;
   }
-
-  // ── Get Documents by Folder ──────────────────────────────────────────────
 
   static async getDocumentsByFolder(
     folderId: string,

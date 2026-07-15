@@ -20,6 +20,8 @@ export const documentStatusEnum = z.enum([
   'in_progress',
   'completed',
   'filed',
+  'ready_to_release',  // ✅ NEW: Signed and ready for release
+  'released',          // ✅ NEW: Released to admin side
 ]);
 
 export const documentCategoryEnum = z.enum([
@@ -283,6 +285,34 @@ export const updateMarkSchema = z.object({
     .refine((b) => b.instructions !== undefined || b.bring_up_date !== undefined, {
       message: 'At least one field (instructions or bring_up_date) must be provided',
     }),
+});
+
+// ════════════════════════════════════════════════════════════════════════
+//  Sign & Release Document schemas
+// ════════════════════════════════════════════════════════════════════════
+
+export const signDocumentSchema = z.object({
+  params: z.object({
+    id: z.string().uuid('Document ID must be a valid UUID'),
+  }),
+  body: z.object({
+    otp: z.string().length(6, 'OTP must be exactly 6 digits').regex(/^\d{6}$/, 'OTP must contain only digits'),
+  }),
+});
+
+
+
+export const releaseDocumentSchema = z.object({
+  params: z.object({
+    id: z.string().uuid('Document ID must be a valid UUID'),
+  }),
+  body: z
+    .object({
+      note: z.string().max(500).trim().optional(),
+      recipient_id: z.string().uuid('Recipient ID must be a valid UUID').optional(),
+    })
+    .strict()
+    .optional(),
 });
 
 // ════════════════════════════════════════════════════════════════════════

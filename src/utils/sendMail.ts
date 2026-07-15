@@ -226,7 +226,7 @@ export const sendGeneralRequestAcknowledgement = async ({
               </h2>
               
               <p style="margin:0 0 24px;font-size:14px;color:#6b7280;text-align:center;line-height:1.6;">
-                Your general request has been received and is under review.
+                Your request has been received and is under review.
               </p>
 
               <!-- Ticket Number -->

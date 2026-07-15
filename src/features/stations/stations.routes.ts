@@ -12,8 +12,8 @@ router.get('/',    stationController.getAll);
 router.get('/:id', stationController.getById);
 
 // ── Write (admin only) ────────────────────────────────────────────────────────
-router.post('/',    requireRole('super_admin'), stationController.create);
-router.put('/:id',  requireRole('super_admin'), stationController.update);
+router.post('/',    requireRole('super_admin', 'dept_head'), stationController.create);
+router.put('/:id',  requireRole('super_admin', 'dept_head'), stationController.update);
 router.delete('/:id', requireRole('super_admin'), stationController.delete);
 
 export default router;

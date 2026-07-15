@@ -93,6 +93,15 @@ export const updateDocumentSchema = z.object({
       status: documentStatusEnum.optional(),
       assigned_to: z.string().uuid().nullable().optional(),
       department_id: z.string().uuid().nullable().optional(),
+      // ✅ Memo/Letter specific fields (editable by super admin)
+      to_recipient: z.string().max(500).trim().optional(),
+      from_sender: z.string().max(500).trim().optional(),
+      document_date: z.string().optional(),
+      subject: z.string().max(500).trim().optional(),
+      cc: z.string().max(500).trim().optional(),
+      enclosures: z.string().max(500).trim().optional(),
+      signature_name: z.string().max(255).trim().optional(),
+      signature_title: z.string().max(255).trim().optional(),
     })
     .strict()
     .refine((b) => Object.keys(b).length > 0, {
@@ -231,17 +240,16 @@ export const sendToUserSchema = z.object({
 });
 
 // ════════════════════════════════════════════════════════════════════════
-//  NEW: Memo & Letter composition schemas
+//  Memo & Letter composition schemas
 // ════════════════════════════════════════════════════════════════════════
 
-// ✅ Updated baseComposeSchema with signatureName
 const baseComposeSchema = z.object({
   title: z.string().min(1, 'Title is required').max(255).trim(),
-  to: z.string().min(1, 'Recipient is required').max(255).trim(),
+  to: z.string().min(1, 'Recipient is required').max(500).trim(),
   date: z.string().datetime().optional(),
   body: z.string().min(1, 'Body content is required'),
   from: z.string().optional(),
-  signatureName: z.string().optional(), // ✅ NEW: The person signing
+  signatureName: z.string().optional(),
   signatureTitle: z.string().optional(),
   department_id: z.string().uuid().optional(),
   reference_no: z.string().max(100).trim().optional(),
@@ -259,7 +267,7 @@ export const composeLetterSchema = z.object({
 });
 
 // ════════════════════════════════════════════════════════════════════════
-//  NEW: Update Mark (instructions & bring_up_date)
+//  Update Mark (instructions & bring_up_date)
 // ════════════════════════════════════════════════════════════════════════
 
 export const updateMarkSchema = z.object({
@@ -278,7 +286,7 @@ export const updateMarkSchema = z.object({
 });
 
 // ════════════════════════════════════════════════════════════════════════
-//  NEW: Folder Redirection schemas
+//  Folder Redirection schemas
 // ════════════════════════════════════════════════════════════════════════
 
 export const redirectToFolderSchema = z.object({

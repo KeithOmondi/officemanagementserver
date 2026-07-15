@@ -25,6 +25,7 @@ router.post('/upload', requireRole('staff', 'dept_head'), upload.single('file'),
 // ── Compose Memo / Letter ──────────────────────────────────────────────────────
 router.post('/compose-memo', requireRole('staff'), documentController.composeMemo);
 router.post('/compose-letter', requireRole('staff'), documentController.composeLetter);
+router.post('/:id/regenerate-pdf', requireRole('super_admin'), documentController.regeneratePdf);
 
 // ── Send to User ─────────────────────────────────────────────────────────────
 router.post('/:id/send-to-user', requireRole('staff', 'super_admin'), documentController.sendToUser);

@@ -14,12 +14,14 @@ export interface LetterData {
   footerEmblemUrl?: string;
 }
 
-export function getLetterHTML(data: LetterData): string {
-  // Combined Kenya Coat of Arms + Judiciary crest (single header image, as in the sample)
-  const logoUrl = data.logoUrl || 'https://res.cloudinary.com/do0yflasl/image/upload/v1781759596/JOB_LOGO_ubls4m.jpg';
+const DEFAULT_LOGO_URL =
+  'https://res.cloudinary.com/do0yflasl/image/upload/v1781759596/JOB_LOGO_ubls4m.jpg';
+const DEFAULT_FOOTER_EMBLEM_URL =
+  'https://res.cloudinary.com/do0yflasl/image/upload/v1782893389/footer-emblem_n0ncm9.jpg';
 
-  // Small "Social Transformation" emblem used in the footer of the sample
-  const footerEmblemUrl = data.footerEmblemUrl || 'https://res.cloudinary.com/do0yflasl/image/upload/v1782893389/footer-emblem_n0ncm9.jpg';
+export function getLetterHTML(data: LetterData): string {
+  const logoUrl = data.logoUrl || DEFAULT_LOGO_URL;
+  const footerEmblemUrl = data.footerEmblemUrl || DEFAULT_FOOTER_EMBLEM_URL;
 
   return `
     <!DOCTYPE html>
@@ -40,29 +42,24 @@ export function getLetterHTML(data: LetterData): string {
           background: white;
         }
 
-        /* All page spacing lives here, not on 'body'. Because of the global
-           box-sizing: border-box rule above, this padding is now INCLUDED
-           inside min-height: 1123px (A4 height at 96dpi) instead of being
-           added on top of it. Previously the padding sat on 'body', outside
-           '.page', so the true required height was 1123px + body's padding
-           — taller than a single A4 page — which is what was spilling a
-           blank page 2 into the PDF, independent of the footer fix below.
-           The bottom padding is intentionally large (170px, not 40px) to
-           reserve room for the fixed footer so body content never runs
-           into it. */
+        /* Page padding is included in min-height (box-sizing: border-box).
+           Bottom padding is large (170px) to reserve space for the fixed
+           footer so body content never runs into it. */
         .page {
           max-width: 794px;
-          min-height: 1123px;
+          min-height: 1123px; /* A4 height at 96dpi */
           margin: 0 auto;
           padding: 50px 60px 170px 60px;
           position: relative;
         }
 
-        /* Header Section */
+        /* Header */
         .header {
           display: flex;
           align-items: center;
           margin-bottom: 10px;
+          page-break-inside: avoid;
+          break-inside: avoid;
         }
 
         .logo-container {
@@ -92,7 +89,6 @@ export function getLetterHTML(data: LetterData): string {
           line-height: 1.3;
         }
 
-        /* Thin gold rule under the header, matching the judiciary branding */
         .header-rule {
           border-top: 1.5px solid #C29B38;
           margin-bottom: 28px;
@@ -105,19 +101,23 @@ export function getLetterHTML(data: LetterData): string {
           margin: 0 0 30px 0;
           font-size: 13px;
           font-weight: bold;
+          page-break-inside: avoid;
+          break-inside: avoid;
         }
 
-        /* Body Content */
+        /* Body content — height is driven purely by actual letter length,
+           no fixed min-height, so pagination reflects real content. */
         .body-content {
           margin: 0 0 40px 0;
           font-size: 13px;
           line-height: 1.8;
           text-align: justify;
-          min-height: 340px;
         }
 
         .body-content .to-block {
           margin-bottom: 18px;
+          page-break-inside: avoid;
+          break-inside: avoid;
         }
 
         .body-content .to-block p {
@@ -129,16 +129,21 @@ export function getLetterHTML(data: LetterData): string {
           font-weight: bold;
           text-decoration: underline;
           margin: 18px 0;
+          page-break-inside: avoid;
+          break-inside: avoid;
         }
 
         .body-content p {
           margin-bottom: 10px;
         }
 
-        /* Sign-off — bold name, bold underlined title, no closing line or rule */
+        /* Sign-off block is atomic: page-break-inside: avoid keeps the
+           name and title together instead of splitting across pages. */
         .signature {
           margin-top: 50px;
           font-size: 13px;
+          page-break-inside: avoid;
+          break-inside: avoid;
         }
 
         .signature .name {
@@ -158,19 +163,17 @@ export function getLetterHTML(data: LetterData): string {
           margin-top: 30px;
           font-size: 12px;
           line-height: 1.6;
+          page-break-inside: avoid;
+          break-inside: avoid;
         }
 
         .cc-enclosures .label {
           font-weight: bold;
         }
 
-        /* Footer — pinned to the bottom of the page.
-           'position: fixed' is intentional: Chromium's print/PDF engine
-           (which is what Puppeteer's page.pdf() uses) keeps fixed-position
-           elements anchored to the same spot on every physical page, which
-           is the standard way to get a footer glued to the bottom of a
-           Puppeteer-generated PDF. Do NOT override this in @media print —
-           that was the previous bug (see note below). */
+        /* Footer pinned to page bottom. position: fixed is required for
+           Puppeteer's Chromium print engine to anchor it on every page.
+           Do not override this in @media print. */
         .footer {
           position: fixed;
           bottom: 30px;
@@ -217,20 +220,6 @@ export function getLetterHTML(data: LetterData): string {
           margin-top: 8px;
         }
 
-        /* Print Styles
-           IMPORTANT: an earlier version of this block reset '.footer' to
-           'position: static; margin-top: 60px;', which — since Puppeteer
-           renders with print media by default — pulled the footer back
-           into normal document flow. That made it render immediately
-           after the letter body instead of at the bottom of the page, and
-           the extra height it added pushed the page past 1123px, which is
-           why a near-empty second page was being generated. There is
-           deliberately no @media print override at all now — re-adding
-           padding here (as a previous version did via 'body { padding }')
-           would just reintroduce the same double-padding overflow bug,
-           since Puppeteer always renders in print mode.
-        */
-
         /* Responsive (screen preview only — irrelevant to PDF output) */
         @media (max-width: 600px) {
           .page { padding: 30px 20px 170px 20px; }
@@ -245,7 +234,6 @@ export function getLetterHTML(data: LetterData): string {
     </head>
     <body>
       <div class="page">
-        <!-- Header: crest left, judiciary/office name stacked beside it -->
         <div class="header">
           <div class="logo-container">
             <img src="${logoUrl}" alt="Republic of Kenya / Judiciary Crest" />
@@ -258,26 +246,22 @@ export function getLetterHTML(data: LetterData): string {
 
         <div class="header-rule"></div>
 
-        <!-- Reference and Date -->
         <div class="ref-date">
           <span class="ref">Ref: ${escapeHtml(data.ref)}</span>
           <span class="date">${escapeHtml(data.date)}</span>
         </div>
 
-        <!-- Body -->
         <div class="body-content">
           ${data.to ? `<div class="to-block"><p>${escapeHtml(data.to).replace(/\n/g, '<br/>')}</p></div>` : ''}
           ${data.subject ? `<div class="subject-line">RE: ${escapeHtml(data.subject)}</div>` : ''}
-          ${data.body ? data.body.replace(/\n/g, '<br/>') : '<p>&nbsp;</p>'}
+          ${formatBody(data.body)}
         </div>
 
-        <!-- Sign-off: bold name, bold underlined title, no closing phrase or rule -->
         <div class="signature">
           <div class="name">${escapeHtml(data.sender)}</div>
           <div class="title">${escapeHtml(data.senderTitle || 'Registrar, High Court')}</div>
         </div>
 
-        <!-- CC and Enclosures -->
         ${data.cc ? `
           <div class="cc-enclosures">
             <span class="label">CC:</span> ${escapeHtml(data.cc)}
@@ -289,7 +273,6 @@ export function getLetterHTML(data: LetterData): string {
           </div>
         ` : ''}
 
-        <!-- Footer -->
         <div class="footer">
           <div class="footer-top">
             <div class="footer-emblem">
@@ -308,7 +291,33 @@ export function getLetterHTML(data: LetterData): string {
   `;
 }
 
-// Helper function to escape HTML special characters
+// data.body is real HTML (contentEditable's innerHTML from the composer,
+// NOT plain text with literal newlines) — it's rendered as-is elsewhere
+// via dangerouslySetInnerHTML, so it must NOT be HTML-escaped here, and
+// splitting on '\n' has no effect since contentEditable uses one <div>
+// per line rather than newline characters.
+//
+// The visible bug (a large blank gap between paragraphs, which bloats
+// body height enough to shove the signature block onto page 2) comes
+// from Chrome's contentEditable behaviour: hitting Enter on a blank
+// line produces an empty <div><br></div>. Two or three blank lines the
+// person typed become two or three full empty lines at the body's
+// line-height: 1.8. This collapses any run of 2+ stacked empty
+// block-level elements down to a single blank line, without touching
+// real content or formatting (bold/italic/lists etc. pass through
+// untouched).
+function formatBody(html: string): string {
+  if (!html || !html.trim()) return '<p>&nbsp;</p>';
+
+  return html
+    // 2+ consecutive empty <div>s (with or without a lone <br>) -> one
+    .replace(/(?:<div>\s*(?:<br\s*\/?>)?\s*<\/div>\s*){2,}/gi, '<div><br></div>')
+    // 2+ consecutive empty <p>s -> one
+    .replace(/(?:<p>\s*(?:<br\s*\/?>)?\s*<\/p>\s*){2,}/gi, '<p><br></p>')
+    // 3+ raw stacked <br> tags -> a single paragraph-sized gap
+    .replace(/(?:<br\s*\/?>\s*){3,}/gi, '<br/><br/>');
+}
+
 function escapeHtml(text: string): string {
   if (!text) return '';
   const map: Record<string, string> = {
@@ -316,12 +325,10 @@ function escapeHtml(text: string): string {
     '<': '&lt;',
     '>': '&gt;',
     '"': '&quot;',
-    "'": '&#039;'
+    "'": '&#039;',
   };
-  return text.replace(/[&<>"']/g, function(m) { return map[m]; });
+  return text.replace(/[&<>"']/g, (m) => map[m]);
 }
 
-// For backward compatibility with existing code
-export function getLetterTemplate(data: LetterData): string {
-  return getLetterHTML(data);
-}
+// Backward-compatible alias
+export const getLetterTemplate = getLetterHTML;

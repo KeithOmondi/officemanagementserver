@@ -24,8 +24,6 @@ import type {
   ComposeMemoInput,
   ComposeLetterInput,
   UpdateMarkInput,
-  RedirectToFolderInput,
-  RemoveFromFolderInput,
 } from './documents.validator';
 import axios from 'axios';
 import { generateOTP } from '../../utils/SendOTP';
@@ -48,6 +46,8 @@ const DOC_SELECT = `
   d.signed_at, d.is_sent, d.sent_at,
   d.is_draft, d.ref_type, d.ref_other_description,
   d.is_active, d.created_at, d.updated_at,
+  d.to_recipient, d.from_sender, d.document_date, d.subject, d.cc, d.enclosures,
+  d.signature_name, d.signature_title,
   (SELECT COUNT(*) FROM document_responses r WHERE r.document_id = d.id) AS response_count
 `;
 
@@ -346,6 +346,15 @@ export class DocumentService {
           is_active: row.mark_is_active,
         } : null,
         response_count: parseInt(row.response_count ?? '0', 10),
+        // Memo/Letter fields
+        to_recipient: row.to_recipient || null,
+        from_sender: row.from_sender || null,
+        document_date: row.document_date || null,
+        subject: row.subject || null,
+        cc: row.cc || null,
+        enclosures: row.enclosures || null,
+        signature_name: row.signature_name || null,
+        signature_title: row.signature_title || null,
       };
       return doc;
     });
@@ -428,6 +437,7 @@ export class DocumentService {
     const values: unknown[] = [];
     let p = 1;
 
+    // Standard fields
     if (input.title !== undefined) { updates.push(`title = $${p++}`); values.push(input.title.trim()); }
     if (input.category !== undefined) { updates.push(`category = $${p++}`); values.push(input.category); }
     if (input.reference_no !== undefined) { updates.push(`reference_no = $${p++}`); values.push(input.reference_no.trim()); }
@@ -435,6 +445,16 @@ export class DocumentService {
     if (input.status !== undefined) { updates.push(`status = $${p++}`); values.push(input.status); }
     if (input.assigned_to !== undefined) { updates.push(`assigned_to = $${p++}`); values.push(input.assigned_to); }
     if (input.department_id !== undefined) { updates.push(`department_id = $${p++}`); values.push(input.department_id); }
+
+    // ✅ Memo/Letter specific fields (editable by super admin)
+    if (input.to_recipient !== undefined) { updates.push(`to_recipient = $${p++}`); values.push(input.to_recipient.trim()); }
+    if (input.from_sender !== undefined) { updates.push(`from_sender = $${p++}`); values.push(input.from_sender.trim()); }
+    if (input.document_date !== undefined) { updates.push(`document_date = $${p++}`); values.push(input.document_date); }
+    if (input.subject !== undefined) { updates.push(`subject = $${p++}`); values.push(input.subject.trim()); }
+    if (input.cc !== undefined) { updates.push(`cc = $${p++}`); values.push(input.cc.trim()); }
+    if (input.enclosures !== undefined) { updates.push(`enclosures = $${p++}`); values.push(input.enclosures.trim()); }
+    if (input.signature_name !== undefined) { updates.push(`signature_name = $${p++}`); values.push(input.signature_name.trim()); }
+    if (input.signature_title !== undefined) { updates.push(`signature_title = $${p++}`); values.push(input.signature_title.trim()); }
 
     if (!updates.length) return existing;
 
@@ -1158,43 +1178,62 @@ export class DocumentService {
     return rows[0]?.full_name || 'Unknown User';
   }
 
-  private static async saveDocument(
-    title: string,
-    type: string,
-    ref: string,
-    body: string,
-    pdfBuffer: Buffer,
-    createdBy: string,
-    departmentId?: string
-  ): Promise<Document> {
-    const multerFile: Express.Multer.File = {
-      buffer: pdfBuffer,
-      originalname: `${type}_${Date.now()}.pdf`,
-      mimetype: 'application/pdf',
-      size: pdfBuffer.length,
-      fieldname: 'file',
-      encoding: '7bit',
-      stream: null as any,
-      destination: '',
-      filename: '',
-      path: '',
-    };
+  private static async saveDocument(params: {
+  title: string;
+  type: string;
+  ref: string;
+  body: string;
+  pdfBuffer: Buffer;
+  createdBy: string;
+  departmentId?: string;
+  toRecipient: string;
+  fromSender: string;
+  documentDate: string;
+  subject: string;
+  cc?: string;
+  enclosures?: string;
+  signatureName: string;
+  signatureTitle: string;
+}): Promise<Document> {
+  const {
+    title, type, ref, body, pdfBuffer, createdBy, departmentId,
+    toRecipient, fromSender, documentDate, subject, cc, enclosures,
+    signatureName, signatureTitle,
+  } = params;
 
-    const uploaded = await uploadToCloudinary(multerFile, `registrar/documents/${type}s`);
+  const multerFile: Express.Multer.File = {
+    buffer: pdfBuffer,
+    originalname: `${type}_${Date.now()}.pdf`,
+    mimetype: 'application/pdf',
+    size: pdfBuffer.length,
+    fieldname: 'file',
+    encoding: '7bit',
+    stream: null as any,
+    destination: '',
+    filename: '',
+    path: '',
+  };
 
-    const { rows } = await pool.query(
-      `INSERT INTO documents
-         (title, type, category, reference_no, body, file_url, file_public_id,
-          file_size_bytes, mime_type, original_name, created_by, department_id, status, is_draft)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-       RETURNING id`,
-      [title, type, null, ref, body, uploaded.secure_url, uploaded.public_id, pdfBuffer.length,
-       'application/pdf', multerFile.originalname, createdBy, departmentId || null, 'draft', true]
-    );
+  const uploaded = await uploadToCloudinary(multerFile, `registrar/documents/${type}s`);
 
-    await this.logFlow(pool, rows[0].id, 'created', createdBy, null);
-    return (await this.findById(rows[0].id))!;
-  }
+  const { rows } = await pool.query(
+    `INSERT INTO documents
+       (title, type, category, reference_no, body, file_url, file_public_id,
+        file_size_bytes, mime_type, original_name, created_by, department_id, status, is_draft,
+        to_recipient, from_sender, document_date, subject, cc, enclosures, signature_name, signature_title)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+     RETURNING id`,
+    [
+      title, type, null, ref, body, uploaded.secure_url, uploaded.public_id, pdfBuffer.length,
+      'application/pdf', multerFile.originalname, createdBy, departmentId || null, 'draft', true,
+      toRecipient, fromSender, documentDate, subject, cc || null, enclosures || null,
+      signatureName, signatureTitle,
+    ]
+  );
+
+  await this.logFlow(pool, rows[0].id, 'created', createdBy, null);
+  return (await this.findById(rows[0].id))!;
+}
 
   /**
    * Generate a memo PDF from the provided input.
@@ -1204,86 +1243,178 @@ export class DocumentService {
    * This separation ensures the memo shows the department in the FROM field
    * and the person's name in the signature block.
    */
-  static async generateMemo(input: ComposeMemoInput, createdBy: string): Promise<Document> {
-    // Get the department/office name from the 'from' field
-    const fromDepartment = input.from || (await this.getUserDisplayName(createdBy));
-    
-    // Get the signatory name - use signatureName if provided, otherwise fallback to from
-    const signatureName = input.signatureName || fromDepartment;
-    const signatureTitle = input.signatureTitle || 'Registrar, High Court';
-    
-    const ref = input.reference_no || `RHC/MEMO/${new Date().getFullYear()}/${Date.now().toString().slice(-6)}`;
+ static async generateMemo(input: ComposeMemoInput, createdBy: string): Promise<Document> {
+  const fromDepartment = input.from || (await this.getUserDisplayName(createdBy));
+  const signatureName = input.signatureName || fromDepartment;
+  const signatureTitle = input.signatureTitle || 'Registrar, High Court';
+  const ref = input.reference_no || `RHC/MEMO/${new Date().getFullYear()}/${Date.now().toString().slice(-6)}`;
+  const documentDateIso = input.date ?? new Date().toISOString();
+  const dateDisplay = new Date(documentDateIso).toLocaleDateString('en-KE', {
+    year: 'numeric', month: 'long', day: 'numeric',
+  });
 
-    const logoUrl = process.env.MEMO_LOGO_URL || undefined;
-    const footerEmblemUrl = process.env.MEMO_FOOTER_EMBLEM_URL || undefined;
+  const pdfBuffer = await generateDocumentFromTemplate('memo', {
+    to: input.to,
+    from: fromDepartment,
+    ref,
+    date: dateDisplay,
+    subject: input.title,
+    body: input.body,
+    signatureName,
+    signatureTitle,
+    logoUrl: process.env.MEMO_LOGO_URL || undefined,
+    footerEmblemUrl: process.env.MEMO_FOOTER_EMBLEM_URL || undefined,
+  });
 
-    const pdfBuffer = await generateDocumentFromTemplate('memo', {
-      to: input.to,
-      from: fromDepartment, // The department/office name
-      ref: ref,
-      date: input.date ? new Date(input.date).toLocaleDateString('en-KE', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-      }) : new Date().toLocaleDateString('en-KE', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-      }),
-      subject: input.title,
-      body: input.body,
-      signatureName: signatureName, // The person's name
-      signatureTitle: signatureTitle, // The person's title
-      logoUrl: logoUrl,
-      footerEmblemUrl: footerEmblemUrl
-    });
+  return await this.saveDocument({
+    title: input.title,
+    type: 'memo',
+    ref,
+    body: input.body,
+    pdfBuffer,
+    createdBy,
+    departmentId: input.department_id,
+    toRecipient: input.to,
+    fromSender: fromDepartment,
+    documentDate: documentDateIso,
+    subject: input.title,
+    signatureName,
+    signatureTitle,
+  });
+}
 
-    return await this.saveDocument(input.title, 'memo', ref, input.body, pdfBuffer, createdBy, input.department_id);
+static async generateLetter(input: ComposeLetterInput, createdBy: string): Promise<Document> {
+  const fromDepartment = input.from || (await this.getUserDisplayName(createdBy));
+  const signatureName = input.signatureName || fromDepartment;
+  const signatureTitle = input.signatureTitle || 'Registrar, High Court';
+  const ref = input.reference_no || `RHC/LTR/${new Date().getFullYear()}/${Date.now().toString().slice(-6)}`;
+  const documentDateIso = input.date ?? new Date().toISOString();
+  const dateDisplay = new Date(documentDateIso).toLocaleDateString('en-KE', {
+    year: 'numeric', month: 'long', day: 'numeric',
+  });
+
+  const pdfBuffer = await generateDocumentFromTemplate('letter', {
+    ref,
+    date: dateDisplay,
+    to: input.to,
+    from: fromDepartment,
+    subject: input.title,
+    body: input.body,
+    sender: signatureName,
+    senderTitle: signatureTitle,
+    cc: input.cc || '',
+    enclosures: input.enclosures || '',
+    logoUrl: process.env.LETTER_LOGO_URL || undefined,
+    footerEmblemUrl: process.env.LETTER_FOOTER_EMBLEM_URL || undefined,
+  });
+
+  return await this.saveDocument({
+    title: input.title,
+    type: 'letter',
+    ref,
+    body: input.body,
+    pdfBuffer,
+    createdBy,
+    departmentId: input.department_id,
+    toRecipient: input.to,
+    fromSender: fromDepartment,
+    documentDate: documentDateIso,
+    subject: input.title,
+    cc: input.cc,
+    enclosures: input.enclosures,
+    signatureName,
+    signatureTitle,
+  });
+}
+
+
+static async regeneratePdf(documentId: string): Promise<Document> {
+  const doc = await this.findById(documentId);
+  if (!doc) throw new AppError(404, 'Document not found');
+  if (doc.type !== 'memo' && doc.type !== 'letter') {
+    throw new AppError(400, 'Only memo and letter documents can be regenerated');
+  }
+  if (doc.status === 'filed') {
+    throw new AppError(409, 'Filed documents cannot be regenerated');
   }
 
-  /**
-   * Generate a letter PDF from the provided input.
-   * 
-   * The 'from' field represents the department/office (e.g., "HIGH COURT SUPPORT OFFICE")
-   * The 'signatureName' field represents the actual person signing (e.g., "Keith Dennis")
-   */
-  static async generateLetter(input: ComposeLetterInput, createdBy: string): Promise<Document> {
-    // Get the department/office name from the 'from' field
-    const fromDepartment = input.from || (await this.getUserDisplayName(createdBy));
-    
-    // Get the signatory name - use signatureName if provided, otherwise fallback to from
-    const signatureName = input.signatureName || fromDepartment;
-    const signatureTitle = input.signatureTitle || 'Registrar, High Court';
-    const ref = input.reference_no || `RHC/LTR/${new Date().getFullYear()}/${Date.now().toString().slice(-6)}`;
+  const dateDisplay = doc.document_date
+    ? new Date(doc.document_date).toLocaleDateString('en-KE', { year: 'numeric', month: 'long', day: 'numeric' })
+    : new Date().toLocaleDateString('en-KE', { year: 'numeric', month: 'long', day: 'numeric' });
 
-    const logoUrl = process.env.LETTER_LOGO_URL || undefined;
-    const footerEmblemUrl = process.env.LETTER_FOOTER_EMBLEM_URL || undefined;
-
-    const pdfBuffer = await generateDocumentFromTemplate('letter', {
-      ref: ref,
-      date: input.date ? new Date(input.date).toLocaleDateString('en-KE', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-      }) : new Date().toLocaleDateString('en-KE', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-      }),
-      to: input.to,
-      from: fromDepartment, // The department/office name
-      subject: input.title,
-      body: input.body,
-      sender: signatureName, // The person's name
-      senderTitle: signatureTitle, // The person's title
-      cc: input.cc || '',
-      enclosures: input.enclosures || '',
-      logoUrl: logoUrl,
-      footerEmblemUrl: footerEmblemUrl
+  let pdfBuffer: Buffer;
+  if (doc.type === 'memo') {
+    pdfBuffer = await generateDocumentFromTemplate('memo', {
+      to: doc.to_recipient || '',
+      from: doc.from_sender || '',
+      ref: doc.reference_no || '',
+      date: dateDisplay,
+      subject: doc.subject || doc.title,
+      body: doc.body || '',
+      signatureName: doc.signature_name || '',
+      signatureTitle: doc.signature_title || 'Registrar, High Court',
+      logoUrl: process.env.MEMO_LOGO_URL || undefined,
+      footerEmblemUrl: process.env.MEMO_FOOTER_EMBLEM_URL || undefined,
     });
-
-    return await this.saveDocument(input.title, 'letter', ref, input.body, pdfBuffer, createdBy, input.department_id);
+  } else {
+    pdfBuffer = await generateDocumentFromTemplate('letter', {
+      ref: doc.reference_no || '',
+      date: dateDisplay,
+      to: doc.to_recipient || '',
+      from: doc.from_sender || '',
+      subject: doc.subject || doc.title,
+      body: doc.body || '',
+      sender: doc.signature_name || '',
+      senderTitle: doc.signature_title || 'Registrar, High Court',
+      cc: doc.cc || '',
+      enclosures: doc.enclosures || '',
+      logoUrl: process.env.LETTER_LOGO_URL || undefined,
+      footerEmblemUrl: process.env.LETTER_FOOTER_EMBLEM_URL || undefined,
+    });
   }
+
+  const multerFile: Express.Multer.File = {
+    buffer: pdfBuffer,
+    originalname: `${doc.type}_${Date.now()}.pdf`,
+    mimetype: 'application/pdf',
+    size: pdfBuffer.length,
+    fieldname: 'file',
+    encoding: '7bit',
+    stream: null as any,
+    destination: '',
+    filename: '',
+    path: '',
+  };
+
+  const uploaded = await uploadToCloudinary(multerFile, `registrar/documents/${doc.type}s`);
+  const oldPublicId = doc.file_public_id;
+  const wasSigned = doc.is_signed;
+
+  await pool.query(
+    `UPDATE documents
+     SET file_url = $1, file_public_id = $2, file_size_bytes = $3,
+         mime_type = 'application/pdf', original_name = $4,
+         is_signed = false, signed_by = NULL, signed_at = NULL,
+         updated_at = NOW()
+     WHERE id = $5`,
+    [uploaded.secure_url, uploaded.public_id, pdfBuffer.length, multerFile.originalname, documentId]
+  );
+
+  if (oldPublicId) {
+    await deleteFromCloudinary(oldPublicId).catch(console.error);
+  }
+
+  await this.logFlow(
+    pool, documentId, 'pdf_regenerated', null, null,
+    wasSigned
+      ? 'PDF regenerated from edits — previous signature cleared, re-signing required'
+      : 'PDF regenerated from edits'
+  );
+
+  return (await this.findById(documentId))!;
+}
+
+ 
 
   // ── Notify all active super admins ──────────────────────────────────────────
 
@@ -1377,7 +1508,7 @@ export class DocumentService {
   }
 
   // ════════════════════════════════════════════════════════════════════════════
-  //  NEW: Folder Operations
+  //  Folder Operations
   // ════════════════════════════════════════════════════════════════════════════
 
   // ── Redirect to Folder ──────────────────────────────────────────────────────
@@ -1516,8 +1647,6 @@ export class DocumentService {
       totalPages: Math.ceil(total / limit),
     };
   }
-
-  // ── Bring-Up Date Reminders ──────────────────────────────────────────────
 
   // ── Bring-Up Date Reminders ──────────────────────────────────────────────
 

@@ -98,8 +98,8 @@ export interface Document {
   created_by_name: string;
   department_id: string | null;
   department_name: string | null;
-  folder_id: string | null;           // ✅ NEW: Reference to RHC folder
-  folder_name: string | null;         // ✅ NEW: Name of the folder
+  folder_id: string | null;
+  folder_name: string | null;
   is_signed: boolean;
   signed_by: string | null;
   signed_by_name: string | null;
@@ -112,6 +112,16 @@ export interface Document {
   updated_at: Date;
   active_mark: DocumentMark | null;
   response_count?: number;
+
+  // ✅ Memo/Letter specific fields (editable by super admin)
+  to_recipient: string | null;        // TO field
+  from_sender: string | null;         // FROM field
+  document_date: string | null;       // DATE field
+  subject: string | null;             // SUBJECT field
+  cc: string | null;                  // CC field (letter only)
+  enclosures: string | null;          // Enclosures field (letter only)
+  signature_name: string | null;      // Person signing
+  signature_title: string | null;     // Person's title
 }
 
 export interface DocumentWithAnnotations extends Document {

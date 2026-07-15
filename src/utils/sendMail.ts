@@ -285,7 +285,7 @@ export const sendGeneralRequestAcknowledgement = async ({
               </p>
               <div style="width:32px;height:1px;background:rgba(255,255,255,0.15);margin:0 auto 12px;"></div>
               <p style="margin:0;font-size:10px;color:rgba(255,255,255,0.3);text-align:center;">
-                Do not reply to this email &middot; For support contact your system administrator
+                Do not reply to this email &middot; For support contact the Support Desk
               </p>
             </td>
           </tr>

@@ -297,9 +297,10 @@ export const documentController = {
   requestSignOtp: asyncHandler(async (req: Request, res: Response) => {
     const result = documentIdSchema.safeParse({ params: req.params });
     if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
-    await DocumentService.requestSignOtp(result.data.params.id);
+    await DocumentService.requestSignOtp(result.data.params.id, req.user!.id);
     return sendSuccess(res, null, 'OTP sent to your email');
   }),
+  
 
   sign: asyncHandler(async (req: Request, res: Response) => {
     const paramsResult = documentIdSchema.safeParse({ params: req.params });

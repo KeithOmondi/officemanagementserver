@@ -814,49 +814,52 @@ export class DocumentService {
 
   // ── Request sign OTP ──────────────────────────────────────────────────────────
 
-  static async requestSignOtp(documentId: string): Promise<void> {
-    const doc = await this.findById(documentId);
-    if (!doc) throw new AppError(404, 'Document not found');
-    if (doc.is_signed) throw new AppError(409, 'Document is already signed');
+  // ── Request sign OTP ──────────────────────────────────────────────────────────
 
-    const { rows } = await pool.query(
-      `SELECT email, full_name FROM users
-       WHERE role = 'super_admin' AND is_active = true LIMIT 1`
-    );
-    const admin = rows[0];
-    if (!admin) throw new AppError(400, 'No active super admin found');
+static async requestSignOtp(documentId: string, requestingUserId: string): Promise<void> {
+  const doc = await this.findById(documentId);
+  if (!doc) throw new AppError(404, 'Document not found');
+  if (doc.is_signed) throw new AppError(409, 'Document is already signed');
 
-    const { rawOTP, hashedOTP, expiresAt } = generateOTP(5);
+  const { rows } = await pool.query(
+    `SELECT email, full_name FROM users
+     WHERE id = $1 AND role = 'super_admin' AND is_active = true`,
+    [requestingUserId]
+  );
+  const admin = rows[0];
+  if (!admin) throw new AppError(403, 'Only an active super admin can request e-sign for this document');
 
-    await pool.query(
-      `UPDATE documents
-       SET sign_otp = $1, sign_otp_expires_at = $2
-       WHERE id = $3`,
-      [hashedOTP, expiresAt, documentId]
-    );
+  const { rawOTP, hashedOTP, expiresAt } = generateOTP(5);
 
-    await sendMail({
-      to: admin.email,
-      subject: 'E-Sign OTP — Document Signing Request',
-      html: `
-        <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:24px;border:1px solid #eee;border-radius:8px;">
-          <h2 style="color:#1E4620;margin-bottom:4px;">Document Signing Request</h2>
-          <p style="color:#555;font-size:14px;">A request was made to e-sign the following document:</p>
-          <p style="font-weight:bold;color:#333;font-size:14px;">"${doc.title}"</p>
+  await pool.query(
+    `UPDATE documents
+     SET sign_otp = $1, sign_otp_expires_at = $2
+     WHERE id = $3`,
+    [hashedOTP, expiresAt, documentId]
+  );
 
-          <div style="background:#f4f6f9;padding:16px;text-align:center;border-radius:6px;margin:24px 0;">
-            <p style="font-size:12px;color:#888;margin:0 0 8px;">Your one-time signing PIN</p>
-            <p style="font-size:36px;font-weight:bold;letter-spacing:10px;color:#1E4620;margin:0;">${rawOTP}</p>
-          </div>
+  await sendMail({
+    to: admin.email,
+    subject: 'E-Sign OTP — Document Signing Request',
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:24px;border:1px solid #eee;border-radius:8px;">
+        <h2 style="color:#1E4620;margin-bottom:4px;">Document Signing Request</h2>
+        <p style="color:#555;font-size:14px;">A request was made to e-sign the following document:</p>
+        <p style="font-weight:bold;color:#333;font-size:14px;">"${doc.title}"</p>
 
-          <p style="font-size:12px;color:#999;">
-            This OTP expires in <strong>5 minutes</strong>.<br/>
-            If you did not request this, ignore this email — no document will be signed.
-          </p>
+        <div style="background:#f4f6f9;padding:16px;text-align:center;border-radius:6px;margin:24px 0;">
+          <p style="font-size:12px;color:#888;margin:0 0 8px;">Your one-time signing PIN</p>
+          <p style="font-size:36px;font-weight:bold;letter-spacing:10px;color:#1E4620;margin:0;">${rawOTP}</p>
         </div>
-      `,
-    });
-  }
+
+        <p style="font-size:12px;color:#999;">
+          This OTP expires in <strong>5 minutes</strong>.<br/>
+          If you did not request this, ignore this email — no document will be signed.
+        </p>
+      </div>
+    `,
+  });
+}
 
   // ── Sign with OTP verification ────────────────────────────────────────────────
 

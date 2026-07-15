@@ -1603,26 +1603,62 @@ export class HelpDeskService {
         }
     }
 
-    static async updateGeneralRequestStatus(
-        id: string,
-        input: { status: string; remarks?: string }
-    ): Promise<GeneralRequest> {
-        const existing = await this.findGeneralRequestById(id);
-        if (!existing) {
-            throw new AppError(404, 'General request not found');
-        }
+    // ─── General Requests ─────────────────────────────────────────────────────
 
-        await pool.query(
-            `UPDATE general_requests 
-             SET status = $1, remarks = COALESCE($2, remarks)
-             WHERE id = $3`,
-            [input.status, input.remarks || null, id]
-        );
-
-        const updated = await this.findGeneralRequestById(id);
-        if (!updated) throw new AppError(500, 'Failed to update general request status');
-        return updated;
+static async updateGeneralRequestStatus(
+    id: string,
+    input: { status: string; remarks?: string; email?: string; resolvedBy?: string; rejectedBy?: string }
+): Promise<GeneralRequest> {
+    const existing = await this.findGeneralRequestById(id);
+    if (!existing) {
+        throw new AppError(404, 'General request not found');
     }
+
+    await pool.query(
+        `UPDATE general_requests 
+         SET status = $1, remarks = COALESCE($2, remarks)
+         WHERE id = $3`,
+        [input.status, input.remarks || null, id]
+    );
+
+    const updated = await this.findGeneralRequestById(id);
+    if (!updated) throw new AppError(500, 'Failed to update general request status');
+
+    // Send email based on status change
+    if (input.email) {
+        try {
+            if (input.status === 'Resolved') {
+                // Import the sendGeneralRequestResolved function
+                const { sendGeneralRequestResolved } = require('../../utils/sendMail');
+                
+                await sendGeneralRequestResolved({
+                    to: input.email,
+                    ticketNumber: updated.ticket_number || 'N/A',
+                    judgeName: updated.judge_name,
+                    request: updated.request,
+                    resolution: input.remarks || 'Request has been resolved satisfactorily.',
+                    resolvedBy: input.resolvedBy || 'System Administrator',
+                });
+            } else if (input.status === 'Rejected') {
+                const { sendGeneralRequestRejected } = require('../../utils/sendMail');
+                
+                await sendGeneralRequestRejected({
+                    to: input.email,
+                    ticketNumber: updated.ticket_number || 'N/A',
+                    judgeName: updated.judge_name,
+                    request: updated.request,
+                    reason: input.remarks || 'No specific reason provided.',
+                    rejectedBy: input.rejectedBy || 'System Administrator',
+                });
+            }
+        } catch (emailError) {
+            console.error('[EMAIL ERROR] Failed to send status update email:', emailError);
+            // Don't throw - we don't want to fail the status update if email fails
+        }
+    }
+
+    return updated;
+}
 
     static async deleteGeneralRequest(id: string): Promise<void> {
         const { rows } = await pool.query(

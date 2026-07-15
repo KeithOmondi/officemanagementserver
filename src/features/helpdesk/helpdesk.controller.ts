@@ -551,21 +551,34 @@ export const helpDeskController = {
         return sendSuccess(res, request, 'General request created', 201);
     }),
 
-    updateGeneralRequestStatus: asyncHandler(async (req: Request, res: Response) => {
-        const paramsResult = idSchema.safeParse({ params: req.params });
-        if (!paramsResult.success) {
-            throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    // In helpdesk.controller.ts - updateGeneralRequestStatus
+
+updateGeneralRequestStatus: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = idSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) {
+        throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    }
+    const { status, remarks, email } = req.body;
+    if (!status) {
+        throw new AppError(400, 'Status is required');
+    }
+    
+    // Get the user info for resolvedBy/rejectedBy
+    const resolvedBy = req.user?.full_name || req.user?.email || 'System Administrator';
+    const rejectedBy = req.user?.full_name || req.user?.email || 'System Administrator';
+    
+    const request = await HelpDeskService.updateGeneralRequestStatus(
+        paramsResult.data.params.id,
+        { 
+            status, 
+            remarks, 
+            email,
+            resolvedBy,
+            rejectedBy
         }
-        const { status, remarks } = req.body;
-        if (!status) {
-            throw new AppError(400, 'Status is required');
-        }
-        const request = await HelpDeskService.updateGeneralRequestStatus(
-            paramsResult.data.params.id,
-            { status, remarks }
-        );
-        return sendSuccess(res, request, 'General request status updated');
-    }),
+    );
+    return sendSuccess(res, request, 'General request status updated');
+}),
 
     deleteGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
         const result = idSchema.safeParse({ params: req.params });

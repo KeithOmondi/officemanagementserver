@@ -122,16 +122,27 @@ function shouldIgnoreText(str: string): boolean {
 }
 
 /**
- * Check if a text item is likely part of a signature block
- * - Must be in the bottom 35% of the page
- * - Must not match ignore patterns
+ * Check if a text item is likely part of a signature block.
+ *
+ * NOTE: This previously also required the item to sit in the bottom 35%
+ * of the page (`item.y < pageHeight * 0.35`). That gate broke short
+ * documents: with little body content, "Yours sincerely," and the
+ * name/title block naturally render well above the bottom-35% line,
+ * since there's no bulk of text pushing them down the page. Every
+ * anchor candidate (signature block, salutation, and generic signer
+ * patterns) was being rejected on short letters, causing
+ * findAnchorPosition() to return null and silently fall back to a
+ * fixed page-percentage position — landing the signature near the
+ * footer, disconnected from "sincerely" or the name.
+ *
+ * IGNORE_PATTERNS already excludes header occurrences of "Registrar" /
+ * "Office of the Registrar", and the anchor search already scans from
+ * the bottom of the page upward and takes the LAST match — so position
+ * gating is redundant for correctness and only hurts short documents.
+ * pageHeight is kept as a parameter so call sites don't need to change.
  */
-function isSignatureBlockCandidate(item: TextItem, pageHeight: number): boolean {
-  // Must be in the bottom 35% of the page
-  const isBottom = item.y < pageHeight * 0.35;
-  // Must not be ignored
-  const notIgnored = !shouldIgnoreText(item.str);
-  return isBottom && notIgnored;
+function isSignatureBlockCandidate(item: TextItem, _pageHeight: number): boolean {
+  return !shouldIgnoreText(item.str);
 }
 
 /**

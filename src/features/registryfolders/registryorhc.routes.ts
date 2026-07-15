@@ -87,7 +87,7 @@ router.put(
 // ── DELETE /api/registry/folders/:id ────────────────────────────────────────
 router.delete(
     '/folders/:id',
-    requireRole('super_admin'),
+    requireRole('super_admin', "dept_head"),
     validate(deleteRegistryFolderSchema),
     RegistryController.deleteFolder
 );

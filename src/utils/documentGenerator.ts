@@ -33,31 +33,24 @@ async function launchBrowser(): Promise<Browser> {
   ];
 
   if (IS_RENDER) {
-  // @sparticuz/chromium's own type declarations don't line up with its
-  // actual runtime shape when loaded via dynamic import() — TypeScript
-  // resolves the default export to `typeof Chromium` (the module/class
-  // shape) rather than the real instance object, so properties like
-  // `.headless` and `.args` fail type-checking even though they exist
-  // fine at runtime. Typed as `any` here; the Array.isArray guard below
-  // is what actually protects us at runtime, not the (broken) types.
-  const chromiumImport: any = await import('@sparticuz/chromium');
-  const chromium = chromiumImport.default ?? chromiumImport;
+    const chromiumImport: any = await import('@sparticuz/chromium');
+    const chromium = chromiumImport.default ?? chromiumImport;
 
-  const { default: puppeteerCore } = await import('puppeteer-core');
+    const { default: puppeteerCore } = await import('puppeteer-core');
 
-  if (!Array.isArray(chromium.args)) {
-    throw new Error(
-      `@sparticuz/chromium loaded but chromium.args is not an array (got ${typeof chromium.args}). ` +
-      `Check the installed @sparticuz/chromium / puppeteer-core version compatibility.`
-    );
+    if (!Array.isArray(chromium.args)) {
+      throw new Error(
+        `@sparticuz/chromium loaded but chromium.args is not an array (got ${typeof chromium.args}). ` +
+        `Check the installed @sparticuz/chromium / puppeteer-core version compatibility.`
+      );
+    }
+
+    return puppeteerCore.launch({
+      headless: chromium.headless,
+      args: [...chromium.args, ...commonArgs],
+      executablePath: await chromium.executablePath(),
+    });
   }
-
-  return puppeteerCore.launch({
-    headless: chromium.headless,
-    args: [...chromium.args, ...commonArgs],
-    executablePath: await chromium.executablePath(),
-  });
-}
 
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const puppeteer = require('puppeteer');

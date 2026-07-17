@@ -2,20 +2,30 @@
 
 export interface MemoData {
   to: string;
-  from: string; // department/office name (e.g., "HIGH COURT SUPPORT OFFICE")
+  from: string;
   ref: string;
   date: string;
   subject: string;
   body: string;
-  signatureName: string; // actual person's name (e.g., "Keith Dennis")
-  signatureTitle: string; // person's title (e.g., "Registrar, High Court")
+  signatureName: string;
+  signatureTitle: string;
   draftedByInitials?: string;
   logoUrl?: string;
   footerEmblemUrl?: string;
   footerAddress?: string;
   footerContact?: string;
   footerTagline?: string;
+  fromFirst?: boolean;
+  // signaturePlacement is removed; placement is now automatic via the anchor
+  // marker, matching LetterTemplate.ts. The old top/bottom/left/right
+  // variants are gone — anchor-based detection in embedSignature.ts always
+  // places the signature directly above the printed name/title block.
 }
+
+// This exact string is what embedSignature.ts looks for to locate the
+// signature block reliably. It MUST stay in sync with SIGNATURE_ANCHOR_TEXT
+// in src/utils/embedSignature.ts — the same constant LetterTemplate.ts uses.
+export const SIGNATURE_ANCHOR_TEXT = 'RHC-SIGNATURE-ANCHOR';
 
 const DEFAULTS = {
   logoUrl:
@@ -57,9 +67,33 @@ export function getMemoHTML(data: MemoData): string {
     footerAddress = DEFAULTS.footerAddress,
     footerContact = DEFAULTS.footerContact,
     footerTagline = DEFAULTS.footerTagline,
+    fromFirst = false,
   } = data;
 
   const escaped = (value: string) => escapeHtml(value);
+
+  const fields = [
+    { label: "TO", value: to },
+    { label: "FROM", value: from },
+    { label: "REF", value: ref },
+    { label: "DATE", value: date },
+    { label: "SUBJECT", value: subject },
+  ];
+
+  const orderedFields = fromFirst
+    ? [fields[1], fields[0], ...fields.slice(2)]
+    : fields;
+
+  const fieldsHtml = orderedFields
+    .map(
+      ({ label, value }) => `
+    <div class="field">
+      <span class="label">${label}</span>
+      <span class="colon">:</span>
+      <span class="value">${escaped(value)}</span>
+    </div>`
+    )
+    .join("");
 
   return `
 <!DOCTYPE html>
@@ -87,10 +121,40 @@ export function getMemoHTML(data: MemoData): string {
     .body-content table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 12.5px; page-break-inside: avoid; break-inside: avoid; }
     .body-content table th, .body-content table td { border: 1px solid #333; padding: 6px 10px; text-align: left; vertical-align: top; }
     .body-content table th { background: #f0ede4; font-weight: bold; text-transform: uppercase; font-size: 11px; }
-    .signature { margin-top: 40px; font-size: 13.5px; page-break-inside: avoid; break-inside: avoid; }
+
+    /* Signature section container - ensures proper spacing, mirrors LetterTemplate.ts */
+    .signature-section {
+      margin-top: 50px;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+
+    /* Invisible marker painted immediately before the signature block so
+       the PDF/e-sign pipeline can locate it unambiguously instead of
+       pattern-matching visible text. See SIGNATURE_ANCHOR_TEXT above. */
+    .signature-anchor {
+      font-size: 1px;
+      line-height: 1px;
+      height: 1px;
+      color: transparent;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    /* Signature block - displayed right after the anchor. margin-top gives
+       the embedded signature image (placed relative to the anchor above)
+       clearance so it doesn't overlap the printed name/title text. */
+    .signature {
+      font-size: 13.5px;
+      text-align: left;
+      margin-top: 70px;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
     .signature .signatory-name { font-weight: bold; text-transform: uppercase; margin-bottom: 4px; }
     .signature .org-unit { font-weight: bold; text-decoration: underline; text-transform: uppercase; }
     .signature .drafted-by { font-weight: normal; text-transform: lowercase; margin-top: 4px; font-size: 12px; color: #333; }
+
     .footer { position: fixed; bottom: 30px; left: 60px; right: 60px; border-top: 1px solid #999; padding-top: 14px; }
     .footer-top { display: flex; align-items: center; gap: 18px; }
     .footer-emblem { flex: 0 0 70px; }
@@ -98,6 +162,7 @@ export function getMemoHTML(data: MemoData): string {
     .footer-text { flex: 1; text-align: right; font-size: 11px; color: #1a1a1a; }
     .footer-text p { margin: 2px 0; line-height: 1.5; }
     .footer-tagline { text-align: right; font-size: 12px; font-weight: bold; color: #1E4620; margin-top: 8px; }
+
     @media (max-width: 600px) {
       .page { padding: 30px 20px 170px; }
       .field .label { width: 70px; }
@@ -120,11 +185,7 @@ export function getMemoHTML(data: MemoData): string {
   <div class="top-rule"></div>
 
   <div class="fields">
-    <div class="field"><span class="label">TO</span><span class="colon">:</span><span class="value">${escaped(to)}</span></div>
-    <div class="field"><span class="label">FROM</span><span class="colon">:</span><span class="value">${escaped(from)}</span></div>
-    <div class="field"><span class="label">REF</span><span class="colon">:</span><span class="value">${escaped(ref)}</span></div>
-    <div class="field"><span class="label">DATE</span><span class="colon">:</span><span class="value">${escaped(date)}</span></div>
-    <div class="field"><span class="label">SUBJECT</span><span class="colon">:</span><span class="value">${escaped(subject)}</span></div>
+    ${fieldsHtml}
   </div>
 
   <div class="bottom-rule"></div>
@@ -133,10 +194,17 @@ export function getMemoHTML(data: MemoData): string {
     ${body ? body.replace(/\n/g, "<br/>") : "<p>&nbsp;</p>"}
   </div>
 
-  <div class="signature">
-    <div class="signatory-name">${escaped(signatureName || from || "")}</div>
-    <div class="org-unit">${escaped(signatureTitle || "Registrar, High Court")}</div>
-    ${draftedByInitials ? `<div class="drafted-by">rhc/${escaped(draftedByInitials)}</div>` : ""}
+  <!-- Signature section with anchor marker -->
+  <div class="signature-section">
+    <!-- Explicit, unambiguous anchor for signature-placement detection -->
+    <div class="signature-anchor" aria-hidden="true">${SIGNATURE_ANCHOR_TEXT}</div>
+
+    <!-- Signature block – displayed immediately after the anchor -->
+    <div class="signature">
+      <div class="signatory-name">${escaped(signatureName || from || "")}</div>
+      <div class="org-unit">${escaped(signatureTitle || "Registrar, High Court")}</div>
+      ${draftedByInitials ? `<div class="drafted-by">rhc/${escaped(draftedByInitials)}</div>` : ""}
+    </div>
   </div>
 
   <div class="footer">
@@ -156,5 +224,4 @@ export function getMemoHTML(data: MemoData): string {
 </html>`;
 }
 
-// Convenience export (same as getMemoHTML)
 export const getMemoTemplate = getMemoHTML;

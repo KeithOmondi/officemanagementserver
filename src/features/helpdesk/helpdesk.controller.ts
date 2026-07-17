@@ -16,8 +16,11 @@ import {
     updatePartHeardSchema,
     createMedicalClaimSchema,
     createGeneralRequestSchema,
+    updateGeneralRequestSchema,
     createVisaRequestSchema,
     createProtocolEventSchema,
+    createSecurityRequestSchema,
+    updateSecurityRequestSchema,
     helpDeskFiltersSchema,
     idSchema,
     updateCircuitDSASchema,
@@ -28,7 +31,7 @@ import {
     markDocumentViewedSchema,
     documentViewStatusSchema,
 } from './helpdesk.validator';
-import type { ReportModule, DSAReportFilters } from './helpdesk.types';
+import type { ReportModule, DSAReportFilters, RequestType, RemarkType, GeneralRequestCategory, UpdateStatusInput } from './helpdesk.types';
 import { generateDSAReportExcel } from './helpdesk-report.excel';
 
 export const helpDeskController = {
@@ -44,6 +47,344 @@ export const helpDeskController = {
         const limit = req.query.limit ? parseInt(req.query.limit as string) : 50;
         const logs = await HelpDeskService.getAuditLog(limit);
         return sendSuccess(res, logs, 'Audit log retrieved');
+    }),
+
+    // ============================================================
+    // GENERAL REQUESTS (UNIFIED - includes all security/personnel)
+    // ============================================================
+
+    /**
+     * GET /api/helpdesk/general
+     * Get all general requests with optional filters
+     * Supports filtering by: status, judge_name, request_type, remark_type, category
+     */
+    getAllGeneralRequests: asyncHandler(async (req: Request, res: Response) => {
+        const result = helpDeskFiltersSchema.safeParse({ query: req.query });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid filters');
+        }
+        const requests = await HelpDeskService.findAllGeneralRequests(result.data.query);
+        return sendSuccess(res, requests, 'General requests retrieved');
+    }),
+
+    /**
+     * GET /api/helpdesk/general/:id
+     * Get a specific general request by ID
+     */
+    getGeneralRequestById: asyncHandler(async (req: Request, res: Response) => {
+        const result = idSchema.safeParse({ params: req.params });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        const request = await HelpDeskService.findGeneralRequestById(result.data.params.id);
+        if (!request) {
+            throw new AppError(404, 'General request not found');
+        }
+        return sendSuccess(res, request, 'General request retrieved');
+    }),
+
+    /**
+     * GET /api/helpdesk/general/judge/:judgeName
+     * Get general requests by judge name
+     */
+ getGeneralRequestsByJudge: asyncHandler(async (req: Request, res: Response) => {
+    const { judgeName } = req.params;
+    // Ensure judgeName is a string
+    const judgeNameStr = Array.isArray(judgeName) ? judgeName[0] : judgeName;
+    if (!judgeNameStr) {
+        throw new AppError(400, 'Judge name is required');
+    }
+    const requests = await HelpDeskService.findGeneralRequestsByJudge(judgeNameStr);
+    return sendSuccess(res, requests, 'General requests retrieved by judge');
+}),
+
+    /**
+     * GET /api/helpdesk/general/type/:requestType
+     * Get general requests by request type
+     */
+  getGeneralRequestsByType: asyncHandler(async (req: Request, res: Response) => {
+    const { requestType } = req.params;
+    // Ensure requestType is a string
+    const requestTypeStr = Array.isArray(requestType) ? requestType[0] : requestType;
+    if (!requestTypeStr) {
+        throw new AppError(400, 'Request type is required');
+    }
+    if (!['Driver', 'Bodyguard', 'Firearm', 'Current Station', 'Force Number', 'Residence Security', 'Sentry'].includes(requestTypeStr)) {
+        throw new AppError(400, 'Valid request type is required');
+    }
+    const requests = await HelpDeskService.findGeneralRequestsByType(requestTypeStr as RequestType);
+    return sendSuccess(res, requests, 'General requests retrieved by type');
+}),
+
+    /**
+     * GET /api/helpdesk/general/remark/:remarkType
+     * Get general requests by remark type (Onboarding/Release)
+     */
+   getGeneralRequestsByRemarkType: asyncHandler(async (req: Request, res: Response) => {
+    const { remarkType } = req.params;
+    // Ensure remarkType is a string
+    const remarkTypeStr = Array.isArray(remarkType) ? remarkType[0] : remarkType;
+    if (!remarkTypeStr) {
+        throw new AppError(400, 'Remark type is required');
+    }
+    if (!['Onboarding', 'Release'].includes(remarkTypeStr)) {
+        throw new AppError(400, 'Valid remark type is required (Onboarding or Release)');
+    }
+    const requests = await HelpDeskService.findGeneralRequestsByRemarkType(remarkTypeStr as RemarkType);
+    return sendSuccess(res, requests, 'General requests retrieved by remark type');
+}),
+
+    /**
+     * POST /api/helpdesk/general
+     * Create a new general request (supports all 7 types: Driver, Bodyguard, Firearm, 
+     * Current Station, Force Number, Residence Security, Sentry)
+     */
+    createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
+        const result = createGeneralRequestSchema.safeParse({ body: req.body });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
+        }
+        const request = await HelpDeskService.createGeneralRequest(result.data.body, req.user!.id);
+        return sendSuccess(res, request, 'General request created', 201);
+    }),
+
+    /**
+     * PUT /api/helpdesk/general/:id
+     * Update a general request
+     */
+    updateGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
+        const paramsResult = idSchema.safeParse({ params: req.params });
+        if (!paramsResult.success) {
+            throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        const bodyResult = updateGeneralRequestSchema.safeParse({ body: req.body });
+        if (!bodyResult.success) {
+            throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+        }
+        const request = await HelpDeskService.updateGeneralRequest(
+            paramsResult.data.params.id,
+            bodyResult.data.body
+        );
+        return sendSuccess(res, request, 'General request updated');
+    }),
+
+    /**
+     * PATCH /api/helpdesk/general/:id/status
+     * Update general request status
+     */
+    updateGeneralRequestStatus: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = idSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) {
+        throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    }
+    const { status, notes, email } = req.body;
+    if (!status) {
+        throw new AppError(400, 'Status is required');
+    }
+    
+    const resolvedBy = req.user?.full_name || req.user?.email || 'System Administrator';
+    const rejectedBy = req.user?.full_name || req.user?.email || 'System Administrator';
+    
+    // Create update input with all fields
+    const updateInput: UpdateStatusInput = {
+        status,
+        notes,
+        resolvedBy,
+        rejectedBy
+    };
+    
+    // Only include email if provided
+    if (email) {
+        updateInput.email = email;
+    }
+    
+    const request = await HelpDeskService.updateGeneralRequestStatus(
+        paramsResult.data.params.id,
+        updateInput
+    );
+    return sendSuccess(res, request, 'General request status updated');
+}),
+
+    /**
+     * DELETE /api/helpdesk/general/:id
+     * Delete a general request (soft delete)
+     */
+    deleteGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
+        const result = idSchema.safeParse({ params: req.params });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        await HelpDeskService.deleteGeneralRequest(result.data.params.id);
+        return sendSuccess(res, null, 'General request deleted');
+    }),
+
+    /**
+     * GET /api/helpdesk/general/stats
+     * Get general request statistics
+     */
+    getGeneralRequestStats: asyncHandler(async (_req: Request, res: Response) => {
+        const stats = await HelpDeskService.getGeneralRequestStats();
+        return sendSuccess(res, stats, 'General request statistics retrieved');
+    }),
+
+    /**
+     * POST /api/helpdesk/general/:id/email
+     * Send email notification for a general request
+     */
+    sendGeneralRequestEmail: asyncHandler(async (req: Request, res: Response) => {
+        const paramsResult = idSchema.safeParse({ params: req.params });
+        if (!paramsResult.success) {
+            throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        const { email, type } = req.body;
+        if (!email) {
+            throw new AppError(400, 'Email is required');
+        }
+        if (!type || !['acknowledgement', 'resolved', 'rejected'].includes(type)) {
+            throw new AppError(400, 'Valid email type is required (acknowledgement, resolved, or rejected)');
+        }
+        
+        await HelpDeskService.sendGeneralRequestEmail(
+            paramsResult.data.params.id,
+            email,
+            type as 'acknowledgement' | 'resolved' | 'rejected'
+        );
+        return sendSuccess(res, null, `Email (${type}) sent successfully`);
+    }),
+
+    // ============================================================
+    // LEGACY SECURITY REQUESTS (Deprecated - kept for backward compatibility)
+    // ============================================================
+
+    /**
+     * @deprecated Use getAllGeneralRequests with request_type filter instead
+     * GET /api/helpdesk/security
+     */
+    getAllSecurityRequests: asyncHandler(async (req: Request, res: Response) => {
+        const result = helpDeskFiltersSchema.safeParse({ query: req.query });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid filters');
+        }
+        const requests = await HelpDeskService.findAllSecurityRequests(result.data.query);
+        return sendSuccess(res, requests, 'Security requests retrieved');
+    }),
+
+    /**
+     * @deprecated Use getGeneralRequestById instead
+     * GET /api/helpdesk/security/:id
+     */
+    getSecurityRequestById: asyncHandler(async (req: Request, res: Response) => {
+        const result = idSchema.safeParse({ params: req.params });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        const request = await HelpDeskService.findSecurityRequestById(result.data.params.id);
+        if (!request) {
+            throw new AppError(404, 'Security request not found');
+        }
+        return sendSuccess(res, request, 'Security request retrieved');
+    }),
+
+    /**
+     * @deprecated Use getGeneralRequestsByJudge instead
+     * GET /api/helpdesk/security/judge/:judgeName
+     */
+    getSecurityRequestsByJudge: asyncHandler(async (req: Request, res: Response) => {
+        const { judgeName } = req.params;
+        const judgeNameStr = Array.isArray(judgeName) ? judgeName[0] : judgeName;
+        if (!judgeNameStr) {
+            throw new AppError(400, 'Judge name is required');
+        }
+        const requests = await HelpDeskService.findSecurityRequestsByJudge(judgeNameStr);
+        return sendSuccess(res, requests, 'Security requests retrieved by judge');
+    }),
+
+    /**
+     * @deprecated Use getGeneralRequestsByType instead
+     * GET /api/helpdesk/security/type/:requestType
+     */
+    getSecurityRequestsByType: asyncHandler(async (req: Request, res: Response) => {
+        const { requestType } = req.params;
+        if (!requestType) {
+            throw new AppError(400, 'Request type is required');
+        }
+        const requests = await HelpDeskService.findSecurityRequestsByType(requestType as RequestType);
+        return sendSuccess(res, requests, 'Security requests retrieved by type');
+    }),
+
+    /**
+     * @deprecated Use createGeneralRequest instead
+     * POST /api/helpdesk/security
+     */
+    createSecurityRequest: asyncHandler(async (req: Request, res: Response) => {
+        const result = createSecurityRequestSchema.safeParse({ body: req.body });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
+        }
+        const request = await HelpDeskService.createSecurityRequest(result.data.body, req.user!.id);
+        return sendSuccess(res, request, 'Security request created', 201);
+    }),
+
+    /**
+     * @deprecated Use updateGeneralRequest instead
+     * PUT /api/helpdesk/security/:id
+     */
+    updateSecurityRequest: asyncHandler(async (req: Request, res: Response) => {
+        const paramsResult = idSchema.safeParse({ params: req.params });
+        if (!paramsResult.success) {
+            throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        const bodyResult = updateSecurityRequestSchema.safeParse({ body: req.body });
+        if (!bodyResult.success) {
+            throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+        }
+        const request = await HelpDeskService.updateSecurityRequest(
+            paramsResult.data.params.id,
+            bodyResult.data.body
+        );
+        return sendSuccess(res, request, 'Security request updated');
+    }),
+
+    /**
+     * @deprecated Use updateGeneralRequestStatus instead
+     * PATCH /api/helpdesk/security/:id/status
+     */
+    updateSecurityRequestStatus: asyncHandler(async (req: Request, res: Response) => {
+        const paramsResult = idSchema.safeParse({ params: req.params });
+        if (!paramsResult.success) {
+            throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        const { status, notes } = req.body;
+        if (!status) {
+            throw new AppError(400, 'Status is required');
+        }
+        const request = await HelpDeskService.updateSecurityRequestStatus(
+            paramsResult.data.params.id,
+            { status, notes }
+        );
+        return sendSuccess(res, request, 'Security request status updated');
+    }),
+
+    /**
+     * @deprecated Use deleteGeneralRequest instead
+     * DELETE /api/helpdesk/security/:id
+     */
+    deleteSecurityRequest: asyncHandler(async (req: Request, res: Response) => {
+        const result = idSchema.safeParse({ params: req.params });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        await HelpDeskService.deleteSecurityRequest(result.data.params.id);
+        return sendSuccess(res, null, 'Security request deleted');
+    }),
+
+    /**
+     * @deprecated Use getGeneralRequestStats instead
+     * GET /api/helpdesk/security/stats
+     */
+    getSecurityRequestStats: asyncHandler(async (_req: Request, res: Response) => {
+        const stats = await HelpDeskService.getSecurityRequestStats();
+        return sendSuccess(res, stats, 'Security request statistics retrieved');
     }),
 
     // ─── Judge Utilities (one judge → many utility items) ───────────────────
@@ -519,76 +860,6 @@ export const helpDeskController = {
         return sendSuccess(res, null, 'Medical claim deleted');
     }),
 
-    // ─── General Requests ────────────────────────────────────────────────────
-
-    getAllGeneralRequests: asyncHandler(async (req: Request, res: Response) => {
-        const result = helpDeskFiltersSchema.safeParse({ query: req.query });
-        if (!result.success) {
-            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid filters');
-        }
-        const requests = await HelpDeskService.findAllGeneralRequests(result.data.query);
-        return sendSuccess(res, requests, 'General requests retrieved');
-    }),
-
-    getGeneralRequestById: asyncHandler(async (req: Request, res: Response) => {
-        const result = idSchema.safeParse({ params: req.params });
-        if (!result.success) {
-            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
-        }
-        const request = await HelpDeskService.findGeneralRequestById(result.data.params.id);
-        if (!request) {
-            throw new AppError(404, 'General request not found');
-        }
-        return sendSuccess(res, request, 'General request retrieved');
-    }),
-
-    createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
-        const result = createGeneralRequestSchema.safeParse({ body: req.body });
-        if (!result.success) {
-            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
-        }
-        const request = await HelpDeskService.createGeneralRequest(result.data.body, req.user!.id);
-        return sendSuccess(res, request, 'General request created', 201);
-    }),
-
-    // In helpdesk.controller.ts - updateGeneralRequestStatus
-
-updateGeneralRequestStatus: asyncHandler(async (req: Request, res: Response) => {
-    const paramsResult = idSchema.safeParse({ params: req.params });
-    if (!paramsResult.success) {
-        throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
-    }
-    const { status, remarks, email } = req.body;
-    if (!status) {
-        throw new AppError(400, 'Status is required');
-    }
-    
-    // Get the user info for resolvedBy/rejectedBy
-    const resolvedBy = req.user?.full_name || req.user?.email || 'System Administrator';
-    const rejectedBy = req.user?.full_name || req.user?.email || 'System Administrator';
-    
-    const request = await HelpDeskService.updateGeneralRequestStatus(
-        paramsResult.data.params.id,
-        { 
-            status, 
-            remarks, 
-            email,
-            resolvedBy,
-            rejectedBy
-        }
-    );
-    return sendSuccess(res, request, 'General request status updated');
-}),
-
-    deleteGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
-        const result = idSchema.safeParse({ params: req.params });
-        if (!result.success) {
-            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
-        }
-        await HelpDeskService.deleteGeneralRequest(result.data.params.id);
-        return sendSuccess(res, null, 'General request deleted');
-    }),
-
     // ─── Visa Support ────────────────────────────────────────────────────────
 
     getAllVisaRequests: asyncHandler(async (req: Request, res: Response) => {
@@ -648,37 +919,29 @@ updateGeneralRequestStatus: asyncHandler(async (req: Request, res: Response) => 
 
     // ─── Visa Document Tracking ─────────────────────────────────────────────
 
-   /**
- * Mark a visa document as viewed
- * POST /api/helpdesk/visa/documents/:id/view
- */
-markDocumentViewed: asyncHandler(async (req: Request, res: Response) => {
-    const result = markDocumentViewedSchema.safeParse({ params: req.params });
-    if (!result.success) {
-        throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid document ID');
-    }
+    markDocumentViewed: asyncHandler(async (req: Request, res: Response) => {
+        const result = markDocumentViewedSchema.safeParse({ params: req.params });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid document ID');
+        }
 
-    const documentId = result.data.params.id;
-    const userId = req.user!.id;
-    const userName = req.user!.full_name || req.user!.email || 'Unknown User';
-    const ipAddress = req.ip || req.socket?.remoteAddress;
-    const userAgent = req.headers['user-agent'];
+        const documentId = result.data.params.id;
+        const userId = req.user!.id;
+        const userName = req.user!.full_name || req.user!.email || 'Unknown User';
+        const ipAddress = req.ip || req.socket?.remoteAddress;
+        const userAgent = req.headers['user-agent'];
 
-    await HelpDeskService.markDocumentViewed(
-        documentId,
-        userId,
-        userName,
-        ipAddress,
-        userAgent
-    );
+        await HelpDeskService.markDocumentViewed(
+            documentId,
+            userId,
+            userName,
+            ipAddress,
+            userAgent
+        );
 
-    return sendSuccess(res, null, 'Document marked as viewed');
-}),
+        return sendSuccess(res, null, 'Document marked as viewed');
+    }),
 
-    /**
-     * Get document view status
-     * GET /api/helpdesk/visa/documents/:id/status?include_viewers=true
-     */
     getDocumentViewStatus: asyncHandler(async (req: Request, res: Response) => {
         const result = documentViewStatusSchema.safeParse({ 
             params: req.params,
@@ -880,7 +1143,6 @@ markDocumentViewed: asyncHandler(async (req: Request, res: Response) => {
                 filters.modules = moduleList;
             }
         }
-        // Note: no limit/offset here — export should return the full filtered set, not a page
 
         const report = await HelpDeskService.getDSAReport(filters);
         const buffer = await generateDSAReportExcel(report);

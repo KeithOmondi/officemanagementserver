@@ -17,8 +17,8 @@ export type DocumentStatus =
   | 'in_progress'
   | 'completed'
   | 'filed'
-  | 'ready_to_release'  // ✅ NEW: Signed and ready for release
-  | 'released';         // ✅ NEW: Released to admin side
+  | 'ready_to_release'
+  | 'released';
 
 export type DocumentCategory =
   | 'judgments' | 'rulings' | 'correspondence' | 'orders' | 'drafts' | 'general';
@@ -26,6 +26,12 @@ export type DocumentCategory =
 export type RoutePriority = 'low' | 'normal' | 'urgent';
 
 export type RefType = 'for_signature' | 'for_attention' | 'for_information' | 'direction' | 'other';
+
+// ── Signature Placement ──────────────────────────────────────────────────
+// NOTE: Signature placement is now auto‑detected by scanning the document
+// for the signatory block (name + title). Custom absolute positioning can
+// still be applied via signature_position_x/y/width/height fields.
+// The legacy 'top'/'bottom'/'left'/'right' placement is no longer supported.
 
 // ── Document Mark ──────────────────────────────────────────────────────────
 
@@ -39,7 +45,7 @@ export interface DocumentMark {
   assigned_to: string | null;
   assigned_to_name: string | null;
   instructions: string | null;
-  bring_up_date: string | null;      // ISO date string (YYYY-MM-DD)
+  bring_up_date: string | null;
   priority: RoutePriority;
   marked_at: Date;
   acknowledged_at: Date | null;
@@ -108,7 +114,7 @@ export interface Document {
   signed_at: Date | null;
   released_at: Date | null;
   released_by: string | null;
-  released_by_name: string | null;  // ✅ ADD THIS - matches SQL alias
+  released_by_name: string | null;
   is_sent: boolean;
   sent_at: Date | null;
   is_draft: boolean;
@@ -127,6 +133,14 @@ export interface Document {
   enclosures: string | null;
   signature_name: string | null;
   signature_title: string | null;
+
+  // ── Custom signature position (draggable) ──────────────────────────────
+  // When these are set, the signature will be placed at the exact
+  // coordinates; otherwise, it is auto‑detected.
+  signature_position_x: number | null;
+  signature_position_y: number | null;
+  signature_position_width: number | null;
+  signature_position_height: number | null;
 }
 
 export interface DocumentWithAnnotations extends Document {

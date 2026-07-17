@@ -20,8 +20,8 @@ export const documentStatusEnum = z.enum([
   'in_progress',
   'completed',
   'filed',
-  'ready_to_release',  // ✅ NEW: Signed and ready for release
-  'released',          // ✅ NEW: Released to admin side
+  'ready_to_release',
+  'released',
 ]);
 
 export const documentCategoryEnum = z.enum([
@@ -40,6 +40,10 @@ export const refTypeEnum = z.enum([
   'direction',
   'other',
 ]);
+
+// ── Signature Placement enum has been removed.
+// Signature is now placed either automatically (by detecting the signatory block)
+// or via absolute positioning using signature_position_x/y/width/height.
 
 // ── Create composed document ────────────────────────────────────────────────
 
@@ -95,7 +99,7 @@ export const updateDocumentSchema = z.object({
       status: documentStatusEnum.optional(),
       assigned_to: z.string().uuid().nullable().optional(),
       department_id: z.string().uuid().nullable().optional(),
-      // ✅ Memo/Letter specific fields (editable by super admin)
+      // Memo/Letter specific fields (editable by super admin)
       to_recipient: z.string().max(500).trim().optional(),
       from_sender: z.string().max(500).trim().optional(),
       document_date: z.string().optional(),
@@ -104,6 +108,11 @@ export const updateDocumentSchema = z.object({
       enclosures: z.string().max(500).trim().optional(),
       signature_name: z.string().max(255).trim().optional(),
       signature_title: z.string().max(255).trim().optional(),
+      // Custom signature position (draggable) – absolute positioning
+      signature_position_x: z.number().nullable().optional(),
+      signature_position_y: z.number().nullable().optional(),
+      signature_position_width: z.number().nullable().optional(),
+      signature_position_height: z.number().nullable().optional(),
     })
     .strict()
     .refine((b) => Object.keys(b).length > 0, {
@@ -253,6 +262,7 @@ const baseComposeSchema = z.object({
   from: z.string().optional(),
   signatureName: z.string().optional(),
   signatureTitle: z.string().optional(),
+  // signature_placement removed – signature placement is now auto-detected
   department_id: z.string().uuid().optional(),
   reference_no: z.string().max(100).trim().optional(),
 });
@@ -297,10 +307,13 @@ export const signDocumentSchema = z.object({
   }),
   body: z.object({
     otp: z.string().length(6, 'OTP must be exactly 6 digits').regex(/^\d{6}$/, 'OTP must contain only digits'),
+    // Custom signature position (sent from frontend when user places the box)
+    position_x: z.number().optional(),
+    position_y: z.number().optional(),
+    position_width: z.number().optional(),
+    position_height: z.number().optional(),
   }),
 });
-
-
 
 export const releaseDocumentSchema = z.object({
   params: z.object({

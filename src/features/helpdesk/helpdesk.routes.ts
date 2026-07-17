@@ -69,12 +69,31 @@ router.post('/medical-claims', requireRole('dept_head', 'super_admin', 'staff'),
 router.put('/medical-claims/:id/status', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateMedicalClaimStatus);
 router.delete('/medical-claims/:id', requireRole('super_admin', 'dept_head'), helpDeskController.deleteMedicalClaim);
 
-// ─── General Requests ────────────────────────────────────────────────────────
-router.get('/general-requests', helpDeskController.getAllGeneralRequests);
-router.get('/general-requests/:id', helpDeskController.getGeneralRequestById);
-router.post('/general-requests', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.createGeneralRequest);
-router.put('/general-requests/:id/status', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateGeneralRequestStatus);
-router.delete('/general-requests/:id', requireRole('super_admin', 'dept_head'), helpDeskController.deleteGeneralRequest);
+// ─── General Requests (Unified) ─────────────────────────────────────────────
+// Use /general to match controller methods
+router.get('/general', helpDeskController.getAllGeneralRequests);
+router.get('/general/:id', helpDeskController.getGeneralRequestById);
+router.get('/general/judge/:judgeName', helpDeskController.getGeneralRequestsByJudge);
+router.get('/general/type/:requestType', helpDeskController.getGeneralRequestsByType);
+router.get('/general/remark/:remarkType', helpDeskController.getGeneralRequestsByRemarkType);
+router.get('/general/stats', helpDeskController.getGeneralRequestStats);
+router.post('/general', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.createGeneralRequest);
+router.put('/general/:id', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateGeneralRequest);
+router.patch('/general/:id/status', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateGeneralRequestStatus);
+router.delete('/general/:id', requireRole('super_admin', 'dept_head'), helpDeskController.deleteGeneralRequest);
+router.post('/general/:id/email', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.sendGeneralRequestEmail);
+
+// ─── Legacy Security Requests (Deprecated) ──────────────────────────────────
+// Keep for backward compatibility
+router.get('/security', helpDeskController.getAllSecurityRequests);
+router.get('/security/:id', helpDeskController.getSecurityRequestById);
+router.get('/security/judge/:judgeName', helpDeskController.getSecurityRequestsByJudge);
+router.get('/security/type/:requestType', helpDeskController.getSecurityRequestsByType);
+router.get('/security/stats', helpDeskController.getSecurityRequestStats);
+router.post('/security', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.createSecurityRequest);
+router.put('/security/:id', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateSecurityRequest);
+router.patch('/security/:id/status', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateSecurityRequestStatus);
+router.delete('/security/:id', requireRole('super_admin', 'dept_head'), helpDeskController.deleteSecurityRequest);
 
 // ─── Visa Support ────────────────────────────────────────────────────────────
 router.get('/visa', helpDeskController.getAllVisaRequests);

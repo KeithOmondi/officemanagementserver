@@ -12,6 +12,7 @@ import type {
     GeneralRequest,
     VisaRequest,
     ProtocolEvent,
+    SecurityRequest,
     HelpDeskAuditEntry,
     HelpDeskStats,
     CreateUtilityInput,
@@ -26,6 +27,8 @@ import type {
     CreateGeneralRequestInput,
     CreateVisaRequestInput,
     CreateProtocolEventInput,
+    CreateSecurityRequestInput,
+    UpdateSecurityRequestInput,
     UpdateStatusInput,
     HelpDeskFilters,
     DSADetailInput,
@@ -40,6 +43,10 @@ import type {
     ReportModule,
     DSAPaymentStatus,
     DocumentView,
+    RequestType,
+    RemarkType,
+    GeneralRequestCategory,
+    UpdateGeneralRequestInput,
 } from './helpdesk.types';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -88,8 +95,12 @@ const MEDICAL_CLAIM_SELECT = `
     created_by, created_at, updated_at
 `;
 
+// Updated GENERAL_REQUEST_SELECT to include all new fields
 const GENERAL_REQUEST_SELECT = `
-    id, s_no, ticket_number, judge_name, request, date_received, officer_assigned, status, remarks,
+    id, s_no, ticket_number, judge_name, request, request_type, category,
+    date_received, officer_assigned, status, remarks, remark_type,
+    request_date, location, firearm_type, force_number, officer_name,
+    assigned_to, priority, notes,
     created_by, created_at, updated_at
 `;
 
@@ -106,6 +117,13 @@ const VISA_DOCUMENT_SELECT = `
 const PROTOCOL_SELECT = `
     id, s_no, activity, period_from, period_to, officers_assigned, remarks,
     dsa_required, total_dsa, status, notes,
+    created_by, created_at, updated_at
+`;
+
+// Deprecated - kept for backward compatibility
+const SECURITY_REQUEST_SELECT = `
+    id, s_no, judge_name, request_type, request_date, officer_assigned,
+    status, remarks, remark_type, location, firearm_type, force_number,
     created_by, created_at, updated_at
 `;
 
@@ -221,6 +239,632 @@ export class HelpDeskService {
             [id]
         );
         return rows;
+    }
+
+    // ============================================================
+    // GENERAL REQUESTS (UNIFIED - includes all security/personnel)
+    // ============================================================
+
+    // ─── General Requests ──────────────────────────────────────────────────
+
+    static async findAllGeneralRequests(filters: HelpDeskFilters = {}): Promise<GeneralRequest[]> {
+        let query = `SELECT ${GENERAL_REQUEST_SELECT} FROM general_requests WHERE is_active = true`;
+        const params: unknown[] = [];
+        let paramCount = 1;
+
+        if (filters.search) {
+            query += ` AND (judge_name ILIKE $${paramCount} OR request ILIKE $${paramCount} OR ticket_number ILIKE $${paramCount})`;
+            params.push(`%${filters.search}%`);
+            paramCount++;
+        }
+        if (filters.status) {
+            query += ` AND status = $${paramCount}`;
+            params.push(filters.status);
+            paramCount++;
+        }
+        if (filters.judge_name) {
+            query += ` AND judge_name ILIKE $${paramCount}`;
+            params.push(`%${filters.judge_name}%`);
+            paramCount++;
+        }
+        if (filters.request_type) {
+            query += ` AND request_type = $${paramCount}`;
+            params.push(filters.request_type);
+            paramCount++;
+        }
+        if (filters.remark_type) {
+            query += ` AND remark_type = $${paramCount}`;
+            params.push(filters.remark_type);
+            paramCount++;
+        }
+        if (filters.category) {
+            query += ` AND category = $${paramCount}`;
+            params.push(filters.category);
+            paramCount++;
+        }
+
+        query += ` ORDER BY created_at DESC`;
+        if (filters.limit) {
+            query += ` LIMIT $${paramCount}`;
+            params.push(filters.limit);
+            paramCount++;
+        }
+        if (filters.offset) {
+            query += ` OFFSET $${paramCount}`;
+            params.push(filters.offset);
+        }
+
+        const { rows } = await pool.query(query, params);
+        return rows;
+    }
+
+    static async findGeneralRequestById(id: string): Promise<GeneralRequest | null> {
+        const { rows } = await pool.query(
+            `SELECT ${GENERAL_REQUEST_SELECT} FROM general_requests WHERE id = $1 AND is_active = true`,
+            [id]
+        );
+        return rows[0] || null;
+    }
+
+    static async findGeneralRequestsByJudge(judgeName: string): Promise<GeneralRequest[]> {
+        const { rows } = await pool.query(
+            `SELECT ${GENERAL_REQUEST_SELECT} 
+             FROM general_requests 
+             WHERE judge_name ILIKE $1 AND is_active = true
+             ORDER BY created_at DESC`,
+            [`%${judgeName}%`]
+        );
+        return rows;
+    }
+
+    static async findGeneralRequestsByType(requestType: RequestType): Promise<GeneralRequest[]> {
+        const { rows } = await pool.query(
+            `SELECT ${GENERAL_REQUEST_SELECT} 
+             FROM general_requests 
+             WHERE request_type = $1 AND is_active = true
+             ORDER BY created_at DESC`,
+            [requestType]
+        );
+        return rows;
+    }
+
+    static async findGeneralRequestsByRemarkType(remarkType: RemarkType): Promise<GeneralRequest[]> {
+        const { rows } = await pool.query(
+            `SELECT ${GENERAL_REQUEST_SELECT} 
+             FROM general_requests 
+             WHERE remark_type = $1 AND is_active = true
+             ORDER BY created_at DESC`,
+            [remarkType]
+        );
+        return rows;
+    }
+
+    static async createGeneralRequest(
+        input: CreateGeneralRequestInput,
+        userId: string
+    ): Promise<GeneralRequest> {
+        const client = await pool.connect();
+        
+        try {
+            await client.query('BEGIN');
+
+            const s_no = await generateSerialNumber('general_requests');
+            const ticketNumber = await generateTicketNumber();
+
+            // Determine category if not provided
+            let category = input.category;
+            if (!category) {
+                // Auto-assign category based on request type
+                const securityTypes: RequestType[] = ['Firearm', 'Current Station', 'Force Number', 'Residence Security', 'Sentry'];
+                const personnelTypes: RequestType[] = ['Driver', 'Bodyguard'];
+                
+                if (securityTypes.includes(input.request_type)) {
+                    category = 'Security';
+                } else if (personnelTypes.includes(input.request_type)) {
+                    category = 'Personnel';
+                } else {
+                    category = 'Administrative';
+                }
+            }
+
+            const { rows } = await client.query(
+                `INSERT INTO general_requests (
+                    s_no, ticket_number, judge_name, request, request_type, category,
+                    date_received, officer_assigned, status, remarks, remark_type,
+                    request_date, location, firearm_type, force_number, officer_name,
+                    assigned_to, priority, notes, created_by
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+                RETURNING id`,
+                [
+                    s_no,
+                    ticketNumber,
+                    input.judge_name.trim(),
+                    input.request.trim(),
+                    input.request_type,
+                    category,
+                    input.date_received || null,
+                    input.officer_assigned || null,
+                    input.status || 'Pending',
+                    input.remarks || null,
+                    input.remark_type || null,
+                    input.request_date || null,
+                    input.location || null,
+                    input.firearm_type || null,
+                    input.force_number || null,
+                    input.officer_name || null,
+                    input.assigned_to || null,
+                    input.priority || null,
+                    input.notes || null,
+                    userId,
+                ]
+            );
+
+            await client.query('COMMIT');
+
+            const request = await this.findGeneralRequestById(rows[0].id);
+            if (!request) throw new AppError(500, 'Failed to create general request');
+
+            // Send email only if send_email is true and email is provided
+            if (input.send_email && input.email) {
+                try {
+                    await sendGeneralRequestAcknowledgement({
+                        to: input.email,
+                        ticketNumber,
+                        judgeName: input.judge_name,
+                        request: input.request,
+                    });
+                } catch (emailError) {
+                    console.error('[EMAIL ERROR] Failed to send general request acknowledgement:', emailError);
+                    // Don't throw - we don't want to fail the request creation if email fails
+                }
+            }
+
+            return request;
+            
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    static async updateGeneralRequest(
+        id: string,
+        input: UpdateGeneralRequestInput
+    ): Promise<GeneralRequest> {
+        const existing = await this.findGeneralRequestById(id);
+        if (!existing) {
+            throw new AppError(404, 'General request not found');
+        }
+
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        let paramCount = 1;
+
+        const setField = (column: string, value: unknown) => {
+            if (value !== undefined) {
+                fields.push(`${column} = $${paramCount}`);
+                values.push(value);
+                paramCount++;
+            }
+        };
+
+        setField('request', input.request?.trim());
+        setField('request_type', input.request_type);
+        setField('category', input.category);
+        setField('date_received', input.date_received);
+        setField('officer_assigned', input.officer_assigned);
+        setField('status', input.status);
+        setField('remarks', input.remarks);
+        setField('remark_type', input.remark_type);
+        setField('request_date', input.request_date);
+        setField('location', input.location);
+        setField('firearm_type', input.firearm_type);
+        setField('force_number', input.force_number);
+        setField('officer_name', input.officer_name);
+        setField('assigned_to', input.assigned_to);
+        setField('priority', input.priority);
+        setField('notes', input.notes);
+
+        if (fields.length === 0) {
+            return existing;
+        }
+
+        fields.push(`updated_at = now()`);
+        values.push(id);
+
+        await pool.query(
+            `UPDATE general_requests SET ${fields.join(', ')} WHERE id = $${paramCount}`,
+            values
+        );
+
+        const updated = await this.findGeneralRequestById(id);
+        if (!updated) throw new AppError(500, 'Failed to update general request');
+        return updated;
+    }
+
+    static async updateGeneralRequestStatus(
+    id: string,
+    input: UpdateStatusInput  // This now includes email, resolvedBy, rejectedBy
+): Promise<GeneralRequest> {
+    const existing = await this.findGeneralRequestById(id);
+    if (!existing) {
+        throw new AppError(404, 'General request not found');
+    }
+
+    await pool.query(
+        `UPDATE general_requests 
+         SET status = $1, remarks = COALESCE($2, remarks), updated_at = now()
+         WHERE id = $3`,
+        [input.status, input.notes || null, id]
+    );
+
+    const updated = await this.findGeneralRequestById(id);
+    if (!updated) throw new AppError(500, 'Failed to update general request status');
+
+    // Send email based on status change
+    if (input.email) {
+        try {
+            if (input.status === 'Resolved') {
+                const { sendGeneralRequestResolved } = require('../../utils/sendMail');
+                
+                await sendGeneralRequestResolved({
+                    to: input.email,
+                    ticketNumber: updated.ticket_number || 'N/A',
+                    judgeName: updated.judge_name,
+                    request: updated.request,
+                    resolution: input.remarks || 'Request has been resolved satisfactorily.',
+                    resolvedBy: input.resolvedBy || 'System Administrator',
+                });
+            } else if (input.status === 'Rejected') {
+                const { sendGeneralRequestRejected } = require('../../utils/sendMail');
+                
+                await sendGeneralRequestRejected({
+                    to: input.email,
+                    ticketNumber: updated.ticket_number || 'N/A',
+                    judgeName: updated.judge_name,
+                    request: updated.request,
+                    reason: input.remarks || 'No specific reason provided.',
+                    rejectedBy: input.rejectedBy || 'System Administrator',
+                });
+            }
+        } catch (emailError) {
+            console.error('[EMAIL ERROR] Failed to send status update email:', emailError);
+            // Don't throw - we don't want to fail the status update if email fails
+        }
+    }
+
+    return updated;
+}
+
+    static async deleteGeneralRequest(id: string): Promise<void> {
+        const { rows } = await pool.query(
+            `UPDATE general_requests SET is_active = false WHERE id = $1 RETURNING id`,
+            [id]
+        );
+        if (rows.length === 0) {
+            throw new AppError(404, 'General request not found');
+        }
+    }
+
+    // ─── General Request Bulk Operations ──────────────────────────────────
+
+    static async getGeneralRequestStats(): Promise<{
+        total: number;
+        byType: Record<RequestType, number>;
+        byStatus: Record<string, number>;
+        byRemarkType: Record<RemarkType, number>;
+        byCategory: Record<GeneralRequestCategory, number>;
+    }> {
+        const { rows: totalRows } = await pool.query(
+            `SELECT COUNT(*)::int as count FROM general_requests WHERE is_active = true`
+        );
+
+        const { rows: byTypeRows } = await pool.query(
+            `SELECT request_type, COUNT(*)::int as count 
+             FROM general_requests 
+             WHERE is_active = true 
+             GROUP BY request_type`
+        );
+
+        const { rows: byStatusRows } = await pool.query(
+            `SELECT status, COUNT(*)::int as count 
+             FROM general_requests 
+             WHERE is_active = true 
+             GROUP BY status`
+        );
+
+        const { rows: byRemarkRows } = await pool.query(
+            `SELECT remark_type, COUNT(*)::int as count 
+             FROM general_requests 
+             WHERE is_active = true AND remark_type IS NOT NULL
+             GROUP BY remark_type`
+        );
+
+        const { rows: byCategoryRows } = await pool.query(
+            `SELECT category, COUNT(*)::int as count 
+             FROM general_requests 
+             WHERE is_active = true AND category IS NOT NULL
+             GROUP BY category`
+        );
+
+        const byType = byTypeRows.reduce((acc, row) => {
+            acc[row.request_type] = row.count;
+            return acc;
+        }, {} as Record<RequestType, number>);
+
+        const byStatus = byStatusRows.reduce((acc, row) => {
+            acc[row.status] = row.count;
+            return acc;
+        }, {} as Record<string, number>);
+
+        const byRemarkType = byRemarkRows.reduce((acc, row) => {
+            acc[row.remark_type] = row.count;
+            return acc;
+        }, {} as Record<RemarkType, number>);
+
+        const byCategory = byCategoryRows.reduce((acc, row) => {
+            acc[row.category] = row.count;
+            return acc;
+        }, {} as Record<GeneralRequestCategory, number>);
+
+        return {
+            total: totalRows[0].count,
+            byType,
+            byStatus,
+            byRemarkType,
+            byCategory,
+        };
+    }
+
+    // ─── General Request Email Notifications ─────────────────────────────
+
+    static async sendGeneralRequestEmail(
+        id: string,
+        email: string,
+        type: 'acknowledgement' | 'resolved' | 'rejected'
+    ): Promise<void> {
+        const request = await this.findGeneralRequestById(id);
+        if (!request) {
+            throw new AppError(404, 'General request not found');
+        }
+
+        try {
+            if (type === 'acknowledgement') {
+                await sendGeneralRequestAcknowledgement({
+                    to: email,
+                    ticketNumber: request.ticket_number || 'N/A',
+                    judgeName: request.judge_name,
+                    request: request.request,
+                });
+            } else {
+                // For resolved/rejected, import the specific functions
+                const { sendGeneralRequestResolved, sendGeneralRequestRejected } = require('../../utils/sendMail');
+                
+                if (type === 'resolved') {
+                    await sendGeneralRequestResolved({
+                        to: email,
+                        ticketNumber: request.ticket_number || 'N/A',
+                        judgeName: request.judge_name,
+                        request: request.request,
+                        resolution: request.remarks || 'Request has been resolved satisfactorily.',
+                        resolvedBy: 'System Administrator',
+                    });
+                } else if (type === 'rejected') {
+                    await sendGeneralRequestRejected({
+                        to: email,
+                        ticketNumber: request.ticket_number || 'N/A',
+                        judgeName: request.judge_name,
+                        request: request.request,
+                        reason: request.remarks || 'No specific reason provided.',
+                        rejectedBy: 'System Administrator',
+                    });
+                }
+            }
+        } catch (emailError) {
+            console.error(`[EMAIL ERROR] Failed to send ${type} email:`, emailError);
+            throw new AppError(500, `Failed to send ${type} email`);
+        }
+    }
+
+    // ============================================================
+    // LEGACY SECURITY REQUESTS (Deprecated - kept for backward compatibility)
+    // ============================================================
+
+    /**
+     * @deprecated Use findAllGeneralRequests with request_type filter instead
+     */
+    static async findAllSecurityRequests(filters: HelpDeskFilters = {}): Promise<SecurityRequest[]> {
+        // Redirect to general requests but map the response
+        const generalRequests = await this.findAllGeneralRequests({
+            ...filters,
+            request_type: filters.request_type as RequestType,
+        });
+        
+        // Map GeneralRequest to SecurityRequest for backward compatibility
+        return generalRequests.map(req => ({
+            id: req.id,
+            s_no: req.s_no,
+            judge_name: req.judge_name,
+            request_type: req.request_type,
+            request_date: req.request_date,
+            officer_assigned: req.officer_assigned,
+            status: req.status,
+            remarks: req.remarks,
+            remark_type: req.remark_type,
+            location: req.location,
+            firearm_type: req.firearm_type,
+            force_number: req.force_number,
+            created_by: req.created_by,
+            created_at: req.created_at,
+            updated_at: req.updated_at,
+        }));
+    }
+
+    /**
+     * @deprecated Use findGeneralRequestById instead
+     */
+    static async findSecurityRequestById(id: string): Promise<SecurityRequest | null> {
+        const req = await this.findGeneralRequestById(id);
+        if (!req) return null;
+        
+        return {
+            id: req.id,
+            s_no: req.s_no,
+            judge_name: req.judge_name,
+            request_type: req.request_type,
+            request_date: req.request_date,
+            officer_assigned: req.officer_assigned,
+            status: req.status,
+            remarks: req.remarks,
+            remark_type: req.remark_type,
+            location: req.location,
+            firearm_type: req.firearm_type,
+            force_number: req.force_number,
+            created_by: req.created_by,
+            created_at: req.created_at,
+            updated_at: req.updated_at,
+        };
+    }
+
+    /**
+     * @deprecated Use createGeneralRequest instead
+     */
+    static async createSecurityRequest(
+        input: CreateSecurityRequestInput,
+        userId: string
+    ): Promise<SecurityRequest> {
+        const generalInput: CreateGeneralRequestInput = {
+            judge_name: input.judge_name,
+            request: `Security Request - ${input.request_type}`,
+            request_type: input.request_type,
+            date_received: input.request_date || undefined,
+            officer_assigned: input.officer_assigned,
+            status: input.status,
+            remarks: input.remarks,
+            remark_type: input.remark_type,
+            request_date: input.request_date,
+            location: input.location,
+            firearm_type: input.firearm_type,
+            force_number: input.force_number,
+            email: input.email,
+            send_email: input.send_email || false,
+        };
+
+        const result = await this.createGeneralRequest(generalInput, userId);
+        
+        // Map back to SecurityRequest for backward compatibility
+        return {
+            id: result.id,
+            s_no: result.s_no,
+            judge_name: result.judge_name,
+            request_type: result.request_type,
+            request_date: result.request_date,
+            officer_assigned: result.officer_assigned,
+            status: result.status,
+            remarks: result.remarks,
+            remark_type: result.remark_type,
+            location: result.location,
+            firearm_type: result.firearm_type,
+            force_number: result.force_number,
+            created_by: result.created_by,
+            created_at: result.created_at,
+            updated_at: result.updated_at,
+        };
+    }
+
+    /**
+     * @deprecated Use updateGeneralRequest instead
+     */
+    static async updateSecurityRequest(
+        id: string,
+        input: UpdateSecurityRequestInput
+    ): Promise<SecurityRequest> {
+        const updateInput: UpdateGeneralRequestInput = {
+            request_type: input.request_type,
+            request_date: input.request_date,
+            officer_assigned: input.officer_assigned,
+            status: input.status,
+            remarks: input.remarks,
+            remark_type: input.remark_type,
+            location: input.location,
+            firearm_type: input.firearm_type,
+            force_number: input.force_number,
+        };
+
+        const result = await this.updateGeneralRequest(id, updateInput);
+        
+        return {
+            id: result.id,
+            s_no: result.s_no,
+            judge_name: result.judge_name,
+            request_type: result.request_type,
+            request_date: result.request_date,
+            officer_assigned: result.officer_assigned,
+            status: result.status,
+            remarks: result.remarks,
+            remark_type: result.remark_type,
+            location: result.location,
+            firearm_type: result.firearm_type,
+            force_number: result.force_number,
+            created_by: result.created_by,
+            created_at: result.created_at,
+            updated_at: result.updated_at,
+        };
+    }
+
+    /**
+     * @deprecated Use updateGeneralRequestStatus instead
+     */
+    static async updateSecurityRequestStatus(
+        id: string,
+        input: UpdateStatusInput
+    ): Promise<SecurityRequest> {
+        const result = await this.updateGeneralRequestStatus(id, input);
+        
+        return {
+            id: result.id,
+            s_no: result.s_no,
+            judge_name: result.judge_name,
+            request_type: result.request_type,
+            request_date: result.request_date,
+            officer_assigned: result.officer_assigned,
+            status: result.status,
+            remarks: result.remarks,
+            remark_type: result.remark_type,
+            location: result.location,
+            firearm_type: result.firearm_type,
+            force_number: result.force_number,
+            created_by: result.created_by,
+            created_at: result.created_at,
+            updated_at: result.updated_at,
+        };
+    }
+
+    /**
+     * @deprecated Use deleteGeneralRequest instead
+     */
+    static async deleteSecurityRequest(id: string): Promise<void> {
+        return this.deleteGeneralRequest(id);
+    }
+
+    /**
+     * @deprecated Use getGeneralRequestStats instead
+     */
+    static async getSecurityRequestStats(): Promise<{
+        total: number;
+        byType: Record<RequestType, number>;
+        byStatus: Record<string, number>;
+        byRemarkType: Record<RemarkType, number>;
+    }> {
+        const stats = await this.getGeneralRequestStats();
+        return {
+            total: stats.total,
+            byType: stats.byType,
+            byStatus: stats.byStatus,
+            byRemarkType: stats.byRemarkType,
+        };
     }
 
     // ─── Judge Utilities (one judge → many utility items) ────────────────────
@@ -621,6 +1265,8 @@ export class HelpDeskService {
 
     // ─── Circuits ────────────────────────────────────────────────────────────
 
+    // ... (keep all existing Circuit methods unchanged)
+
     static async findAllCircuits(filters: HelpDeskFilters = {}): Promise<Circuit[]> {
         let query = `SELECT ${CIRCUIT_SELECT} FROM circuits WHERE is_active = true`;
         const params: unknown[] = [];
@@ -812,6 +1458,8 @@ export class HelpDeskService {
     }
 
     // ─── Special Benches ─────────────────────────────────────────────────────
+
+    // ... (keep all existing Special Bench methods unchanged)
 
     static async findAllBenches(filters: HelpDeskFilters = {}): Promise<SpecialBench[]> {
         let query = `SELECT ${BENCH_SELECT} FROM special_benches WHERE is_active = true`;
@@ -1032,6 +1680,8 @@ export class HelpDeskService {
 
     // ─── Part-Heards ─────────────────────────────────────────────────────────
 
+    // ... (keep all existing Part-Heard methods unchanged)
+
     static async findAllPartHeards(filters: HelpDeskFilters = {}): Promise<PartHeard[]> {
         let query = `SELECT ${PART_HEARD_SELECT} FROM part_heards WHERE is_active = true`;
         const params: unknown[] = [];
@@ -1251,6 +1901,8 @@ export class HelpDeskService {
 
     // ─── Service Weeks ──────────────────────────────────────────────────────
 
+    // ... (keep all existing Service Week methods unchanged)
+
     static async findAllServiceWeeks(filters: HelpDeskFilters = {}): Promise<ServiceWeek[]> {
         let query = `SELECT ${SERVICE_WEEK_SELECT} FROM service_weeks WHERE is_active = true`;
         const params: unknown[] = [];
@@ -1404,6 +2056,8 @@ export class HelpDeskService {
 
     // ─── Medical Expense Claims ──────────────────────────────────────────────
 
+    // ... (keep all existing Medical Claim methods unchanged)
+
     static async findAllMedicalClaims(filters: HelpDeskFilters = {}): Promise<MedicalClaim[]> {
         let query = `SELECT ${MEDICAL_CLAIM_SELECT} FROM medical_claims WHERE is_active = true`;
         const params: unknown[] = [];
@@ -1501,176 +2155,9 @@ export class HelpDeskService {
         }
     }
 
-    // ─── General Requests ─────────────────────────────────────────────────────
-
-    static async findAllGeneralRequests(filters: HelpDeskFilters = {}): Promise<GeneralRequest[]> {
-        let query = `SELECT ${GENERAL_REQUEST_SELECT} FROM general_requests WHERE is_active = true`;
-        const params: unknown[] = [];
-        let paramCount = 1;
-
-        if (filters.search) {
-            query += ` AND (judge_name ILIKE $${paramCount} OR request ILIKE $${paramCount} OR ticket_number ILIKE $${paramCount})`;
-            params.push(`%${filters.search}%`);
-            paramCount++;
-        }
-        if (filters.status) {
-            query += ` AND status = $${paramCount}`;
-            params.push(filters.status);
-            paramCount++;
-        }
-
-        query += ` ORDER BY created_at DESC`;
-        if (filters.limit) {
-            query += ` LIMIT $${paramCount}`;
-            params.push(filters.limit);
-            paramCount++;
-        }
-        if (filters.offset) {
-            query += ` OFFSET $${paramCount}`;
-            params.push(filters.offset);
-        }
-
-        const { rows } = await pool.query(query, params);
-        return rows;
-    }
-
-    static async findGeneralRequestById(id: string): Promise<GeneralRequest | null> {
-        const { rows } = await pool.query(
-            `SELECT ${GENERAL_REQUEST_SELECT} FROM general_requests WHERE id = $1 AND is_active = true`,
-            [id]
-        );
-        return rows[0] || null;
-    }
-
-    static async createGeneralRequest(
-        input: CreateGeneralRequestInput,
-        userId: string
-    ): Promise<GeneralRequest> {
-        const client = await pool.connect();
-        
-        try {
-            await client.query('BEGIN');
-
-            const s_no = await generateSerialNumber('general_requests');
-            const ticketNumber = await generateTicketNumber();
-
-            const { rows } = await client.query(
-                `INSERT INTO general_requests (
-                    s_no, ticket_number, judge_name, request, date_received, 
-                    officer_assigned, status, remarks, created_by
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                RETURNING id`,
-                [
-                    s_no,
-                    ticketNumber,
-                    input.judge_name.trim(),
-                    input.request.trim(),
-                    input.date_received || null,
-                    input.officer_assigned || null,
-                    input.status || 'Pending',
-                    input.remarks || null,
-                    userId,
-                ]
-            );
-
-            await client.query('COMMIT');
-
-            const request = await this.findGeneralRequestById(rows[0].id);
-            if (!request) throw new AppError(500, 'Failed to create general request');
-
-            // Send email only if send_email is true and email is provided (manual control by dep_head)
-            if (input.send_email && input.email) {
-                try {
-                    await sendGeneralRequestAcknowledgement({
-                        to: input.email,
-                        ticketNumber,
-                        judgeName: input.judge_name,
-                        request: input.request,
-                    });
-                } catch (emailError) {
-                    console.error('[EMAIL ERROR] Failed to send general request acknowledgement:', emailError);
-                    // Don't throw - we don't want to fail the request creation if email fails
-                }
-            }
-
-            return request;
-            
-        } catch (error) {
-            await client.query('ROLLBACK');
-            throw error;
-        } finally {
-            client.release();
-        }
-    }
-
-    // ─── General Requests ─────────────────────────────────────────────────────
-
-static async updateGeneralRequestStatus(
-    id: string,
-    input: { status: string; remarks?: string; email?: string; resolvedBy?: string; rejectedBy?: string }
-): Promise<GeneralRequest> {
-    const existing = await this.findGeneralRequestById(id);
-    if (!existing) {
-        throw new AppError(404, 'General request not found');
-    }
-
-    await pool.query(
-        `UPDATE general_requests 
-         SET status = $1, remarks = COALESCE($2, remarks)
-         WHERE id = $3`,
-        [input.status, input.remarks || null, id]
-    );
-
-    const updated = await this.findGeneralRequestById(id);
-    if (!updated) throw new AppError(500, 'Failed to update general request status');
-
-    // Send email based on status change
-    if (input.email) {
-        try {
-            if (input.status === 'Resolved') {
-                // Import the sendGeneralRequestResolved function
-                const { sendGeneralRequestResolved } = require('../../utils/sendMail');
-                
-                await sendGeneralRequestResolved({
-                    to: input.email,
-                    ticketNumber: updated.ticket_number || 'N/A',
-                    judgeName: updated.judge_name,
-                    request: updated.request,
-                    resolution: input.remarks || 'Request has been resolved satisfactorily.',
-                    resolvedBy: input.resolvedBy || 'System Administrator',
-                });
-            } else if (input.status === 'Rejected') {
-                const { sendGeneralRequestRejected } = require('../../utils/sendMail');
-                
-                await sendGeneralRequestRejected({
-                    to: input.email,
-                    ticketNumber: updated.ticket_number || 'N/A',
-                    judgeName: updated.judge_name,
-                    request: updated.request,
-                    reason: input.remarks || 'No specific reason provided.',
-                    rejectedBy: input.rejectedBy || 'System Administrator',
-                });
-            }
-        } catch (emailError) {
-            console.error('[EMAIL ERROR] Failed to send status update email:', emailError);
-            // Don't throw - we don't want to fail the status update if email fails
-        }
-    }
-
-    return updated;
-}
-
-    static async deleteGeneralRequest(id: string): Promise<void> {
-        const { rows } = await pool.query(
-            `UPDATE general_requests SET is_active = false WHERE id = $1 RETURNING id`,
-            [id]
-        );
-        if (rows.length === 0) {
-            throw new AppError(404, 'General request not found');
-        }
-    }
-
     // ─── Visa Support ────────────────────────────────────────────────────────
+
+    // ... (keep all existing Visa methods unchanged)
 
     static async findAllVisaRequests(filters: HelpDeskFilters = {}): Promise<VisaRequest[]> {
         let query = `SELECT ${VISA_SELECT} FROM visa_requests WHERE is_active = true`;
@@ -1798,10 +2285,6 @@ static async updateGeneralRequestStatus(
 
     // ─── Visa Document Tracking ──────────────────────────────────────────────
 
-    /**
-     * Mark a visa document as viewed
-     * Updates viewed_at and increments view_count
-     */
     static async markDocumentViewed(
         documentId: string,
         userId: string,
@@ -1854,14 +2337,10 @@ static async updateGeneralRequestStatus(
         }
     }
 
-    /**
-     * Get document view status with optional viewer history
-     */
     static async getDocumentViewStatus(
         documentId: string,
         includeViewers: boolean = false
     ): Promise<any> {
-        // Get document details
         const { rows: docRows } = await pool.query(
             `SELECT id, document_name, document_url, viewed_at, view_count, created_at
              FROM visa_documents 
@@ -1875,7 +2354,6 @@ static async updateGeneralRequestStatus(
 
         const document = docRows[0];
 
-        // Get viewers if requested
         if (includeViewers) {
             const { rows: viewerRows } = await pool.query(
                 `SELECT id, viewer_id, viewer_name, viewed_at, ip_address, user_agent
@@ -1891,6 +2369,8 @@ static async updateGeneralRequestStatus(
     }
 
     // ─── Protocol Support ────────────────────────────────────────────────────
+
+    // ... (keep all existing Protocol methods unchanged)
 
     static async findAllProtocolEvents(filters: HelpDeskFilters = {}): Promise<ProtocolEvent[]> {
         let query = `SELECT ${PROTOCOL_SELECT} FROM protocol_events WHERE is_active = true`;
@@ -2051,6 +2531,8 @@ static async updateGeneralRequestStatus(
     }
 
     // ─── Other Payments ──────────────────────────────────────────────────────
+
+    // ... (keep all existing Other Payments methods unchanged)
 
     static async findAllOtherPayments(filters: HelpDeskFilters = {}): Promise<OtherPayment[]> {
         let query = `SELECT ${OTHER_PAYMENT_SELECT} FROM other_payments WHERE is_active = true`;
@@ -2244,6 +2726,8 @@ static async updateGeneralRequestStatus(
 
     // ─── DSA Report ──────────────────────────────────────────────────────────
 
+    // ... (keep DSA Report method unchanged)
+
     static async getDSAReport(filters: DSAReportFilters = {}): Promise<DSAReportRow[]> {
         const modules = filters.modules
             ? (filters.modules.filter((m) => m in REPORT_MODULE_CONFIG) as ReportModule[])
@@ -2309,4 +2793,60 @@ static async updateGeneralRequestStatus(
         }
         return allRows;
     }
+
+
+    // Add these methods to the HelpDeskService class
+
+// ─── General Requests (Unified) ──────────────────────────────────────────
+
+// ... existing methods ...
+
+// Add these missing methods that the controller expects
+static async findSecurityRequestsByJudge(judgeName: string): Promise<SecurityRequest[]> {
+    // Delegate to the unified general request method
+    const generalRequests = await this.findGeneralRequestsByJudge(judgeName);
+    
+    // Map to SecurityRequest for backward compatibility
+    return generalRequests.map(req => ({
+        id: req.id,
+        s_no: req.s_no,
+        judge_name: req.judge_name,
+        request_type: req.request_type,
+        request_date: req.request_date,
+        officer_assigned: req.officer_assigned,
+        status: req.status,
+        remarks: req.remarks,
+        remark_type: req.remark_type,
+        location: req.location,
+        firearm_type: req.firearm_type,
+        force_number: req.force_number,
+        created_by: req.created_by,
+        created_at: req.created_at,
+        updated_at: req.updated_at,
+    }));
+}
+
+static async findSecurityRequestsByType(requestType: RequestType): Promise<SecurityRequest[]> {
+    // Delegate to the unified general request method
+    const generalRequests = await this.findGeneralRequestsByType(requestType);
+    
+    // Map to SecurityRequest for backward compatibility
+    return generalRequests.map(req => ({
+        id: req.id,
+        s_no: req.s_no,
+        judge_name: req.judge_name,
+        request_type: req.request_type,
+        request_date: req.request_date,
+        officer_assigned: req.officer_assigned,
+        status: req.status,
+        remarks: req.remarks,
+        remark_type: req.remark_type,
+        location: req.location,
+        firearm_type: req.firearm_type,
+        force_number: req.force_number,
+        created_by: req.created_by,
+        created_at: req.created_at,
+        updated_at: req.updated_at,
+    }));
+}
 }

@@ -44,9 +44,14 @@ export interface HelpdeskDocument {
     returned_at?: string;
     returned_by?: string;
     rejection_reason?: string;
+
     // Additional fields for better tracking
-    request_type?: string;  // For general requests - Driver, Bodyguard, etc.
-    judge_name?: string;    // Associated judge name
+    request_type?: string;      // For general requests - Driver, Bodyguard, etc.
+    judge_name?: string;        // Associated judge name
+
+    // ─── NEW FIELDS ──────────────────────────────────────────────────────────
+    rank?: string | null;       // Officer's rank (for Driver/Bodyguard)
+    reporting_date?: string | null; // Expected reporting date
 }
 
 export interface ApprovalHistoryEntry {
@@ -78,8 +83,11 @@ export interface CreateHelpdeskDocumentInput {
     entity_id?: string;
     format: DocumentFormat;
     status?: DocumentStatus;
-    request_type?: string;  // For general requests
-    judge_name?: string;    // For better tracking
+    request_type?: string;      // For general requests
+    judge_name?: string;        // For better tracking
+    // ─── NEW FIELDS ──────────────────────────────────────────────────────────
+    rank?: string;
+    reporting_date?: string;
 }
 
 export interface UpdateDocumentStatusInput {
@@ -107,6 +115,9 @@ export interface HelpdeskDocumentFilters {
     judge_name?: string;    // Filter by judge name
     date_from?: string;     // Filter by date range
     date_to?: string;
+    // ─── NEW FIELDS ──────────────────────────────────────────────────────────
+    rank?: string;          // Filter by rank
+    reporting_date?: string; // Filter by reporting date
 }
 
 export interface DocumentApprovalRequest {
@@ -134,8 +145,11 @@ export interface DocumentReturnRequest {
 export interface LinkDocumentInput {
     entity_type: DocumentEntityType;
     entity_id: string;
-    request_type?: string;  // For general requests
-    judge_name?: string;    // For better tracking
+    request_type?: string;      // For general requests
+    judge_name?: string;        // For better tracking
+    // ─── NEW FIELDS ──────────────────────────────────────────────────────────
+    rank?: string;
+    reporting_date?: string;
 }
 
 // ─── Document Summary Types ──────────────────────────────────────────────────
@@ -385,6 +399,13 @@ export function buildDocumentFilters(filters: HelpdeskDocumentFilters): Record<s
     }
     if (filters.pending_my_approval !== undefined) {
         result.pending_my_approval = filters.pending_my_approval;
+    }
+    // ─── NEW FILTERS ──────────────────────────────────────────────────────────
+    if (filters.rank) {
+        result.rank = filters.rank;
+    }
+    if (filters.reporting_date) {
+        result.reporting_date = filters.reporting_date;
     }
 
     return result;

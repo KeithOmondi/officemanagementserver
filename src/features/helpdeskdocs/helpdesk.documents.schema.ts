@@ -45,6 +45,9 @@ export const uploadHelpdeskDocumentSchema = z.object({
         // Additional fields for general requests
         request_type: requestTypeEnum.optional(),
         judge_name: z.string().max(100).optional(),
+        // ─── NEW FIELDS ──────────────────────────────────────────────────────────
+        rank: z.string().max(50).optional(),
+        reporting_date: dateStringSchema.optional(),
     }),
 });
 
@@ -66,6 +69,9 @@ export const listHelpdeskDocumentsSchema = z.object({
         judge_name: z.string().optional(),
         date_from: dateStringSchema.optional(),
         date_to: dateStringSchema.optional(),
+        // ─── NEW FILTERS ──────────────────────────────────────────────────────────
+        rank: z.string().optional(),
+        reporting_date: dateStringSchema.optional(),
     }).strict(),
 });
 
@@ -172,6 +178,9 @@ export const linkDocumentSchema = z.object({
         // Additional fields for general requests
         request_type: requestTypeEnum.optional(),
         judge_name: z.string().max(100).optional(),
+        // ─── NEW FIELDS ──────────────────────────────────────────────────────────
+        rank: z.string().max(50).optional(),
+        reporting_date: dateStringSchema.optional(),
     }),
 });
 
@@ -231,6 +240,9 @@ export const bulkLinkDocumentsSchema = z.object({
         entity_id: z.string().uuid('Entity ID must be a valid UUID'),
         request_type: requestTypeEnum.optional(),
         judge_name: z.string().max(100).optional(),
+        // ─── NEW FIELDS ──────────────────────────────────────────────────────────
+        rank: z.string().max(50).optional(),
+        reporting_date: dateStringSchema.optional(),
     }),
 });
 
@@ -256,6 +268,9 @@ export const batchUploadSchema = z.object({
                 status: documentStatusEnum.default('draft'),
                 request_type: requestTypeEnum.optional(),
                 judge_name: z.string().max(100).optional(),
+                // ─── NEW FIELDS ──────────────────────────────────────────────────────────
+                rank: z.string().max(50).optional(),
+                reporting_date: dateStringSchema.optional(),
             })
         ).min(1, 'At least one document is required').max(20, 'Maximum 20 documents per batch'),
     }),

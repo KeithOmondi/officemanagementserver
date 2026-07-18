@@ -2,13 +2,13 @@
 // Core Enums
 // ============================================================
 
-export type RequestType = 
-  | 'Driver' 
-  | 'Bodyguard' 
-  | 'Firearm' 
-  | 'Current Station' 
-  | 'Force Number' 
-  | 'Residence Security' 
+export type RequestType =
+  | 'Driver'
+  | 'Bodyguard'
+  | 'Firearm'
+  | 'Current Station'
+  | 'Force Number'
+  | 'Residence Security'
   | 'Sentry';
 
 export type RequestMode = 'Letter' | 'Email' | 'Verbal' | 'Other';
@@ -155,7 +155,7 @@ export interface GeneralRequest extends BaseEntity {
   status: Status;
   remarks: string | null;
   remark_type: RemarkType | null;     // Onboarding or Release (for security/personnel)
-  
+
   // Security/Personnel specific fields
   request_date: string | null;        // Date of request
   location: string | null;            // For station/security requests
@@ -164,7 +164,11 @@ export interface GeneralRequest extends BaseEntity {
   officer_name: string | null;        // Name of the officer (for bodyguard/driver)
   assigned_to: string | null;         // Who it's assigned to
   priority: string | null;            // Priority level if needed
-  notes: string | null;              // Additional notes
+  notes: string | null;               // Additional notes
+
+  // ─── NEW FIELDS ──────────────────────────────────────────────────────────
+  rank: string | null;               // Officer's rank (for Driver/Bodyguard)
+  reporting_date: string | null;     // Expected reporting date
 }
 
 export interface CreateGeneralRequestInput {
@@ -187,6 +191,10 @@ export interface CreateGeneralRequestInput {
   notes?: string;
   email?: string;                    // Recipient email for notification
   send_email?: boolean;              // Manual control: true = send email, false = don't send
+
+  // ─── NEW FIELDS ──────────────────────────────────────────────────────────
+  rank?: string;                     // Officer's rank
+  reporting_date?: string;           // Expected reporting date
 }
 
 export interface UpdateGeneralRequestInput {
@@ -206,6 +214,10 @@ export interface UpdateGeneralRequestInput {
   assigned_to?: string;
   priority?: string;
   notes?: string;
+
+  // ─── NEW FIELDS ──────────────────────────────────────────────────────────
+  rank?: string;
+  reporting_date?: string;
 }
 
 // ============================================================

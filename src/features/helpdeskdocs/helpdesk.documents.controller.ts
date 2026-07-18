@@ -32,31 +32,19 @@ function getParam(req: Request, key: string): string {
     return value;
 }
 
-// Type guard to check if value is a string
 function isString(value: unknown): value is string {
     return typeof value === 'string';
 }
 
-// Type guard to check if value is a string or undefined
-function isStringOrUndefined(value: unknown): value is string | undefined {
-    return value === undefined || typeof value === 'string';
-}
-
 function getQueryParam(req: Request, key: string): string | undefined {
     const value = req.query[key];
-    
-    // Handle array case
     if (Array.isArray(value)) {
         const first = value[0];
         return isString(first) ? first : undefined;
     }
-    
-    // Handle string case
     if (isString(value)) {
         return value;
     }
-    
-    // Handle undefined or ParsedQs
     return undefined;
 }
 
@@ -113,6 +101,7 @@ export class HelpdeskDocumentsController {
                 });
             }
 
+            // body includes rank and reporting_date (already in schema)
             const doc = await HelpdeskDocumentsService.upload(file, body, userId);
 
             return sendSuccess(res, doc, 'Document saved successfully.', 201);
@@ -158,6 +147,7 @@ export class HelpdeskDocumentsController {
 
             for (let i = 0; i < body.documents.length; i++) {
                 try {
+                    // body.documents[i] includes rank and reporting_date
                     const doc = await HelpdeskDocumentsService.upload(
                         files[i],
                         body.documents[i],
@@ -183,7 +173,7 @@ export class HelpdeskDocumentsController {
     // GET /api/helpdesk/documents
     static async list(req: Request, res: Response, next: NextFunction) {
         try {
-            // Safely extract query parameters using helper functions
+            // Extract all query parameters including new ones
             const entity_type = getQueryEnum(req, 'entity_type', [
                 'circuit', 'bench', 'partHeard', 'serviceWeek', 
                 'otherPayment', 'ticket', 'medicalClaim', 
@@ -209,6 +199,10 @@ export class HelpdeskDocumentsController {
             const date_from = getQueryParam(req, 'date_from');
             const date_to = getQueryParam(req, 'date_to');
 
+            // ─── NEW FILTERS ──────────────────────────────────────────────────────
+            const rank = getQueryParam(req, 'rank');
+            const reporting_date = getQueryParam(req, 'reporting_date');
+
             const docs = await HelpdeskDocumentsService.findAll({
                 entity_type,
                 entity_id,
@@ -224,6 +218,8 @@ export class HelpdeskDocumentsController {
                 judge_name,
                 date_from,
                 date_to,
+                rank,               // new
+                reporting_date,     // new
             });
 
             return sendSuccess(res, docs, `Found ${docs.length} documents.`);
@@ -457,7 +453,14 @@ export class HelpdeskDocumentsController {
     static async link(req: Request, res: Response, next: NextFunction) {
         try {
             const id = getParam(req, 'id');
-            const { entity_type, entity_id, request_type, judge_name } = req.body as LinkDocumentBody;
+            const { 
+                entity_type, 
+                entity_id, 
+                request_type, 
+                judge_name,
+                rank,               // new
+                reporting_date,     // new
+            } = req.body as LinkDocumentBody;
 
             if (!entity_type) {
                 throw new AppError(400, 'Entity type is required');
@@ -471,7 +474,9 @@ export class HelpdeskDocumentsController {
                 entity_type, 
                 entity_id,
                 request_type,
-                judge_name
+                judge_name,
+                rank,               // new
+                reporting_date      // new
             );
 
             return sendSuccess(res, doc, 'Document linked successfully.');
@@ -485,7 +490,15 @@ export class HelpdeskDocumentsController {
     // POST /api/helpdesk/documents/bulk/link
     static async bulkLink(req: Request, res: Response, next: NextFunction) {
         try {
-            const { document_ids, entity_type, entity_id, request_type, judge_name } = req.body as BulkLinkDocumentsBody;
+            const { 
+                document_ids, 
+                entity_type, 
+                entity_id, 
+                request_type, 
+                judge_name,
+                rank,               // new
+                reporting_date,     // new
+            } = req.body as BulkLinkDocumentsBody;
 
             if (!document_ids || document_ids.length === 0) {
                 throw new AppError(400, 'At least one document ID is required');
@@ -502,7 +515,9 @@ export class HelpdeskDocumentsController {
                 entity_type,
                 entity_id,
                 request_type,
-                judge_name
+                judge_name,
+                rank,               // new
+                reporting_date      // new
             );
 
             return sendSuccess(res, result, `${result.success.length} documents linked successfully.`);

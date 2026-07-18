@@ -1,3 +1,11 @@
+// ============================================================
+// helpdesk.controller.ts
+// ============================================================
+// All request payloads are validated against Zod schemas.
+// The Firearm rule (firearm_type required only if officer_assigned is present)
+// is enforced by createGeneralRequestSchema and updateGeneralRequestSchema.
+// ============================================================
+
 import { Request, Response } from 'express';
 import { asyncHandler } from '../../utils/asyncHandler';
 import { AppError, sendSuccess } from '../../utils/response';
@@ -87,57 +95,56 @@ export const helpDeskController = {
      * GET /api/helpdesk/general/judge/:judgeName
      * Get general requests by judge name
      */
- getGeneralRequestsByJudge: asyncHandler(async (req: Request, res: Response) => {
-    const { judgeName } = req.params;
-    // Ensure judgeName is a string
-    const judgeNameStr = Array.isArray(judgeName) ? judgeName[0] : judgeName;
-    if (!judgeNameStr) {
-        throw new AppError(400, 'Judge name is required');
-    }
-    const requests = await HelpDeskService.findGeneralRequestsByJudge(judgeNameStr);
-    return sendSuccess(res, requests, 'General requests retrieved by judge');
-}),
+    getGeneralRequestsByJudge: asyncHandler(async (req: Request, res: Response) => {
+        const { judgeName } = req.params;
+        const judgeNameStr = Array.isArray(judgeName) ? judgeName[0] : judgeName;
+        if (!judgeNameStr) {
+            throw new AppError(400, 'Judge name is required');
+        }
+        const requests = await HelpDeskService.findGeneralRequestsByJudge(judgeNameStr);
+        return sendSuccess(res, requests, 'General requests retrieved by judge');
+    }),
 
     /**
      * GET /api/helpdesk/general/type/:requestType
      * Get general requests by request type
      */
-  getGeneralRequestsByType: asyncHandler(async (req: Request, res: Response) => {
-    const { requestType } = req.params;
-    // Ensure requestType is a string
-    const requestTypeStr = Array.isArray(requestType) ? requestType[0] : requestType;
-    if (!requestTypeStr) {
-        throw new AppError(400, 'Request type is required');
-    }
-    if (!['Driver', 'Bodyguard', 'Firearm', 'Current Station', 'Force Number', 'Residence Security', 'Sentry'].includes(requestTypeStr)) {
-        throw new AppError(400, 'Valid request type is required');
-    }
-    const requests = await HelpDeskService.findGeneralRequestsByType(requestTypeStr as RequestType);
-    return sendSuccess(res, requests, 'General requests retrieved by type');
-}),
+    getGeneralRequestsByType: asyncHandler(async (req: Request, res: Response) => {
+        const { requestType } = req.params;
+        const requestTypeStr = Array.isArray(requestType) ? requestType[0] : requestType;
+        if (!requestTypeStr) {
+            throw new AppError(400, 'Request type is required');
+        }
+        if (!['Driver', 'Bodyguard', 'Firearm', 'Current Station', 'Force Number', 'Residence Security', 'Sentry'].includes(requestTypeStr)) {
+            throw new AppError(400, 'Valid request type is required');
+        }
+        const requests = await HelpDeskService.findGeneralRequestsByType(requestTypeStr as RequestType);
+        return sendSuccess(res, requests, 'General requests retrieved by type');
+    }),
 
     /**
      * GET /api/helpdesk/general/remark/:remarkType
      * Get general requests by remark type (Onboarding/Release)
      */
-   getGeneralRequestsByRemarkType: asyncHandler(async (req: Request, res: Response) => {
-    const { remarkType } = req.params;
-    // Ensure remarkType is a string
-    const remarkTypeStr = Array.isArray(remarkType) ? remarkType[0] : remarkType;
-    if (!remarkTypeStr) {
-        throw new AppError(400, 'Remark type is required');
-    }
-    if (!['Onboarding', 'Release'].includes(remarkTypeStr)) {
-        throw new AppError(400, 'Valid remark type is required (Onboarding or Release)');
-    }
-    const requests = await HelpDeskService.findGeneralRequestsByRemarkType(remarkTypeStr as RemarkType);
-    return sendSuccess(res, requests, 'General requests retrieved by remark type');
-}),
+    getGeneralRequestsByRemarkType: asyncHandler(async (req: Request, res: Response) => {
+        const { remarkType } = req.params;
+        const remarkTypeStr = Array.isArray(remarkType) ? remarkType[0] : remarkType;
+        if (!remarkTypeStr) {
+            throw new AppError(400, 'Remark type is required');
+        }
+        if (!['Onboarding', 'Release'].includes(remarkTypeStr)) {
+            throw new AppError(400, 'Valid remark type is required (Onboarding or Release)');
+        }
+        const requests = await HelpDeskService.findGeneralRequestsByRemarkType(remarkTypeStr as RemarkType);
+        return sendSuccess(res, requests, 'General requests retrieved by remark type');
+    }),
 
     /**
      * POST /api/helpdesk/general
      * Create a new general request (supports all 7 types: Driver, Bodyguard, Firearm, 
      * Current Station, Force Number, Residence Security, Sentry)
+     * 
+     * Firearm rule: firearm_type is optional unless officer_assigned is provided.
      */
     createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
         const result = createGeneralRequestSchema.safeParse({ body: req.body });
@@ -151,6 +158,9 @@ export const helpDeskController = {
     /**
      * PUT /api/helpdesk/general/:id
      * Update a general request
+     * 
+     * Firearm rule: if updating to Firearm type and setting officer_assigned, 
+     * firearm_type must be provided.
      */
     updateGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
         const paramsResult = idSchema.safeParse({ params: req.params });
@@ -173,37 +183,35 @@ export const helpDeskController = {
      * Update general request status
      */
     updateGeneralRequestStatus: asyncHandler(async (req: Request, res: Response) => {
-    const paramsResult = idSchema.safeParse({ params: req.params });
-    if (!paramsResult.success) {
-        throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
-    }
-    const { status, notes, email } = req.body;
-    if (!status) {
-        throw new AppError(400, 'Status is required');
-    }
-    
-    const resolvedBy = req.user?.full_name || req.user?.email || 'System Administrator';
-    const rejectedBy = req.user?.full_name || req.user?.email || 'System Administrator';
-    
-    // Create update input with all fields
-    const updateInput: UpdateStatusInput = {
-        status,
-        notes,
-        resolvedBy,
-        rejectedBy
-    };
-    
-    // Only include email if provided
-    if (email) {
-        updateInput.email = email;
-    }
-    
-    const request = await HelpDeskService.updateGeneralRequestStatus(
-        paramsResult.data.params.id,
-        updateInput
-    );
-    return sendSuccess(res, request, 'General request status updated');
-}),
+        const paramsResult = idSchema.safeParse({ params: req.params });
+        if (!paramsResult.success) {
+            throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        const { status, notes, email } = req.body;
+        if (!status) {
+            throw new AppError(400, 'Status is required');
+        }
+        
+        const resolvedBy = req.user?.full_name || req.user?.email || 'System Administrator';
+        const rejectedBy = req.user?.full_name || req.user?.email || 'System Administrator';
+        
+        const updateInput: UpdateStatusInput = {
+            status,
+            notes,
+            resolvedBy,
+            rejectedBy
+        };
+        
+        if (email) {
+            updateInput.email = email;
+        }
+        
+        const request = await HelpDeskService.updateGeneralRequestStatus(
+            paramsResult.data.params.id,
+            updateInput
+        );
+        return sendSuccess(res, request, 'General request status updated');
+    }),
 
     /**
      * DELETE /api/helpdesk/general/:id
@@ -1096,7 +1104,6 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid report filters');
         }
 
-        // Build filters object with proper types
         const filters: DSAReportFilters = {};
         const query = result.data.query;
 
@@ -1107,7 +1114,6 @@ export const helpDeskController = {
         if (query.travel_start) filters.travel_start = query.travel_start;
         if (query.travel_end) filters.travel_end = query.travel_end;
 
-        // Parse modules from comma-separated string if provided
         if (query.modules) {
             const moduleList = query.modules.split(',').filter(
                 (m) => ['circuit', 'special_bench', 'part_heard', 'service_week', 'other_payment'].includes(m)

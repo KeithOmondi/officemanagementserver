@@ -1,4 +1,9 @@
+// ============================================================
+// helpdesk.service.ts
+// ============================================================
+
 import { pool } from '../../config/db';
+import type { PoolClient } from 'pg';
 import { AppError } from '../../utils/response';
 import { sendGeneralRequestAcknowledgement } from '../../utils/sendMail';
 import type {
@@ -95,12 +100,13 @@ const MEDICAL_CLAIM_SELECT = `
     created_by, created_at, updated_at
 `;
 
-// Updated GENERAL_REQUEST_SELECT to include all new fields
+// ─── UPDATED: Added rank, reporting_date ────────────────────────────────────
 const GENERAL_REQUEST_SELECT = `
     id, s_no, ticket_number, judge_name, request, request_type, category,
     date_received, officer_assigned, status, remarks, remark_type,
     request_date, location, firearm_type, force_number, officer_name,
     assigned_to, priority, notes,
+    rank, reporting_date,
     created_by, created_at, updated_at
 `;
 
@@ -152,34 +158,23 @@ const REPORT_MODULE_CONFIG: Record<
 
 // ─── Helper Functions ─────────────────────────────────────────────────────────
 
-/**
- * Generates a sequential serial number for a table
- * Returns 6-digit number (e.g., 000001, 000002, etc.)
- */
-async function generateSerialNumber(table: string): Promise<number> {
-    const { rows } = await pool.query(
+async function generateSerialNumber(client: PoolClient, table: string): Promise<number> {
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [table]);
+
+    const { rows } = await client.query(
         `SELECT COALESCE(MAX(s_no), 0) + 1 as next_serial FROM ${table} WHERE is_active = true`
     );
     return rows[0].next_serial;
 }
 
-/**
- * Generates a ticket number for general requests
- * Format: GR-YYYYMMDD-XXXX (where XXXX is 4-digit sequential per day)
- */
-async function generateTicketNumber(): Promise<string> {
+async function generateTicketNumber(client: PoolClient): Promise<string> {
     const today = new Date();
     const dateStr = today.getFullYear() +
         String(today.getMonth() + 1).padStart(2, '0') +
         String(today.getDate()).padStart(2, '0');
-    
-    const { rows } = await pool.query(
-        `SELECT COUNT(*)::int as count FROM general_requests 
-         WHERE DATE(created_at) = CURRENT_DATE AND is_active = true`
-    );
-    
-    const count = rows[0].count + 1;
-    const seq = String(count).padStart(4, '0');
+
+    const { rows } = await client.query(`SELECT nextval('general_requests_ticket_seq') AS seq`);
+    const seq = String(rows[0].seq).padStart(4, '0');
     return `GR-${dateStr}-${seq}`;
 }
 
@@ -239,6 +234,25 @@ export class HelpDeskService {
             [id]
         );
         return rows;
+    }
+
+    // ─── NEW: Firearm validation helper ──────────────────────────────────────
+
+    /**
+     * Validates the business rule for Firearm requests:
+     * firearm_type is required when officer_assigned is provided.
+     */
+    private static validateGeneralRequestInput(
+        input: Partial<CreateGeneralRequestInput | UpdateGeneralRequestInput>,
+        isUpdate: boolean = false
+    ): void {
+        // Only enforce if request_type is Firearm and officer_assigned is set
+        if (input.request_type === 'Firearm' && input.officer_assigned) {
+            const firearm = input.firearm_type;
+            if (!firearm || firearm.trim() === '') {
+                throw new AppError(400, 'firearm_type is required when an officer is assigned to a Firearm request');
+            }
+        }
     }
 
     // ============================================================
@@ -339,25 +353,35 @@ export class HelpDeskService {
         return rows;
     }
 
+    // ─── UPDATED: Added rank, reporting_date, and Firearm validation ──────
+
+    /**
+     * Creates a general request.
+     *
+     * Business rule: For 'Firearm' requests, `firearm_type` is optional initially,
+     * but becomes **required** when `officer_assigned` is provided.
+     */
     static async createGeneralRequest(
         input: CreateGeneralRequestInput,
         userId: string
     ): Promise<GeneralRequest> {
+        // Validate business rule
+        this.validateGeneralRequestInput(input, false);
+
         const client = await pool.connect();
-        
+
         try {
             await client.query('BEGIN');
 
-            const s_no = await generateSerialNumber('general_requests');
-            const ticketNumber = await generateTicketNumber();
+            const s_no = await generateSerialNumber(client, 'general_requests');
+            const ticketNumber = await generateTicketNumber(client);
 
             // Determine category if not provided
             let category = input.category;
             if (!category) {
-                // Auto-assign category based on request type
                 const securityTypes: RequestType[] = ['Firearm', 'Current Station', 'Force Number', 'Residence Security', 'Sentry'];
                 const personnelTypes: RequestType[] = ['Driver', 'Bodyguard'];
-                
+
                 if (securityTypes.includes(input.request_type)) {
                     category = 'Security';
                 } else if (personnelTypes.includes(input.request_type)) {
@@ -372,8 +396,10 @@ export class HelpDeskService {
                     s_no, ticket_number, judge_name, request, request_type, category,
                     date_received, officer_assigned, status, remarks, remark_type,
                     request_date, location, firearm_type, force_number, officer_name,
-                    assigned_to, priority, notes, created_by
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+                    assigned_to, priority, notes,
+                    rank, reporting_date,
+                    created_by
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
                 RETURNING id`,
                 [
                     s_no,
@@ -387,7 +413,7 @@ export class HelpDeskService {
                     input.status || 'Pending',
                     input.remarks || null,
                     input.remark_type || null,
-                    input.request_date || null,
+                    input.request_date,
                     input.location || null,
                     input.firearm_type || null,
                     input.force_number || null,
@@ -395,6 +421,8 @@ export class HelpDeskService {
                     input.assigned_to || null,
                     input.priority || null,
                     input.notes || null,
+                    input.rank || null,
+                    input.reporting_date || null,
                     userId,
                 ]
             );
@@ -420,7 +448,7 @@ export class HelpDeskService {
             }
 
             return request;
-            
+
         } catch (error) {
             await client.query('ROLLBACK');
             throw error;
@@ -429,10 +457,21 @@ export class HelpDeskService {
         }
     }
 
+    // ─── UPDATED: Added rank, reporting_date, and Firearm validation ──────
+
+    /**
+     * Updates a general request.
+     *
+     * Business rule: For 'Firearm' requests, if `officer_assigned` is set,
+     * `firearm_type` must also be provided.
+     */
     static async updateGeneralRequest(
         id: string,
         input: UpdateGeneralRequestInput
     ): Promise<GeneralRequest> {
+        // Validate business rule
+        this.validateGeneralRequestInput(input, true);
+
         const existing = await this.findGeneralRequestById(id);
         if (!existing) {
             throw new AppError(404, 'General request not found');
@@ -466,6 +505,8 @@ export class HelpDeskService {
         setField('assigned_to', input.assigned_to);
         setField('priority', input.priority);
         setField('notes', input.notes);
+        setField('rank', input.rank);
+        setField('reporting_date', input.reporting_date);
 
         if (fields.length === 0) {
             return existing;
@@ -484,59 +525,61 @@ export class HelpDeskService {
         return updated;
     }
 
+    // ─── Status update ───────────────────────────────────────────────────────
+
     static async updateGeneralRequestStatus(
-    id: string,
-    input: UpdateStatusInput  // This now includes email, resolvedBy, rejectedBy
-): Promise<GeneralRequest> {
-    const existing = await this.findGeneralRequestById(id);
-    if (!existing) {
-        throw new AppError(404, 'General request not found');
-    }
-
-    await pool.query(
-        `UPDATE general_requests 
-         SET status = $1, remarks = COALESCE($2, remarks), updated_at = now()
-         WHERE id = $3`,
-        [input.status, input.notes || null, id]
-    );
-
-    const updated = await this.findGeneralRequestById(id);
-    if (!updated) throw new AppError(500, 'Failed to update general request status');
-
-    // Send email based on status change
-    if (input.email) {
-        try {
-            if (input.status === 'Resolved') {
-                const { sendGeneralRequestResolved } = require('../../utils/sendMail');
-                
-                await sendGeneralRequestResolved({
-                    to: input.email,
-                    ticketNumber: updated.ticket_number || 'N/A',
-                    judgeName: updated.judge_name,
-                    request: updated.request,
-                    resolution: input.remarks || 'Request has been resolved satisfactorily.',
-                    resolvedBy: input.resolvedBy || 'System Administrator',
-                });
-            } else if (input.status === 'Rejected') {
-                const { sendGeneralRequestRejected } = require('../../utils/sendMail');
-                
-                await sendGeneralRequestRejected({
-                    to: input.email,
-                    ticketNumber: updated.ticket_number || 'N/A',
-                    judgeName: updated.judge_name,
-                    request: updated.request,
-                    reason: input.remarks || 'No specific reason provided.',
-                    rejectedBy: input.rejectedBy || 'System Administrator',
-                });
-            }
-        } catch (emailError) {
-            console.error('[EMAIL ERROR] Failed to send status update email:', emailError);
-            // Don't throw - we don't want to fail the status update if email fails
+        id: string,
+        input: UpdateStatusInput
+    ): Promise<GeneralRequest> {
+        const existing = await this.findGeneralRequestById(id);
+        if (!existing) {
+            throw new AppError(404, 'General request not found');
         }
-    }
 
-    return updated;
-}
+        await pool.query(
+            `UPDATE general_requests 
+             SET status = $1, remarks = COALESCE($2, remarks), updated_at = now()
+             WHERE id = $3`,
+            [input.status, input.notes || null, id]
+        );
+
+        const updated = await this.findGeneralRequestById(id);
+        if (!updated) throw new AppError(500, 'Failed to update general request status');
+
+        // Send email based on status change
+        if (input.email) {
+            try {
+                if (input.status === 'Resolved') {
+                    const { sendGeneralRequestResolved } = require('../../utils/sendMail');
+                    
+                    await sendGeneralRequestResolved({
+                        to: input.email,
+                        ticketNumber: updated.ticket_number || 'N/A',
+                        judgeName: updated.judge_name,
+                        request: updated.request,
+                        resolution: input.remarks || 'Request has been resolved satisfactorily.',
+                        resolvedBy: input.resolvedBy || 'System Administrator',
+                    });
+                } else if (input.status === 'Rejected') {
+                    const { sendGeneralRequestRejected } = require('../../utils/sendMail');
+                    
+                    await sendGeneralRequestRejected({
+                        to: input.email,
+                        ticketNumber: updated.ticket_number || 'N/A',
+                        judgeName: updated.judge_name,
+                        request: updated.request,
+                        reason: input.remarks || 'No specific reason provided.',
+                        rejectedBy: input.rejectedBy || 'System Administrator',
+                    });
+                }
+            } catch (emailError) {
+                console.error('[EMAIL ERROR] Failed to send status update email:', emailError);
+                // Don't throw - we don't want to fail the status update if email fails
+            }
+        }
+
+        return updated;
+    }
 
     static async deleteGeneralRequest(id: string): Promise<void> {
         const { rows } = await pool.query(
@@ -676,13 +719,11 @@ export class HelpDeskService {
      * @deprecated Use findAllGeneralRequests with request_type filter instead
      */
     static async findAllSecurityRequests(filters: HelpDeskFilters = {}): Promise<SecurityRequest[]> {
-        // Redirect to general requests but map the response
         const generalRequests = await this.findAllGeneralRequests({
             ...filters,
             request_type: filters.request_type as RequestType,
         });
         
-        // Map GeneralRequest to SecurityRequest for backward compatibility
         return generalRequests.map(req => ({
             id: req.id,
             s_no: req.s_no,
@@ -729,6 +770,54 @@ export class HelpDeskService {
     }
 
     /**
+     * @deprecated Use findGeneralRequestsByJudge instead
+     */
+    static async findSecurityRequestsByJudge(judgeName: string): Promise<SecurityRequest[]> {
+        const generalRequests = await this.findGeneralRequestsByJudge(judgeName);
+        return generalRequests.map(req => ({
+            id: req.id,
+            s_no: req.s_no,
+            judge_name: req.judge_name,
+            request_type: req.request_type,
+            request_date: req.request_date,
+            officer_assigned: req.officer_assigned,
+            status: req.status,
+            remarks: req.remarks,
+            remark_type: req.remark_type,
+            location: req.location,
+            firearm_type: req.firearm_type,
+            force_number: req.force_number,
+            created_by: req.created_by,
+            created_at: req.created_at,
+            updated_at: req.updated_at,
+        }));
+    }
+
+    /**
+     * @deprecated Use findGeneralRequestsByType instead
+     */
+    static async findSecurityRequestsByType(requestType: RequestType): Promise<SecurityRequest[]> {
+        const generalRequests = await this.findGeneralRequestsByType(requestType);
+        return generalRequests.map(req => ({
+            id: req.id,
+            s_no: req.s_no,
+            judge_name: req.judge_name,
+            request_type: req.request_type,
+            request_date: req.request_date,
+            officer_assigned: req.officer_assigned,
+            status: req.status,
+            remarks: req.remarks,
+            remark_type: req.remark_type,
+            location: req.location,
+            firearm_type: req.firearm_type,
+            force_number: req.force_number,
+            created_by: req.created_by,
+            created_at: req.created_at,
+            updated_at: req.updated_at,
+        }));
+    }
+
+    /**
      * @deprecated Use createGeneralRequest instead
      */
     static async createSecurityRequest(
@@ -754,7 +843,6 @@ export class HelpDeskService {
 
         const result = await this.createGeneralRequest(generalInput, userId);
         
-        // Map back to SecurityRequest for backward compatibility
         return {
             id: result.id,
             s_no: result.s_no,
@@ -867,7 +955,9 @@ export class HelpDeskService {
         };
     }
 
-    // ─── Judge Utilities (one judge → many utility items) ────────────────────
+    // ============================================================
+    // JUDGE UTILITIES
+    // ============================================================
 
     private static async getUtilityItems(requestId: string): Promise<UtilityItem[]> {
         const { rows } = await pool.query(
@@ -1112,7 +1202,9 @@ export class HelpDeskService {
         }
     }
 
-    // ─── Club Membership ─────────────────────────────────────────────────────
+    // ============================================================
+    // CLUB MEMBERSHIP
+    // ============================================================
 
     static async findAllClubMemberships(filters: HelpDeskFilters = {}): Promise<ClubMembership[]> {
         let query = `SELECT ${CLUB_SELECT} FROM club_memberships WHERE is_active = true`;
@@ -1216,7 +1308,9 @@ export class HelpDeskService {
         }
     }
 
-    // ─── DSA Helper: Create/Update DSA Details ──────────────────────────────
+    // ============================================================
+    // DSA HELPER: UPSERT DSA DETAILS
+    // ============================================================
 
     private static async upsertDSADetails(
         client: any,
@@ -1263,9 +1357,9 @@ export class HelpDeskService {
         }
     }
 
-    // ─── Circuits ────────────────────────────────────────────────────────────
-
-    // ... (keep all existing Circuit methods unchanged)
+    // ============================================================
+    // CIRCUITS
+    // ============================================================
 
     static async findAllCircuits(filters: HelpDeskFilters = {}): Promise<Circuit[]> {
         let query = `SELECT ${CIRCUIT_SELECT} FROM circuits WHERE is_active = true`;
@@ -1457,9 +1551,9 @@ export class HelpDeskService {
         }
     }
 
-    // ─── Special Benches ─────────────────────────────────────────────────────
-
-    // ... (keep all existing Special Bench methods unchanged)
+    // ============================================================
+    // SPECIAL BENCHES
+    // ============================================================
 
     static async findAllBenches(filters: HelpDeskFilters = {}): Promise<SpecialBench[]> {
         let query = `SELECT ${BENCH_SELECT} FROM special_benches WHERE is_active = true`;
@@ -1678,9 +1772,9 @@ export class HelpDeskService {
         }
     }
 
-    // ─── Part-Heards ─────────────────────────────────────────────────────────
-
-    // ... (keep all existing Part-Heard methods unchanged)
+    // ============================================================
+    // PART-HEARDS
+    // ============================================================
 
     static async findAllPartHeards(filters: HelpDeskFilters = {}): Promise<PartHeard[]> {
         let query = `SELECT ${PART_HEARD_SELECT} FROM part_heards WHERE is_active = true`;
@@ -1899,9 +1993,9 @@ export class HelpDeskService {
         }
     }
 
-    // ─── Service Weeks ──────────────────────────────────────────────────────
-
-    // ... (keep all existing Service Week methods unchanged)
+    // ============================================================
+    // SERVICE WEEKS
+    // ============================================================
 
     static async findAllServiceWeeks(filters: HelpDeskFilters = {}): Promise<ServiceWeek[]> {
         let query = `SELECT ${SERVICE_WEEK_SELECT} FROM service_weeks WHERE is_active = true`;
@@ -2054,9 +2148,9 @@ export class HelpDeskService {
         }
     }
 
-    // ─── Medical Expense Claims ──────────────────────────────────────────────
-
-    // ... (keep all existing Medical Claim methods unchanged)
+    // ============================================================
+    // MEDICAL EXPENSE CLAIMS
+    // ============================================================
 
     static async findAllMedicalClaims(filters: HelpDeskFilters = {}): Promise<MedicalClaim[]> {
         let query = `SELECT ${MEDICAL_CLAIM_SELECT} FROM medical_claims WHERE is_active = true`;
@@ -2101,27 +2195,41 @@ export class HelpDeskService {
         input: CreateMedicalClaimInput,
         userId: string
     ): Promise<MedicalClaim> {
-        const s_no = await generateSerialNumber('medical_claims');
+        const client = await pool.connect();
 
-        const { rows } = await pool.query(
-            `INSERT INTO medical_claims (
-                s_no, officer_name, claim_amount, date_forwarded_dhr, status, remarks, created_by
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-            RETURNING id`,
-            [
-                s_no,
-                input.officer_name.trim(),
-                input.claim_amount,
-                input.date_forwarded_dhr || null,
-                input.status || 'Pending',
-                input.remarks || null,
-                userId,
-            ]
-        );
+        try {
+            await client.query('BEGIN');
 
-        const claim = await this.findMedicalClaimById(rows[0].id);
-        if (!claim) throw new AppError(500, 'Failed to create medical claim');
-        return claim;
+            const s_no = await generateSerialNumber(client, 'medical_claims');
+
+            const { rows } = await client.query(
+                `INSERT INTO medical_claims (
+                    s_no, officer_name, claim_amount, date_forwarded_dhr, status, remarks, created_by
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                RETURNING id`,
+                [
+                    s_no,
+                    input.officer_name.trim(),
+                    input.claim_amount,
+                    input.date_forwarded_dhr || null,
+                    input.status || 'Pending',
+                    input.remarks || null,
+                    userId,
+                ]
+            );
+
+            await client.query('COMMIT');
+
+            const claim = await this.findMedicalClaimById(rows[0].id);
+            if (!claim) throw new AppError(500, 'Failed to create medical claim');
+            return claim;
+
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
     }
 
     static async updateMedicalClaimStatus(
@@ -2155,9 +2263,9 @@ export class HelpDeskService {
         }
     }
 
-    // ─── Visa Support ────────────────────────────────────────────────────────
-
-    // ... (keep all existing Visa methods unchanged)
+    // ============================================================
+    // VISA SUPPORT
+    // ============================================================
 
     static async findAllVisaRequests(filters: HelpDeskFilters = {}): Promise<VisaRequest[]> {
         let query = `SELECT ${VISA_SELECT} FROM visa_requests WHERE is_active = true`;
@@ -2226,31 +2334,45 @@ export class HelpDeskService {
         input: CreateVisaRequestInput,
         userId: string
     ): Promise<VisaRequest> {
-        const s_no = await generateSerialNumber('visa_requests');
+        const client = await pool.connect();
 
-        const { rows } = await pool.query(
-            `INSERT INTO visa_requests (
-                s_no, judge_name, request_date, destination_country, date_of_travel, date_of_return,
-                visa_type, purpose_of_travel, remarks, notes, created_by
-            ) VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, $6, $7, $8, $9, $10)
-            RETURNING id`,
-            [
-                s_no,
-                input.judge_name.trim(),
-                input.destination_country.trim(),
-                input.date_of_travel || null,
-                input.date_of_return || null,
-                input.visa_type,
-                input.purpose_of_travel || null,
-                input.remarks || null,
-                input.notes || null,
-                userId,
-            ]
-        );
+        try {
+            await client.query('BEGIN');
 
-        const visa = await this.findVisaRequestById(rows[0].id);
-        if (!visa) throw new AppError(500, 'Failed to create visa request');
-        return visa;
+            const s_no = await generateSerialNumber(client, 'visa_requests');
+
+            const { rows } = await client.query(
+                `INSERT INTO visa_requests (
+                    s_no, judge_name, request_date, destination_country, date_of_travel, date_of_return,
+                    visa_type, purpose_of_travel, remarks, notes, created_by
+                ) VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, $6, $7, $8, $9, $10)
+                RETURNING id`,
+                [
+                    s_no,
+                    input.judge_name.trim(),
+                    input.destination_country.trim(),
+                    input.date_of_travel || null,
+                    input.date_of_return || null,
+                    input.visa_type,
+                    input.purpose_of_travel || null,
+                    input.remarks || null,
+                    input.notes || null,
+                    userId,
+                ]
+            );
+
+            await client.query('COMMIT');
+
+            const visa = await this.findVisaRequestById(rows[0].id);
+            if (!visa) throw new AppError(500, 'Failed to create visa request');
+            return visa;
+
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
     }
 
     static async updateVisaStatus(
@@ -2368,9 +2490,9 @@ export class HelpDeskService {
         return document;
     }
 
-    // ─── Protocol Support ────────────────────────────────────────────────────
-
-    // ... (keep all existing Protocol methods unchanged)
+    // ============================================================
+    // PROTOCOL SUPPORT
+    // ============================================================
 
     static async findAllProtocolEvents(filters: HelpDeskFilters = {}): Promise<ProtocolEvent[]> {
         let query = `SELECT ${PROTOCOL_SELECT} FROM protocol_events WHERE is_active = true`;
@@ -2433,7 +2555,7 @@ export class HelpDeskService {
         try {
             await client.query('BEGIN');
 
-            const s_no = await generateSerialNumber('protocol_events');
+            const s_no = await generateSerialNumber(client, 'protocol_events');
 
             const { rows } = await client.query(
                 `INSERT INTO protocol_events (
@@ -2530,9 +2652,9 @@ export class HelpDeskService {
         }
     }
 
-    // ─── Other Payments ──────────────────────────────────────────────────────
-
-    // ... (keep all existing Other Payments methods unchanged)
+    // ============================================================
+    // OTHER PAYMENTS
+    // ============================================================
 
     static async findAllOtherPayments(filters: HelpDeskFilters = {}): Promise<OtherPayment[]> {
         let query = `SELECT ${OTHER_PAYMENT_SELECT} FROM other_payments WHERE is_active = true`;
@@ -2724,9 +2846,9 @@ export class HelpDeskService {
         }
     }
 
-    // ─── DSA Report ──────────────────────────────────────────────────────────
-
-    // ... (keep DSA Report method unchanged)
+    // ============================================================
+    // DSA REPORT
+    // ============================================================
 
     static async getDSAReport(filters: DSAReportFilters = {}): Promise<DSAReportRow[]> {
         const modules = filters.modules
@@ -2784,7 +2906,7 @@ export class HelpDeskService {
             allRows.push(...rows);
         }
 
-        // Global pagination applied after merging, since each module is queried separately
+        // Global pagination applied after merging
         if (filters.offset !== undefined && filters.offset > 0) {
             return allRows.slice(filters.offset, filters.limit ? filters.offset + filters.limit : undefined);
         }
@@ -2794,59 +2916,4 @@ export class HelpDeskService {
         return allRows;
     }
 
-
-    // Add these methods to the HelpDeskService class
-
-// ─── General Requests (Unified) ──────────────────────────────────────────
-
-// ... existing methods ...
-
-// Add these missing methods that the controller expects
-static async findSecurityRequestsByJudge(judgeName: string): Promise<SecurityRequest[]> {
-    // Delegate to the unified general request method
-    const generalRequests = await this.findGeneralRequestsByJudge(judgeName);
-    
-    // Map to SecurityRequest for backward compatibility
-    return generalRequests.map(req => ({
-        id: req.id,
-        s_no: req.s_no,
-        judge_name: req.judge_name,
-        request_type: req.request_type,
-        request_date: req.request_date,
-        officer_assigned: req.officer_assigned,
-        status: req.status,
-        remarks: req.remarks,
-        remark_type: req.remark_type,
-        location: req.location,
-        firearm_type: req.firearm_type,
-        force_number: req.force_number,
-        created_by: req.created_by,
-        created_at: req.created_at,
-        updated_at: req.updated_at,
-    }));
-}
-
-static async findSecurityRequestsByType(requestType: RequestType): Promise<SecurityRequest[]> {
-    // Delegate to the unified general request method
-    const generalRequests = await this.findGeneralRequestsByType(requestType);
-    
-    // Map to SecurityRequest for backward compatibility
-    return generalRequests.map(req => ({
-        id: req.id,
-        s_no: req.s_no,
-        judge_name: req.judge_name,
-        request_type: req.request_type,
-        request_date: req.request_date,
-        officer_assigned: req.officer_assigned,
-        status: req.status,
-        remarks: req.remarks,
-        remark_type: req.remark_type,
-        location: req.location,
-        firearm_type: req.firearm_type,
-        force_number: req.force_number,
-        created_by: req.created_by,
-        created_at: req.created_at,
-        updated_at: req.updated_at,
-    }));
-}
-}
+} // end HelpDeskService

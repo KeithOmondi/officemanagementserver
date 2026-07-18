@@ -55,6 +55,12 @@ const dsaDetailSchema = z.object({
  * Schema for creating a general request
  * Supports: Driver, Bodyguard, Firearm, Current Station, Force Number, 
  * Residence Security, Sentry, and other general requests
+ * 
+ * Required fields are conditional on request_type:
+ * - Driver / Bodyguard: officer_name, rank, reporting_date
+ * - Force Number: force_number
+ * - Current Station / Residence Security / Sentry: location
+ * - Firearm: firearm_type is **optional** initially, but required when `officer_assigned` is provided.
  */
 export const createGeneralRequestSchema = z.object({
     body: z.object({
@@ -67,29 +73,70 @@ export const createGeneralRequestSchema = z.object({
         status: statusEnum.optional(),
         remarks: z.string().optional(),
         remark_type: remarkTypeEnum.optional(), // Onboarding or Release
-        
-        // Security/Personnel specific fields
-        request_date: dateStringSchema.optional(),  // Date of request
-        location: z.string().optional(),             // For station/security requests
-        firearm_type: z.string().optional(),         // For firearm requests
-        force_number: z.string().optional(),         // For force number requests
-        officer_name: z.string().optional(),         // Name of the officer (for bodyguard/driver)
-        assigned_to: z.string().optional(),          // Who it's assigned to
-        priority: z.string().optional(),             // Priority level if needed
-        notes: z.string().optional(),                // Additional notes
-        
+
+        // Security/Personnel specific fields — conditionally required, see superRefine below
+        request_date: dateStringSchema,               // now required for all
+        location: z.string().optional(),
+        firearm_type: z.string().optional(),
+        force_number: z.string().optional(),
+        officer_name: z.string().optional(),
+        assigned_to: z.string().optional(),
+        priority: z.string().optional(),
+        notes: z.string().optional(),
+
+        rank: z.string().optional(),
+        reporting_date: dateStringSchema.optional(),
+
         // Notification
         email: z.string().email('Valid email is required for notifications').optional(),
         send_email: z.boolean().default(false),
-    }).strict(),
+    }).strict()
+    .superRefine((data, ctx) => {
+        const requireField = (
+            field: keyof typeof data,
+            message: string
+        ) => {
+            const value = data[field];
+            if (value === undefined || value === null || value === '') {
+                ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    path: [field],
+                    message,
+                });
+            }
+        };
+
+        switch (data.request_type) {
+            case 'Driver':
+            case 'Bodyguard':
+                requireField('officer_name', 'officer_name is required for Driver/Bodyguard requests');
+                requireField('rank', 'rank is required for Driver/Bodyguard requests');
+                requireField('reporting_date', 'reporting_date is required for Driver/Bodyguard requests');
+                break;
+
+            case 'Firearm':
+                // firearm_type is optional initially; only required if officer_assigned is provided
+                if (data.officer_assigned && data.officer_assigned.trim() !== '') {
+                    requireField('firearm_type', 'firearm_type is required when an officer is assigned to a Firearm request');
+                }
+                break;
+
+            case 'Force Number':
+                requireField('force_number', 'force_number is required for Force Number requests');
+                break;
+
+            case 'Current Station':
+            case 'Residence Security':
+            case 'Sentry':
+                requireField('location', 'location is required for this request type');
+                break;
+        }
+    }),
 });
 
-/**
- * Schema for updating a general request
- */
-// Make sure updateGeneralRequestSchema includes all fields
 export const updateGeneralRequestSchema = z.object({
     body: z.object({
+        judge_name: z.string().min(1).max(100).optional(),
         request: z.string().min(1).optional(),
         request_type: requestTypeEnum.optional(),
         category: generalRequestCategoryEnum.optional(),
@@ -98,8 +145,7 @@ export const updateGeneralRequestSchema = z.object({
         status: statusEnum.optional(),
         remarks: z.string().optional(),
         remark_type: remarkTypeEnum.optional(),
-        
-        // Security/Personnel specific fields
+
         request_date: dateStringSchema.optional(),
         location: z.string().optional(),
         firearm_type: z.string().optional(),
@@ -108,7 +154,26 @@ export const updateGeneralRequestSchema = z.object({
         assigned_to: z.string().optional(),
         priority: z.string().optional(),
         notes: z.string().optional(),
-    }).strict(),
+
+        rank: z.string().optional(),
+        reporting_date: dateStringSchema.optional(),
+
+        email: z.string().email('Valid email is required for notifications').optional(),
+        send_email: z.boolean().optional(),
+    }).strict()
+    .superRefine((data, ctx) => {
+        // For update, we enforce the same rule if both request_type and officer_assigned are provided.
+        // If request_type is 'Firearm' and officer_assigned is set, then firearm_type must be set.
+        if (data.request_type === 'Firearm' && data.officer_assigned && data.officer_assigned.trim() !== '') {
+            if (!data.firearm_type || data.firearm_type.trim() === '') {
+                ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    path: ['firearm_type'],
+                    message: 'firearm_type is required when updating a Firearm request with an assigned officer',
+                });
+            }
+        }
+    }),
 });
 
 // ============================================================
@@ -452,7 +517,7 @@ export const dsaReportFiltersSchema = z.object({
 });
 
 // ============================================================
-// Help Desk Filters (Updated with new fields)
+// Help Desk Filters
 // ============================================================
 
 export const helpDeskFiltersSchema = z.object({

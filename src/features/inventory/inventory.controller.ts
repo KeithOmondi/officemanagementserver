@@ -1,3 +1,4 @@
+// src/features/inventory/inventory.controller.ts
 import { Request, Response } from 'express';
 import { asyncHandler } from '../../utils/asyncHandler';
 import { AppError, sendSuccess } from '../../utils/response';
@@ -7,13 +8,17 @@ import {
     updateInventoryItemSchema,
     createStoreRequestSchema,
     updateStoreRequestSchema,
+    issueStoreRequestSchema,
+    receiveStoreRequestSchema,
     createProcurementRequestSchema,
     updateProcurementRequestSchema,
     createApprovedProcurementSchema,
+    submitProcurementMemoSchema,
     itemIdSchema,
     storeRequestIdSchema,
     procurementRequestIdSchema,
     approvedProcurementIdSchema,
+    //categoryIdParamSchema,
 } from './inventory.validator';
 
 export const inventoryController = {
@@ -24,10 +29,16 @@ export const inventoryController = {
         return sendSuccess(res, stats, 'Inventory statistics retrieved');
     }),
 
+    // ── Categories ─────────────────────────────────────────────────────────────
+    getAllCategories: asyncHandler(async (_req: Request, res: Response) => {
+        const categories = await InventoryService.findAllCategories();
+        return sendSuccess(res, categories, 'Categories retrieved');
+    }),
+
     // ── Inventory Items ────────────────────────────────────────────────────────
     getAllItems: asyncHandler(async (req: Request, res: Response) => {
-        const { category } = req.query;
-        const items = await InventoryService.findAllItems(category as string);
+        const { category_id } = req.query;
+        const items = await InventoryService.findAllItems(category_id as string);
         return sendSuccess(res, items, 'Inventory items retrieved');
     }),
 
@@ -126,6 +137,38 @@ export const inventoryController = {
         return sendSuccess(res, request, 'Store request updated');
     }),
 
+    issueStoreRequest: asyncHandler(async (req: Request, res: Response) => {
+        const paramsResult = storeRequestIdSchema.safeParse({ params: req.params });
+        if (!paramsResult.success) {
+            throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        const bodyResult = issueStoreRequestSchema.safeParse({ body: req.body });
+        if (!bodyResult.success) {
+            throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+        }
+        const request = await InventoryService.issueStoreRequest(
+            paramsResult.data.params.id,
+            req.user!.id
+        );
+        return sendSuccess(res, request, 'Item issued successfully');
+    }),
+
+    receiveStoreRequest: asyncHandler(async (req: Request, res: Response) => {
+        const paramsResult = storeRequestIdSchema.safeParse({ params: req.params });
+        if (!paramsResult.success) {
+            throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        const bodyResult = receiveStoreRequestSchema.safeParse({ body: req.body });
+        if (!bodyResult.success) {
+            throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+        }
+        const request = await InventoryService.receiveStoreRequest(
+            paramsResult.data.params.id,
+            req.user!.id
+        );
+        return sendSuccess(res, request, 'Receipt confirmed successfully');
+    }),
+
     deleteStoreRequest: asyncHandler(async (req: Request, res: Response) => {
         const result = storeRequestIdSchema.safeParse({ params: req.params });
         if (!result.success) {
@@ -193,7 +236,25 @@ export const inventoryController = {
         return sendSuccess(res, null, 'Procurement request deleted');
     }),
 
-    // ── Approved Procurement ──────────────────────────────────────────────────
+    // ─── Memo Submission (New) ─────────────────────────────────────────────────
+    submitProcurementMemo: asyncHandler(async (req: Request, res: Response) => {
+        const paramsResult = procurementRequestIdSchema.safeParse({ params: req.params });
+        if (!paramsResult.success) {
+            throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        const bodyResult = submitProcurementMemoSchema.safeParse({ body: req.body });
+        if (!bodyResult.success) {
+            throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid memo data');
+        }
+        const result = await InventoryService.submitProcurementMemo(
+            paramsResult.data.params.id,
+            req.user!.id,
+            bodyResult.data.body
+        );
+        return sendSuccess(res, result, 'Memo generated and request submitted for approval');
+    }),
+
+    // ─── Approved Procurement ──────────────────────────────────────────────────
     getAllApprovedProcurement: asyncHandler(async (_req: Request, res: Response) => {
         const items = await InventoryService.findAllApprovedProcurement();
         return sendSuccess(res, items, 'Approved procurement items retrieved');

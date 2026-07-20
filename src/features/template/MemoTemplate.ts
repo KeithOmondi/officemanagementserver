@@ -29,9 +29,9 @@ export const SIGNATURE_ANCHOR_TEXT = 'RHC-SIGNATURE-ANCHOR';
 
 const DEFAULTS = {
   logoUrl:
-    "https://res.cloudinary.com/do0yflasl/image/upload/v1781759596/JOB_LOGO_ubls4m.jpg",
+    "https://res.cloudinary.com/do0yflasl/image/upload/v1784363826/ORHC_L_crclut.jpg",
   footerEmblemUrl:
-    "https://res.cloudinary.com/do0yflasl/image/upload/v1782893389/footer-emblem_n0ncm9.jpg",
+    "https://res.cloudinary.com/do0yflasl/image/upload/v1784364354/ORHC_EMBLEM_wzmp94.jpg",
   footerAddress:
     "Milimani Law Courts | 3rd Floor, Chamber 337 | P.O. Box 30041-00100 | Nairobi",
   footerContact:
@@ -49,6 +49,43 @@ function escapeHtml(text: string): string {
     "'": "&#039;",
   };
   return text.replace(/[&<>"']/g, (ch) => replacements[ch]);
+}
+
+/**
+ * Converts plain-text newlines to <br/> for display, WITHOUT touching
+ * newlines that live inside an embedded <table>...</table> block.
+ *
+ * Why this exists: callers (e.g. the procurement memo generator) sometimes
+ * build the memo body as `${plainTextParagraphs}\n${tableHtmlTemplateLiteral}`.
+ * A naive `body.replace(/\n/g, "<br/>")` across the whole string also
+ * converts the indentation newlines inside the table's multi-line template
+ * literal into stray <br/> tags. Browsers can't place <br/> inside
+ * <table>/<thead>/<tr>, so they get foster-parented out in front of the
+ * table — which visually pushes the table far down the page (in one
+ * observed case, all the way to the bottom of page 1, overlapping the
+ * footer) instead of it sitting immediately after the preceding paragraph.
+ *
+ * Splitting the body around any <table>...</table> block and only
+ * converting newlines in the non-table segments avoids this entirely,
+ * while leaving plain-text-only memos (no table) behaving exactly as
+ * before.
+ */
+function formatBodyHtml(rawBody: string): string {
+  if (!rawBody || !rawBody.trim()) return "<p>&nbsp;</p>";
+
+  const parts = rawBody.split(/(<table[\s\S]*?<\/table>)/gi);
+
+  return parts
+    .map((part) => {
+      if (/^<table[\s\S]*<\/table>$/i.test(part.trim())) {
+        // Raw table markup — strip stray indentation newlines/whitespace
+        // between tags but leave the table structure completely intact.
+        return part.replace(/>\s*\n\s*</g, "><").trim();
+      }
+      // Plain text — convert newlines to line breaks as before.
+      return part.replace(/\n/g, "<br/>");
+    })
+    .join("");
 }
 
 export function getMemoHTML(data: MemoData): string {
@@ -116,7 +153,7 @@ export function getMemoHTML(data: MemoData): string {
     .field .colon { width: 20px; flex-shrink: 0; }
     .field .value { flex: 1; }
     .bottom-rule { border-top: 2.5px solid #000; margin: 12px 0 40px; }
-    .body-content { margin: 0 0 40px; font-size: 13.5px; line-height: 1.8; text-align: justify; min-height: 260px; }
+    .body-content { margin: 0 0 40px; font-size: 13.5px; line-height: 1.8; text-align: justify; min-height: 120px; }
     .body-content p { margin-bottom: 10px; }
     .body-content table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 12.5px; page-break-inside: avoid; break-inside: avoid; }
     .body-content table th, .body-content table td { border: 1px solid #333; padding: 6px 10px; text-align: left; vertical-align: top; }
@@ -124,7 +161,7 @@ export function getMemoHTML(data: MemoData): string {
 
     /* Signature section container - ensures proper spacing, mirrors LetterTemplate.ts */
     .signature-section {
-      margin-top: 50px;
+      margin-top: 30px;
       page-break-inside: avoid;
       break-inside: avoid;
     }
@@ -147,7 +184,7 @@ export function getMemoHTML(data: MemoData): string {
     .signature {
       font-size: 13.5px;
       text-align: left;
-      margin-top: 70px;
+      margin-top: 55px;
       page-break-inside: avoid;
       break-inside: avoid;
     }
@@ -191,7 +228,7 @@ export function getMemoHTML(data: MemoData): string {
   <div class="bottom-rule"></div>
 
   <div class="body-content">
-    ${body ? body.replace(/\n/g, "<br/>") : "<p>&nbsp;</p>"}
+    ${formatBodyHtml(body)}
   </div>
 
   <!-- Signature section with anchor marker -->

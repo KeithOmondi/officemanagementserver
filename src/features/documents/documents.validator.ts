@@ -108,6 +108,7 @@ export const updateDocumentSchema = z.object({
       enclosures: z.string().max(500).trim().optional(),
       signature_name: z.string().max(255).trim().optional(),
       signature_title: z.string().max(255).trim().optional(),
+      from_first: z.boolean().optional(),   // controls TO/FROM field order in the memo header
       // Custom signature position (draggable) – absolute positioning
       signature_position_x: z.number().nullable().optional(),
       signature_position_y: z.number().nullable().optional(),
@@ -262,6 +263,7 @@ const baseComposeSchema = z.object({
   from: z.string().optional(),
   signatureName: z.string().optional(),
   signatureTitle: z.string().optional(),
+  fromFirst: z.boolean().default(false),   // controls TO/FROM field order in the memo header
   // signature_placement removed – signature placement is now auto-detected
   department_id: z.string().uuid().optional(),
   reference_no: z.string().max(100).trim().optional(),

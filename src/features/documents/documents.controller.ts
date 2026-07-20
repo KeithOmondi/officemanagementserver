@@ -134,12 +134,10 @@ export const documentController = {
     const bodyResult = updateDocumentSchema.safeParse({ body: req.body });
     if (!bodyResult.success) throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
 
-    // Check if document is memo or letter and user is super admin for editing extra fields
     const doc = await DocumentService.findById(paramsResult.data.params.id);
     if (!doc) throw new AppError(404, 'Document not found');
-    
-    // Check if the update contains memo/letter specific fields (excluding signature placement)
-    const hasMemoFields = 
+
+    const hasMemoFields =
       bodyResult.data.body.to_recipient !== undefined ||
       bodyResult.data.body.from_sender !== undefined ||
       bodyResult.data.body.document_date !== undefined ||
@@ -147,18 +145,18 @@ export const documentController = {
       bodyResult.data.body.cc !== undefined ||
       bodyResult.data.body.enclosures !== undefined ||
       bodyResult.data.body.signature_name !== undefined ||
-      bodyResult.data.body.signature_title !== undefined;
-    
-    // If editing memo/letter specific fields, only super admin can do it
+      bodyResult.data.body.signature_title !== undefined ||
+      bodyResult.data.body.from_first !== undefined;   // ← added
+
     if (hasMemoFields && (doc.type === 'memo' || doc.type === 'letter')) {
       if (req.user!.role !== 'super_admin') {
-        throw new AppError(403, 'Only super administrators can edit memo and letter fields (TO, FROM, DATE, SUBJECT, CC, ENCLOSURES, SIGNATURE, SIGNATURE PLACEMENT)');
+        throw new AppError(403, 'Only super administrators can edit memo and letter fields (TO, FROM, DATE, SUBJECT, CC, ENCLOSURES, SIGNATURE, SIGNATURE ORDER, SIGNATURE PLACEMENT)');
       }
     }
 
     const updated = await DocumentService.update(paramsResult.data.params.id, bodyResult.data.body);
     return sendSuccess(res, updated, 'Document updated successfully');
-  }),
+}),
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────────
 

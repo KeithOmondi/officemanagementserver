@@ -16,9 +16,9 @@ export interface LetterData {
 }
 
 const DEFAULT_LOGO_URL =
-  'https://res.cloudinary.com/do0yflasl/image/upload/v1781759596/JOB_LOGO_ubls4m.jpg';
+  'https://res.cloudinary.com/do0yflasl/image/upload/v1784363826/ORHC_L_crclut.jpg';
 const DEFAULT_FOOTER_EMBLEM_URL =
-  'https://res.cloudinary.com/do0yflasl/image/upload/v1782893389/footer-emblem_n0ncm9.jpg';
+  'https://res.cloudinary.com/do0yflasl/image/upload/v1784364354/ORHC_EMBLEM_wzmp94.jpg';
 
 // This exact string is what embedSignature.ts looks for to locate the
 // signature block reliably. It MUST stay in sync with SIGNATURE_ANCHOR_TEXT

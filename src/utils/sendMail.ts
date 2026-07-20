@@ -10,17 +10,34 @@ interface SendMailOptions {
   to: string;
   subject: string;
   html: string;
+  attachments?: {
+    content: string; // base64 string
+    filename: string;
+    type: string;
+    disposition?: 'attachment' | 'inline';
+  }[];
 }
 
-export const sendMail = async ({ to, subject, html }: SendMailOptions) => {
+export const sendMail = async ({ to, subject, html, attachments }: SendMailOptions) => {
   try {
-    return await brevo.transactionalEmails.sendTransacEmail({
+    const payload: any = {
       sender: { name: env.SENDER_NAME, email: env.SENDER_EMAIL },
       to: [{ email: to }],
       subject,
       htmlContent: html,
-      textContent: "Please enable HTML to view this message.",
-    });
+      textContent: 'Please enable HTML to view this message.',
+    };
+
+    if (attachments && attachments.length > 0) {
+      payload.attachment = attachments.map((att) => ({
+        content: att.content,
+        name: att.filename,
+        type: att.type,
+        disposition: att.disposition || 'attachment',
+      }));
+    }
+
+    return await brevo.transactionalEmails.sendTransacEmail(payload);
   } catch (err: any) {
     const errorMsg = err?.response?.body?.message || err.message;
     console.error(`[EMAIL ERROR] to ${to}:`, errorMsg);

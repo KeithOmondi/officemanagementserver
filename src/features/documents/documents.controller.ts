@@ -146,7 +146,7 @@ export const documentController = {
       bodyResult.data.body.enclosures !== undefined ||
       bodyResult.data.body.signature_name !== undefined ||
       bodyResult.data.body.signature_title !== undefined ||
-      bodyResult.data.body.from_first !== undefined;   // ← added
+      bodyResult.data.body.from_first !== undefined;
 
     if (hasMemoFields && (doc.type === 'memo' || doc.type === 'letter')) {
       if (req.user!.role !== 'super_admin') {
@@ -156,7 +156,7 @@ export const documentController = {
 
     const updated = await DocumentService.update(paramsResult.data.params.id, bodyResult.data.body);
     return sendSuccess(res, updated, 'Document updated successfully');
-}),
+  }),
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
@@ -309,31 +309,6 @@ export const documentController = {
     if (!otp) throw new AppError(400, 'OTP is required');
     if (!/^\d{6}$/.test(otp)) throw new AppError(400, 'OTP must be exactly 6 digits');
 
-    // We need to know the document TYPE before deciding whether to honor a
-    // frontend-supplied position. Memo/letter documents are always PDFs
-    // generated server-side from LetterTemplate.ts/MemoTemplate.ts, which
-    // embed an invisible SIGNATURE_ANCHOR_TEXT marker immediately above the
-    // real signatory block. That anchor is measured directly against the
-    // ACTUAL rendered PDF (via pdfjs text extraction in embedSignature.ts),
-    // so it is always more accurate than a client-side guess.
-    //
-    // The frontend's signature box position, by contrast, is measured
-    // against a separate React/Tailwind preview component (LetterDisplay/
-    // MemoDisplay) that uses different padding, font sizes, and a
-    // non-fixed footer compared to the real PDF layout (which has a
-    // `position: fixed` footer pinned near the bottom). That mismatch is
-    // what was causing signatures to land near/inside the footer instead
-    // of above the signatory name — the custom-position branch in
-    // DocumentService.sign() was always winning because the frontend
-    // ALWAYS sends position_x/position_y (auto-computed the moment the
-    // signature box appears, not just when the user manually drags it),
-    // so the anchor-based auto-detection never got a chance to run.
-    //
-    // Fix: only trust a frontend-supplied position for document types that
-    // don't have a reliable server-rendered anchor to fall back on (i.e.
-    // genuinely uploaded PDFs). For memo/letter, always ignore any position
-    // sent from the client and let DocumentService.sign() use anchor-based
-    // auto-detection instead.
     const doc = await DocumentService.findById(paramsResult.data.params.id);
     if (!doc) throw new AppError(404, 'Document not found');
 
@@ -345,9 +320,8 @@ export const documentController = {
     const positionWidth = req.body?.position_width as number | undefined;
     const positionHeight = req.body?.position_height as number | undefined;
 
-    // Only persist/honor a custom position for non-templated (i.e. uploaded)
-    // documents. Templated memo/letter PDFs always rely on the more
-    // accurate anchor-based auto-detection in DocumentService.sign().
+    // Only persist/honor a custom position for non-templated (i.e. uploaded) documents.
+    // For memo/letter we always use anchor-based auto-detection in DocumentService.sign().
     if (!isTemplatedDocument && positionX !== undefined && positionY !== undefined) {
       console.log(`[Sign] Saving custom signature position: x=${positionX}, y=${positionY}, w=${positionWidth || 200}, h=${positionHeight || 80}`);
 
@@ -363,8 +337,6 @@ export const documentController = {
       );
     }
 
-    // Sign the document (the service will use the position from the document,
-    // or fall back to anchor-based auto-detection if none was persisted above)
     const signedDoc = await DocumentService.sign(paramsResult.data.params.id, req.user!.id, otp);
     return sendSuccess(res, signedDoc, 'Document signed successfully. Ready for release.');
   }),
@@ -372,7 +344,6 @@ export const documentController = {
   // ── Release Document (Super Admin only) ──────────────────────────────────────
 
   releaseDocument: asyncHandler(async (req: Request, res: Response) => {
-    // Only Super Admin can release documents
     if (req.user!.role !== 'super_admin') {
       throw new AppError(403, 'Only Super Administrators can release documents.');
     }

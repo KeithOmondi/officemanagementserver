@@ -12,16 +12,30 @@ export const documentTypeEnum = z.enum([
   'letter',
 ]);
 
+/**
+ * Document status lifecycle:
+ * - `draft` → `uploaded`/`pending_review` → `dept_assigned` (Super Admin assigns to dept)
+ * - `dept_assigned` → `user_assigned` (Dept Head assigns to a specific user)
+ * - `user_assigned` → `in_progress` (User acknowledges and starts working)
+ * - `in_progress` → `completed` (User finishes)
+ * - `completed` → `ready_to_release` or `filed`
+ * - `ready_to_release` → `released`
+ *
+ * Legacy `marked` is kept for backward compatibility (maps to `dept_assigned` in logic).
+ */
 export const documentStatusEnum = z.enum([
   'draft',
   'uploaded',
   'pending_review',
-  'marked',
+  'dept_assigned',   // Super Admin assigned to department
+  'user_assigned',   // Dept Head assigned to a specific user
   'in_progress',
   'completed',
   'filed',
   'ready_to_release',
   'released',
+  // Legacy – kept for compatibility; new code should use `dept_assigned`
+  'marked',
 ]);
 
 export const documentCategoryEnum = z.enum([
@@ -264,7 +278,6 @@ const baseComposeSchema = z.object({
   signatureName: z.string().optional(),
   signatureTitle: z.string().optional(),
   fromFirst: z.boolean().default(false),   // controls TO/FROM field order in the memo header
-  // signature_placement removed – signature placement is now auto-detected
   department_id: z.string().uuid().optional(),
   reference_no: z.string().max(100).trim().optional(),
 });

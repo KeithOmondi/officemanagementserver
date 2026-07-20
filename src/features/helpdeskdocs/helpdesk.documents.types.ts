@@ -80,14 +80,13 @@ export interface CreateHelpdeskDocumentInput {
     ref: string;
     subject: string;
     entity_type: DocumentEntityType;
-    entity_id?: string;
+    entity_id?: string | null;
     format: DocumentFormat;
     status?: DocumentStatus;
-    request_type?: string;      // For general requests
-    judge_name?: string;        // For better tracking
-    // ─── NEW FIELDS ──────────────────────────────────────────────────────────
-    rank?: string;
-    reporting_date?: string;
+    request_type?: string | null;      // For general requests
+    judge_name?: string | null;        // For better tracking
+    rank?: string | null;
+    reporting_date?: string | null;
 }
 
 export interface UpdateDocumentStatusInput {

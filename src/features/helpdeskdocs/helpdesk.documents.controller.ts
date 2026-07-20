@@ -74,13 +74,60 @@ function getQueryEnum<T extends string>(
     return undefined;
 }
 
+// ─── Helper: Clean form-data body ─────────────────────────────────────────────
+
+/**
+ * Cleans form-data body by converting null/undefined/empty strings to undefined
+ * and handling the entity_id field properly.
+ */
+function cleanFormDataBody<T extends Record<string, unknown>>(body: T): T {
+    const cleaned: Record<string, unknown> = {};
+    
+    for (const [key, value] of Object.entries(body)) {
+        // Skip undefined values
+        if (value === undefined) continue;
+        
+        // Convert null or empty string to undefined for optional fields
+        if (value === null || value === '') {
+            cleaned[key] = undefined;
+            continue;
+        }
+        
+        // Handle entity_id specifically - ensure it's a string or undefined
+        if (key === 'entity_id') {
+            if (typeof value === 'string' && value.trim()) {
+                cleaned[key] = value.trim();
+            } else {
+                cleaned[key] = undefined;
+            }
+            continue;
+        }
+        
+        // Handle other string fields
+        if (typeof value === 'string') {
+            // For status field, keep 'draft' default
+            if (key === 'status' && !value.trim()) {
+                cleaned[key] = 'draft';
+                continue;
+            }
+            // For other string fields, trim if provided
+            cleaned[key] = value.trim() || undefined;
+            continue;
+        }
+        
+        // Keep other values as-is
+        cleaned[key] = value;
+    }
+    
+    return cleaned as T;
+}
+
 // ─── Controller ──────────────────────────────────────────────────────────────
 
 export class HelpdeskDocumentsController {
 
     // ─── Upload Document ──────────────────────────────────────────────────────
 
-    // POST /api/helpdesk/documents/upload
     static async upload(req: Request, res: Response, next: NextFunction) {
         try {
             const file = req.file;
@@ -91,7 +138,11 @@ export class HelpdeskDocumentsController {
                 });
             }
 
-            const body = req.body as UploadHelpdeskDocumentBody;
+            // Clean the body before using it
+            const rawBody = req.body as UploadHelpdeskDocumentBody;
+            const cleanedBody = cleanFormDataBody(rawBody);
+            const body = cleanedBody as UploadHelpdeskDocumentBody;
+            
             const userId = (req as any).user?.id as string;
 
             if (!userId) {
@@ -101,7 +152,6 @@ export class HelpdeskDocumentsController {
                 });
             }
 
-            // body includes rank and reporting_date (already in schema)
             const doc = await HelpdeskDocumentsService.upload(file, body, userId);
 
             return sendSuccess(res, doc, 'Document saved successfully.', 201);
@@ -112,7 +162,6 @@ export class HelpdeskDocumentsController {
 
     // ─── Batch Upload ─────────────────────────────────────────────────────────
 
-    // POST /api/helpdesk/documents/upload/batch
     static async batchUpload(req: Request, res: Response, next: NextFunction) {
         try {
             const files = req.files as Express.Multer.File[];
@@ -123,7 +172,7 @@ export class HelpdeskDocumentsController {
                 });
             }
 
-            const body = req.body as BatchUploadBody;
+            const rawBody = req.body as BatchUploadBody;
             const userId = (req as any).user?.id as string;
 
             if (!userId) {
@@ -132,6 +181,10 @@ export class HelpdeskDocumentsController {
                     message: 'User not authenticated'
                 });
             }
+
+            // Clean each document in the batch
+            const cleanedDocuments = rawBody.documents.map(doc => cleanFormDataBody(doc));
+            const body = { documents: cleanedDocuments } as BatchUploadBody;
 
             if (body.documents.length !== files.length) {
                 return res.status(400).json({
@@ -147,7 +200,6 @@ export class HelpdeskDocumentsController {
 
             for (let i = 0; i < body.documents.length; i++) {
                 try {
-                    // body.documents[i] includes rank and reporting_date
                     const doc = await HelpdeskDocumentsService.upload(
                         files[i],
                         body.documents[i],
@@ -170,10 +222,8 @@ export class HelpdeskDocumentsController {
 
     // ─── List Documents ───────────────────────────────────────────────────────
 
-    // GET /api/helpdesk/documents
     static async list(req: Request, res: Response, next: NextFunction) {
         try {
-            // Extract all query parameters including new ones
             const entity_type = getQueryEnum(req, 'entity_type', [
                 'circuit', 'bench', 'partHeard', 'serviceWeek', 
                 'otherPayment', 'ticket', 'medicalClaim', 
@@ -198,8 +248,6 @@ export class HelpdeskDocumentsController {
             const judge_name = getQueryParam(req, 'judge_name');
             const date_from = getQueryParam(req, 'date_from');
             const date_to = getQueryParam(req, 'date_to');
-
-            // ─── NEW FILTERS ──────────────────────────────────────────────────────
             const rank = getQueryParam(req, 'rank');
             const reporting_date = getQueryParam(req, 'reporting_date');
 
@@ -218,8 +266,8 @@ export class HelpdeskDocumentsController {
                 judge_name,
                 date_from,
                 date_to,
-                rank,               // new
-                reporting_date,     // new
+                rank,
+                reporting_date,
             });
 
             return sendSuccess(res, docs, `Found ${docs.length} documents.`);
@@ -230,7 +278,6 @@ export class HelpdeskDocumentsController {
 
     // ─── Get Document by ID ───────────────────────────────────────────────────
 
-    // GET /api/helpdesk/documents/:id
     static async getById(req: Request, res: Response, next: NextFunction) {
         try {
             const id = getParam(req, 'id');
@@ -248,7 +295,6 @@ export class HelpdeskDocumentsController {
 
     // ─── Get Documents by Entity ─────────────────────────────────────────────
 
-    // GET /api/helpdesk/documents/entity/:entityType/:entityId
     static async getByEntity(req: Request, res: Response, next: NextFunction) {
         try {
             const entityType = getParam(req, 'entityType') as any;
@@ -271,7 +317,6 @@ export class HelpdeskDocumentsController {
 
     // ─── Document Statistics ─────────────────────────────────────────────────
 
-    // GET /api/helpdesk/documents/stats
     static async getStats(req: Request, res: Response, next: NextFunction) {
         try {
             const entityType = getQueryParam(req, 'entityType') as any;
@@ -292,7 +337,6 @@ export class HelpdeskDocumentsController {
 
     // ─── Document Summary ─────────────────────────────────────────────────────
 
-    // GET /api/helpdesk/documents/summary
     static async getSummary(req: Request, res: Response, next: NextFunction) {
         try {
             const entityType = getQueryParam(req, 'entityType') as any;
@@ -309,7 +353,6 @@ export class HelpdeskDocumentsController {
 
     // ─── Submit for Approval ─────────────────────────────────────────────────
 
-    // POST /api/helpdesk/documents/:id/submit
     static async submitForApproval(req: Request, res: Response, next: NextFunction) {
         try {
             const id = getParam(req, 'id');
@@ -326,12 +369,11 @@ export class HelpdeskDocumentsController {
 
     // ─── Approve Document ────────────────────────────────────────────────────
 
-    // POST /api/helpdesk/documents/:id/approve
     static async approve(req: Request, res: Response, next: NextFunction) {
         try {
             const id = getParam(req, 'id');
             const userId = (req as any).user?.id as string;
-            const { comments, approved_by, approved_by_name } = req.body as ApproveDocumentBody;
+            const { comments, approved_by_name } = req.body as ApproveDocumentBody;
 
             const doc = await HelpdeskDocumentsService.approveDocument(
                 id, 
@@ -348,7 +390,6 @@ export class HelpdeskDocumentsController {
 
     // ─── Reject Document ─────────────────────────────────────────────────────
 
-    // POST /api/helpdesk/documents/:id/reject
     static async reject(req: Request, res: Response, next: NextFunction) {
         try {
             const id = getParam(req, 'id');
@@ -369,7 +410,6 @@ export class HelpdeskDocumentsController {
 
     // ─── Return Document ─────────────────────────────────────────────────────
 
-    // POST /api/helpdesk/documents/:id/return
     static async returnDocument(req: Request, res: Response, next: NextFunction) {
         try {
             const id = getParam(req, 'id');
@@ -386,7 +426,6 @@ export class HelpdeskDocumentsController {
 
     // ─── Update E-Stamp ──────────────────────────────────────────────────────
 
-    // POST /api/helpdesk/documents/:id/estampt
     static async updateEStamp(req: Request, res: Response, next: NextFunction) {
         try {
             const id = getParam(req, 'id');
@@ -407,7 +446,6 @@ export class HelpdeskDocumentsController {
 
     // ─── Add Comment ─────────────────────────────────────────────────────────
 
-    // POST /api/helpdesk/documents/:id/comments
     static async addComment(req: Request, res: Response, next: NextFunction) {
         try {
             const id = getParam(req, 'id');
@@ -433,7 +471,6 @@ export class HelpdeskDocumentsController {
 
     // ─── Delete Comment ──────────────────────────────────────────────────────
 
-    // DELETE /api/helpdesk/documents/comments/:commentId
     static async deleteComment(req: Request, res: Response, next: NextFunction) {
         try {
             const commentId = getParam(req, 'commentId');
@@ -449,7 +486,6 @@ export class HelpdeskDocumentsController {
 
     // ─── Link Document to Entity ─────────────────────────────────────────────
 
-    // PATCH /api/helpdesk/documents/:id/link
     static async link(req: Request, res: Response, next: NextFunction) {
         try {
             const id = getParam(req, 'id');
@@ -458,8 +494,8 @@ export class HelpdeskDocumentsController {
                 entity_id, 
                 request_type, 
                 judge_name,
-                rank,               // new
-                reporting_date,     // new
+                rank,
+                reporting_date,
             } = req.body as LinkDocumentBody;
 
             if (!entity_type) {
@@ -475,8 +511,8 @@ export class HelpdeskDocumentsController {
                 entity_id,
                 request_type,
                 judge_name,
-                rank,               // new
-                reporting_date      // new
+                rank,
+                reporting_date
             );
 
             return sendSuccess(res, doc, 'Document linked successfully.');
@@ -487,7 +523,6 @@ export class HelpdeskDocumentsController {
 
     // ─── Bulk Link Documents ─────────────────────────────────────────────────
 
-    // POST /api/helpdesk/documents/bulk/link
     static async bulkLink(req: Request, res: Response, next: NextFunction) {
         try {
             const { 
@@ -496,8 +531,8 @@ export class HelpdeskDocumentsController {
                 entity_id, 
                 request_type, 
                 judge_name,
-                rank,               // new
-                reporting_date,     // new
+                rank,
+                reporting_date,
             } = req.body as BulkLinkDocumentsBody;
 
             if (!document_ids || document_ids.length === 0) {
@@ -516,8 +551,8 @@ export class HelpdeskDocumentsController {
                 entity_id,
                 request_type,
                 judge_name,
-                rank,               // new
-                reporting_date      // new
+                rank,
+                reporting_date
             );
 
             return sendSuccess(res, result, `${result.success.length} documents linked successfully.`);
@@ -528,7 +563,6 @@ export class HelpdeskDocumentsController {
 
     // ─── Bulk Update Status ──────────────────────────────────────────────────
 
-    // POST /api/helpdesk/documents/bulk/status
     static async bulkUpdateStatus(req: Request, res: Response, next: NextFunction) {
         try {
             const { document_ids, status, comments } = req.body as BulkUpdateStatusBody;
@@ -554,12 +588,70 @@ export class HelpdeskDocumentsController {
 
     // ─── Delete Document ─────────────────────────────────────────────────────
 
-    // DELETE /api/helpdesk/documents/:id
     static async remove(req: Request, res: Response, next: NextFunction) {
         try {
             const id = getParam(req, 'id');
+            const userId = (req as any).user?.id;
+            const userRole = (req as any).user?.role;
+
+            // First check if document exists
+            const doc = await HelpdeskDocumentsService.findById(id);
+            if (!doc) {
+                throw new AppError(404, 'Document not found');
+            }
+
+            // Check if document is already deleted
+            if (!doc.is_active) {
+                throw new AppError(400, 'Document is already deleted');
+            }
+
+            // Permission check - only uploader, dept_head, or super_admin can delete
+            const isOwner = doc.uploaded_by === userId;
+            const isDeptHead = userRole === 'dept_head';
+            const isSuperAdmin = userRole === 'super_admin';
+
+            if (!isOwner && !isDeptHead && !isSuperAdmin) {
+                throw new AppError(403, 'You do not have permission to delete this document');
+            }
+
+            // Prevent deleting approved documents unless super_admin
+            if (doc.status === 'approved' && !isSuperAdmin) {
+                throw new AppError(403, 'Only super admins can delete approved documents');
+            }
+
+            // Prevent deleting pending approval documents unless super_admin or dept_head
+            if (doc.status === 'pending_approval' && !isSuperAdmin && !isDeptHead) {
+                throw new AppError(403, 'Only super admins or department heads can delete pending documents');
+            }
+
             await HelpdeskDocumentsService.delete(id);
+
             return sendSuccess(res, null, 'Document deleted successfully.');
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    // ─── Hard Delete (Admin Only) ───────────────────────────────────────────
+
+    static async hardRemove(req: Request, res: Response, next: NextFunction) {
+        try {
+            const id = getParam(req, 'id');
+            const userRole = (req as any).user?.role;
+
+            // Only super_admin can hard delete
+            if (userRole !== 'super_admin') {
+                throw new AppError(403, 'Only super admins can permanently delete documents');
+            }
+
+            const doc = await HelpdeskDocumentsService.findById(id);
+            if (!doc) {
+                throw new AppError(404, 'Document not found');
+            }
+
+            await HelpdeskDocumentsService.hardDelete(id);
+
+            return sendSuccess(res, null, 'Document permanently deleted.');
         } catch (err) {
             next(err);
         }

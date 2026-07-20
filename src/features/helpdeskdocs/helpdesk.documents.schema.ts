@@ -20,7 +20,6 @@ const documentEntityEnum = z.enum([
 
 const documentStatusEnum = z.enum(['draft', 'pending_approval', 'approved', 'rejected', 'returned']);
 
-// New enum for request types (Driver, Bodyguard, etc.)
 const requestTypeEnum = z.enum([
     'Driver',
     'Bodyguard',
@@ -34,20 +33,23 @@ const requestTypeEnum = z.enum([
 const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format').optional();
 
 // ─── POST /api/helpdesk/documents/upload ──────────────────────────────────────
+
+/**
+ * This schema handles multipart/form-data uploads where all fields come as strings.
+ * Since multer parses form-data fields as strings, we need to handle the conversion.
+ */
 export const uploadHelpdeskDocumentSchema = z.object({
     body: z.object({
-        ref: z.string().min(1).max(100),
-        subject: z.string().min(1).max(200),
-        entity_type: documentEntityEnum,
-        entity_id: z.string().uuid().optional(),
-        format: documentFormatEnum,
-        status: documentStatusEnum.default('draft'),
-        // Additional fields for general requests
-        request_type: requestTypeEnum.optional(),
-        judge_name: z.string().max(100).optional(),
-        // ─── NEW FIELDS ──────────────────────────────────────────────────────────
-        rank: z.string().max(50).optional(),
-        reporting_date: dateStringSchema.optional(),
+        ref: z.string().min(1, 'Reference is required').max(100),
+        subject: z.string().min(1, 'Subject is required').max(200),
+        entity_type: z.string().pipe(documentEntityEnum),
+        entity_id: z.string().uuid().optional().nullable(),
+        format: z.string().pipe(documentFormatEnum),
+        status: z.string().default('draft').pipe(documentStatusEnum).optional(),
+        request_type: z.string().pipe(requestTypeEnum).optional().nullable(),
+        judge_name: z.string().max(100).optional().nullable(),
+        rank: z.string().max(50).optional().nullable(),
+        reporting_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format').optional().nullable(),
     }),
 });
 
@@ -64,12 +66,10 @@ export const listHelpdeskDocumentsSchema = z.object({
         uploaded_by: z.string().uuid().optional(),
         pending_my_approval: z.string().transform((val) => val === 'true').optional(),
         unlinked: z.string().transform((val) => val === 'true').optional(),
-        // New filters for general requests
         request_type: requestTypeEnum.optional(),
         judge_name: z.string().optional(),
         date_from: dateStringSchema.optional(),
         date_to: dateStringSchema.optional(),
-        // ─── NEW FILTERS ──────────────────────────────────────────────────────────
         rank: z.string().optional(),
         reporting_date: dateStringSchema.optional(),
     }).strict(),
@@ -91,7 +91,6 @@ export const updateDocumentStatusSchema = z.object({
         status: documentStatusEnum,
         comments: z.string().max(500).optional(),
         rejection_reason: z.string().max(500).optional(),
-        // Additional fields for tracking
         approved_by: z.string().uuid().optional(),
         approved_by_name: z.string().max(100).optional(),
     }),
@@ -167,6 +166,13 @@ export const documentIdSchema = z.object({
     }),
 });
 
+// ─── DELETE /api/helpdesk/documents/comments/:commentId ──────────────────────
+export const deleteCommentSchema = z.object({
+    params: z.object({
+        commentId: z.string().uuid('Comment ID must be a valid UUID'),
+    }),
+});
+
 // ─── PATCH /api/helpdesk/documents/:id/link ───────────────────────────────────
 export const linkDocumentSchema = z.object({
     params: z.object({
@@ -175,10 +181,8 @@ export const linkDocumentSchema = z.object({
     body: z.object({
         entity_type: documentEntityEnum,
         entity_id: z.string().uuid('entity_id must be a valid UUID'),
-        // Additional fields for general requests
         request_type: requestTypeEnum.optional(),
         judge_name: z.string().max(100).optional(),
-        // ─── NEW FIELDS ──────────────────────────────────────────────────────────
         rank: z.string().max(50).optional(),
         reporting_date: dateStringSchema.optional(),
     }),
@@ -240,7 +244,6 @@ export const bulkLinkDocumentsSchema = z.object({
         entity_id: z.string().uuid('Entity ID must be a valid UUID'),
         request_type: requestTypeEnum.optional(),
         judge_name: z.string().max(100).optional(),
-        // ─── NEW FIELDS ──────────────────────────────────────────────────────────
         rank: z.string().max(50).optional(),
         reporting_date: dateStringSchema.optional(),
     }),
@@ -268,7 +271,6 @@ export const batchUploadSchema = z.object({
                 status: documentStatusEnum.default('draft'),
                 request_type: requestTypeEnum.optional(),
                 judge_name: z.string().max(100).optional(),
-                // ─── NEW FIELDS ──────────────────────────────────────────────────────────
                 rank: z.string().max(50).optional(),
                 reporting_date: dateStringSchema.optional(),
             })
@@ -297,6 +299,7 @@ export type UpdateEStampBody = z.infer<typeof updateEStampSchema>['body'];
 export type BulkLinkDocumentsBody = z.infer<typeof bulkLinkDocumentsSchema>['body'];
 export type BulkUpdateStatusBody = z.infer<typeof bulkUpdateStatusSchema>['body'];
 export type BatchUploadBody = z.infer<typeof batchUploadSchema>['body'];
+export type DeleteCommentParams = z.infer<typeof deleteCommentSchema>['params'];
 
 // Export enums for use in routes
 export {

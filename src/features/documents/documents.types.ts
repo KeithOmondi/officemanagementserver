@@ -9,16 +9,53 @@ export type DocumentType =
   | 'memo'
   | 'letter';
 
+/**
+ * Document status lifecycle:
+ * 
+ * ┌────────────┐      ┌───────────────┐      ┌──────────────┐      ┌──────────────┐
+ * │   draft    │ ──▶ │  uploaded /   │ ──▶ │ dept_assigned│ ──▶ │ user_assigned│
+ * │            │     │ pending_review│      │ (SuperAdmin) │     │ (DeptHead)   │
+ * └────────────┘     └───────────────┘      └──────────────┘     └──────────────┘
+ *                                                                        │
+ *                                                                        ▼
+ *                                                              ┌──────────────┐
+ *                                                              │ in_progress  │
+ *                                                              │ (user works) │
+ *                                                              └──────────────┘
+ *                                                                        │
+ *                                                                        ▼
+ *                                                              ┌──────────────┐
+ *                                                              │  completed   │
+ *                                                              └──────────────┘
+ *                                                                        │
+ *                                                          ┌─────────────┴─────────────┐
+ *                                                          ▼                           ▼
+ *                                                   ┌─────────────┐           ┌──────────────┐
+ *                                                   │ ready_to_release │         │    filed    │
+ *                                                   └─────────────┘           └──────────────┘
+ *                                                          │
+ *                                                          ▼
+ *                                                   ┌─────────────┐
+ *                                                   │  released   │
+ *                                                   └─────────────┘
+ */
 export type DocumentStatus =
   | 'draft'
   | 'uploaded'
   | 'pending_review'
-  | 'marked'
+  | 'dept_assigned'   // Assigned to a department (by Super Admin)
+  | 'user_assigned'   // Assigned to a specific user (by Department Head)
   | 'in_progress'
   | 'completed'
   | 'filed'
   | 'ready_to_release'
   | 'released';
+
+// Legacy alias for backward compatibility – 'marked' is now 'dept_assigned'
+// but we keep it so old clients still work.
+export type LegacyDocumentStatus = 'marked';
+// You can keep 'marked' in the union temporarily:
+// export type DocumentStatus = ... | 'marked';
 
 export type DocumentCategory =
   | 'judgments' | 'rulings' | 'correspondence' | 'orders' | 'drafts' | 'general';
@@ -31,7 +68,6 @@ export type RefType = 'for_signature' | 'for_attention' | 'for_information' | 'd
 // NOTE: Signature placement is now auto‑detected by scanning the document
 // for the signatory block (name + title). Custom absolute positioning can
 // still be applied via signature_position_x/y/width/height fields.
-// The legacy 'top'/'bottom'/'left'/'right' placement is no longer supported.
 
 // ── Document Mark ──────────────────────────────────────────────────────────
 
@@ -135,8 +171,6 @@ export interface Document {
   signature_title: string | null;
 
   // ── Custom signature position (draggable) ──────────────────────────────
-  // When these are set, the signature will be placed at the exact
-  // coordinates; otherwise, it is auto‑detected.
   signature_position_x: number | null;
   signature_position_y: number | null;
   signature_position_width: number | null;
@@ -157,10 +191,33 @@ export interface DocumentPaginationResponse {
   totalPages: number;
 }
 
+// ── Document Flow Entry ────────────────────────────────────────────────────
+// Expanded action types for better audit trail
+
+export type DocumentFlowAction =
+  | 'created'
+  | 'uploaded'
+  | 'updated'
+  | 'assigned_to_dept'      // Super Admin assigns to department
+  | 'assigned_to_user'      // Dept Head assigns to a specific user
+  | 'acknowledged'          // User acknowledges assignment
+  | 'started'               // User starts working (optional)
+  | 'completed'             // User finishes
+  | 'filed'
+  | 'released'
+  | 'signed'
+  | 'sent'
+  | 'returned'
+  | 'responded'
+  | 'deleted'
+  | 'annotated'
+  | 'redirected_to_folder'
+  | 'removed_from_folder';
+
 export interface DocumentFlowEntry {
   id: string;
   document_id: string;
-  action: string;
+  action: DocumentFlowAction;  // now strongly typed
   from_user: string | null;
   from_user_name: string | null;
   to_user: string | null;

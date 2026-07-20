@@ -1,5 +1,3 @@
-// src/features/documents/documents.service.ts
-
 import { pool } from '../../config/db';
 import { AppError } from '../../utils/response';
 import crypto from 'crypto';
@@ -560,10 +558,34 @@ export class DocumentService {
       }
     }
 
+    // Determine the new status based on the marker's role
+    const { rows: userRows } = await pool.query(
+      `SELECT role FROM users WHERE id = $1 AND is_active = true`,
+      [markedBy]
+    );
+    if (!userRows.length) throw new AppError(403, 'User not found');
+    const role = userRows[0].role;
+
+    let newStatus: string;
+    if (role === 'super_admin') {
+      newStatus = 'dept_assigned';
+    } else if (role === 'dept_head') {
+      newStatus = 'user_assigned';
+    } else {
+      newStatus = 'marked'; // fallback for backward compatibility
+    }
+
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
+      // Deactivate any existing active mark for this document
+      await client.query(
+        `UPDATE document_marks SET is_active = false WHERE document_id = $1 AND is_active = true`,
+        [documentId]
+      );
+
+      // Insert the new mark
       await client.query(
         `INSERT INTO document_marks
            (document_id, marked_by, marked_to_dept, assigned_to, instructions, priority, bring_up_date)
@@ -578,14 +600,24 @@ export class DocumentService {
         ]
       );
 
+      // Update the document status and assignment fields
       await client.query(
         `UPDATE documents
-         SET status = 'marked', 
-             department_id = $1, 
-             assigned_to = $2,
+         SET status = $1, 
+             department_id = $2, 
+             assigned_to = $3,
              updated_at = NOW()
-         WHERE id = $3`,
-        [input.department_id, input.assigned_to ?? null, documentId]
+         WHERE id = $4`,
+        [newStatus, input.department_id, input.assigned_to ?? null, documentId]
+      );
+
+      await this.logFlow(
+        client,
+        documentId,
+        role === 'super_admin' ? 'assigned_to_dept' : 'assigned_to_user',
+        markedBy,
+        input.assigned_to ?? null,
+        input.instructions ?? undefined
       );
 
       await client.query('COMMIT');
@@ -624,6 +656,7 @@ export class DocumentService {
         `UPDATE documents SET status = 'in_progress', updated_at = NOW() WHERE id = $1`,
         [documentId]
       );
+      await this.logFlow(client, documentId, 'acknowledged', userId, null);
       await client.query('COMMIT');
       return (await this.findById(documentId))!;
     } catch (err) {
@@ -663,6 +696,7 @@ export class DocumentService {
         `UPDATE documents SET status = 'completed', updated_at = NOW() WHERE id = $1`,
         [documentId]
       );
+      await this.logFlow(client, documentId, 'completed', userId, null);
       await client.query('COMMIT');
       return (await this.findById(documentId))!;
     } catch (err) {
@@ -890,119 +924,82 @@ export class DocumentService {
 
   // ─── Sign with OTP verification ──────────────────────────────────────────────
 
-static async sign(id: string, signedBy: string, otp: string): Promise<Document> {
-  const doc = await this.findById(id);
-  if (!doc) throw new AppError(404, 'Document not found');
-  if (doc.is_signed) throw new AppError(409, 'Document is already signed');
+  static async sign(id: string, signedBy: string, otp: string): Promise<Document> {
+    const doc = await this.findById(id);
+    if (!doc) throw new AppError(404, 'Document not found');
+    if (doc.is_signed) throw new AppError(409, 'Document is already signed');
 
-  // ── OTP verification ──────────────────────────────────────────────────────
-  const { rows: otpRows } = await pool.query(
-    `SELECT sign_otp, sign_otp_expires_at FROM documents WHERE id = $1`,
-    [id]
-  );
-  if (!otpRows.length) throw new AppError(404, 'Document not found');
-  const { sign_otp: hashedOtp, sign_otp_expires_at: expiresAt } = otpRows[0];
-  if (!hashedOtp) throw new AppError(400, 'No OTP requested for this document');
-  if (new Date() > new Date(expiresAt)) {
-    throw new AppError(400, 'OTP has expired. Please request a new one.');
-  }
-
-  const crypto = await import('crypto');
-  const hash = crypto.createHash('sha256').update(otp).digest('hex');
-  if (hash !== hashedOtp) {
-    throw new AppError(400, 'Invalid OTP');
-  }
-
-  // ── Fetch signer (super admin) ──────────────────────────────────────────
-  const { rows: userRows } = await pool.query(
-    `SELECT full_name, signature_url FROM users 
-     WHERE id = $1 AND role = 'super_admin' AND is_active = true`,
-    [signedBy]
-  );
-  const signer = userRows[0];
-  if (!signer?.signature_url) {
-    throw new AppError(400, 'No super admin signature found. Please upload a signature first.');
-  }
-
-  // ── Name used to LOCATE the signatory block in the document text ────────
-  // This must be the name PRINTED on the letter (doc.signature_name, e.g.
-  // "HON. CLARA OTIENO-OMONDI"), NOT the name of the super admin performing
-  // the OTP-verified signing action (signer.full_name, e.g. "Keith Dennis").
-  // Those can legitimately differ — the account executing the signature
-  // isn't necessarily the person the letter is signed on behalf of. Passing
-  // the wrong name here caused findSignatureBlockPosition/embedSignatureIntoHTML
-  // to search for the signer's own name, fail to find it in the body text,
-  // and fall through to a fuzzy/last-resort placement — which is what was
-  // landing the signature image mid-sentence instead of above the printed
-  // name block.
-  const signatoryName = doc.signature_name || signer.full_name;
-
-  // ── Custom position (if any) ─────────────────────────────────────────────
- // ── Custom position (if any) ─────────────────────────────────────────────
-// Templated memo/letter documents always use anchor-based auto-detection;
-// any signature_position_x/y on the row for these types is stale/irrelevant
-// (e.g. left over from before this distinction existed) and must be ignored.
-const isTemplatedDocument = doc.type === 'memo' || doc.type === 'letter';
-
-const position = (!isTemplatedDocument && doc.signature_position_x !== null && doc.signature_position_x !== undefined)
-  ? {
-      x: doc.signature_position_x,
-      y: doc.signature_position_y || 0,
-      width: doc.signature_position_width || 200,
-      height: doc.signature_position_height || 80,
+    // ── OTP verification ──────────────────────────────────────────────────────
+    const { rows: otpRows } = await pool.query(
+      `SELECT sign_otp, sign_otp_expires_at FROM documents WHERE id = $1`,
+      [id]
+    );
+    if (!otpRows.length) throw new AppError(404, 'Document not found');
+    const { sign_otp: hashedOtp, sign_otp_expires_at: expiresAt } = otpRows[0];
+    if (!hashedOtp) throw new AppError(400, 'No OTP requested for this document');
+    if (new Date() > new Date(expiresAt)) {
+      throw new AppError(400, 'OTP has expired. Please request a new one.');
     }
-  : null;
 
-  // ── HTML document (no file) ─────────────────────────────────────────────
-  if (doc.body && !doc.file_url) {
-    // Embed signature above the signatory block (auto-detected)
-    const signedBody = embedSignatureIntoHTML(
-      doc.body,
-      signer.signature_url,
-      signatoryName
+    const crypto = await import('crypto');
+    const hash = crypto.createHash('sha256').update(otp).digest('hex');
+    if (hash !== hashedOtp) {
+      throw new AppError(400, 'Invalid OTP');
+    }
+
+    // ── Fetch signer (super admin) ──────────────────────────────────────────
+    const { rows: userRows } = await pool.query(
+      `SELECT full_name, signature_url FROM users 
+       WHERE id = $1 AND role = 'super_admin' AND is_active = true`,
+      [signedBy]
     );
+    const signer = userRows[0];
+    if (!signer?.signature_url) {
+      throw new AppError(400, 'No super admin signature found. Please upload a signature first.');
+    }
 
-    await pool.query(
-      `UPDATE documents
-       SET body = $1, 
-           is_signed = true, 
-           signed_by = $2, 
-           signed_at = NOW(), 
-           status = 'ready_to_release',
-           sign_otp = NULL,
-           sign_otp_expires_at = NULL,
-           updated_at = NOW()
-       WHERE id = $3`,
-      [signedBody, signedBy, id]
-    );
+    // ── Name used to LOCATE the signatory block in the document text ────────
+    // This must be the name PRINTED on the letter (doc.signature_name, e.g.
+    // "HON. CLARA OTIENO-OMONDI"), NOT the name of the super admin performing
+    // the OTP-verified signing action (signer.full_name, e.g. "Keith Dennis").
+    const signatoryName = doc.signature_name || signer.full_name;
 
-    await this.logFlow(
-      pool,
-      id,
-      'signed',
-      signedBy,
-      null,
-      'Document signed. Ready for release.'
-    );
+    // ── Custom position (if any) ─────────────────────────────────────────────
+    // Templated memo/letter documents always use anchor-based auto-detection;
+    // any signature_position_x/y on the row for these types is stale/irrelevant
+    // and must be ignored.
+    const isTemplatedDocument = doc.type === 'memo' || doc.type === 'letter';
 
-    return (await this.findById(id))!;
-  }
+    const position = (!isTemplatedDocument && doc.signature_position_x !== null && doc.signature_position_x !== undefined)
+      ? {
+          x: doc.signature_position_x,
+          y: doc.signature_position_y || 0,
+          width: doc.signature_position_width || 200,
+          height: doc.signature_position_height || 80,
+        }
+      : null;
 
-  // ── File-based document ──────────────────────────────────────────────────
-  if (doc.file_url) {
-    if (doc.mime_type !== 'application/pdf') {
-      // Non-PDF – just mark signed
+    // ── HTML document (no file) ─────────────────────────────────────────────
+    if (doc.body && !doc.file_url) {
+      // Embed signature above the signatory block (auto-detected)
+      const signedBody = embedSignatureIntoHTML(
+        doc.body,
+        signer.signature_url,
+        signatoryName
+      );
+
       await pool.query(
         `UPDATE documents
-         SET is_signed = true, 
-             signed_by = $1, 
+         SET body = $1, 
+             is_signed = true, 
+             signed_by = $2, 
              signed_at = NOW(), 
              status = 'ready_to_release',
              sign_otp = NULL,
              sign_otp_expires_at = NULL,
              updated_at = NOW()
-         WHERE id = $2`,
-        [signedBy, id]
+         WHERE id = $3`,
+        [signedBody, signedBy, id]
       );
 
       await this.logFlow(
@@ -1017,51 +1014,106 @@ const position = (!isTemplatedDocument && doc.signature_position_x !== null && d
       return (await this.findById(id))!;
     }
 
-    // ── PDF ──────────────────────────────────────────────────────────────────
-    const response = await axios.get<ArrayBuffer>(doc.file_url, { responseType: 'arraybuffer' });
-    const originalPdf = Buffer.from(response.data);
+    // ── File-based document ──────────────────────────────────────────────────
+    if (doc.file_url) {
+      if (doc.mime_type !== 'application/pdf') {
+        // Non-PDF – just mark signed
+        await pool.query(
+          `UPDATE documents
+           SET is_signed = true, 
+               signed_by = $1, 
+               signed_at = NOW(), 
+               status = 'ready_to_release',
+               sign_otp = NULL,
+               sign_otp_expires_at = NULL,
+               updated_at = NOW()
+           WHERE id = $2`,
+          [signedBy, id]
+        );
 
-    // Embed signature above the detected signatory block (or use custom position if provided)
-    const signedPdf = await embedSignatureIntoPDF(
-      originalPdf,
-      signer.signature_url,
-      position,                 // may be null → auto-detect
-      signatoryName
-    );
+        await this.logFlow(
+          pool,
+          id,
+          'signed',
+          signedBy,
+          null,
+          'Document signed. Ready for release.'
+        );
 
-    // Delete old file
-    if (doc.file_public_id) {
-      await deleteFromCloudinary(doc.file_public_id).catch(console.error);
+        return (await this.findById(id))!;
+      }
+
+      // ── PDF ──────────────────────────────────────────────────────────────────
+      const response = await axios.get<ArrayBuffer>(doc.file_url, { responseType: 'arraybuffer' });
+      const originalPdf = Buffer.from(response.data);
+
+      // Embed signature above the detected signatory block (or use custom position if provided)
+      const signedPdf = await embedSignatureIntoPDF(
+        originalPdf,
+        signer.signature_url,
+        position,
+        signatoryName
+      );
+
+      // Delete old file
+      if (doc.file_public_id) {
+        await deleteFromCloudinary(doc.file_public_id).catch(console.error);
+      }
+
+      const multerFile: Express.Multer.File = {
+        buffer: signedPdf,
+        mimetype: 'application/pdf',
+        originalname: doc.original_name ?? 'signed-document.pdf',
+        size: signedPdf.length,
+        fieldname: 'file',
+        encoding: '7bit',
+        stream: null as any,
+        destination: '',
+        filename: '',
+        path: '',
+      };
+      const uploaded = await uploadToCloudinary(multerFile, 'registrar/documents');
+
+      await pool.query(
+        `UPDATE documents
+         SET file_url = $1, 
+             file_public_id = $2, 
+             file_size_bytes = $3,
+             is_signed = true, 
+             signed_by = $4, 
+             signed_at = NOW(), 
+             status = 'ready_to_release',
+             sign_otp = NULL,
+             sign_otp_expires_at = NULL,
+             updated_at = NOW()
+         WHERE id = $5`,
+        [uploaded.secure_url, uploaded.public_id, signedPdf.length, signedBy, id]
+      );
+
+      await this.logFlow(
+        pool,
+        id,
+        'signed',
+        signedBy,
+        null,
+        'Document signed. Ready for release.'
+      );
+
+      return (await this.findById(id))!;
     }
 
-    const multerFile: Express.Multer.File = {
-      buffer: signedPdf,
-      mimetype: 'application/pdf',
-      originalname: doc.original_name ?? 'signed-document.pdf',
-      size: signedPdf.length,
-      fieldname: 'file',
-      encoding: '7bit',
-      stream: null as any,
-      destination: '',
-      filename: '',
-      path: '',
-    };
-    const uploaded = await uploadToCloudinary(multerFile, 'registrar/documents');
-
+    // ── Fallback (should not happen) ─────────────────────────────────────────
     await pool.query(
       `UPDATE documents
-       SET file_url = $1, 
-           file_public_id = $2, 
-           file_size_bytes = $3,
-           is_signed = true, 
-           signed_by = $4, 
+       SET is_signed = true, 
+           signed_by = $1, 
            signed_at = NOW(), 
            status = 'ready_to_release',
            sign_otp = NULL,
            sign_otp_expires_at = NULL,
            updated_at = NOW()
-       WHERE id = $5`,
-      [uploaded.secure_url, uploaded.public_id, signedPdf.length, signedBy, id]
+       WHERE id = $2`,
+      [signedBy, id]
     );
 
     await this.logFlow(
@@ -1075,32 +1127,6 @@ const position = (!isTemplatedDocument && doc.signature_position_x !== null && d
 
     return (await this.findById(id))!;
   }
-
-  // ── Fallback (should not happen) ─────────────────────────────────────────
-  await pool.query(
-    `UPDATE documents
-     SET is_signed = true, 
-         signed_by = $1, 
-         signed_at = NOW(), 
-         status = 'ready_to_release',
-         sign_otp = NULL,
-         sign_otp_expires_at = NULL,
-         updated_at = NOW()
-     WHERE id = $2`,
-    [signedBy, id]
-  );
-
-  await this.logFlow(
-    pool,
-    id,
-    'signed',
-    signedBy,
-    null,
-    'Document signed. Ready for release.'
-  );
-
-  return (await this.findById(id))!;
-}
 
   // ─── Release Document to Admin Side ──────────────────────────────────────────
 
@@ -1517,7 +1543,6 @@ const position = (!isTemplatedDocument && doc.signature_position_x !== null && d
       body: input.body,
       signatureName,
       signatureTitle,
-      // signaturePlacement intentionally omitted – auto-detection will be applied later if needed
       logoUrl: process.env.MEMO_LOGO_URL || undefined,
       footerEmblemUrl: process.env.MEMO_FOOTER_EMBLEM_URL || undefined,
     });
@@ -1558,7 +1583,6 @@ const position = (!isTemplatedDocument && doc.signature_position_x !== null && d
       body: input.body,
       sender: signatureName,
       senderTitle: signatureTitle,
-      // signaturePlacement omitted – auto-detection will be applied later if needed
       cc: input.cc || '',
       enclosures: input.enclosures || '',
       logoUrl: process.env.LETTER_LOGO_URL || undefined,
@@ -1611,7 +1635,6 @@ const position = (!isTemplatedDocument && doc.signature_position_x !== null && d
         body: doc.body || '',
         signatureName: doc.signature_name || '',
         signatureTitle: doc.signature_title || 'Registrar, High Court',
-        // signaturePlacement omitted – auto-detection will be applied later
         logoUrl: process.env.MEMO_LOGO_URL || undefined,
         footerEmblemUrl: process.env.MEMO_FOOTER_EMBLEM_URL || undefined,
       });
@@ -1625,7 +1648,6 @@ const position = (!isTemplatedDocument && doc.signature_position_x !== null && d
         body: doc.body || '',
         sender: doc.signature_name || '',
         senderTitle: doc.signature_title || 'Registrar, High Court',
-        // signaturePlacement omitted – auto-detection will be applied later
         cc: doc.cc || '',
         enclosures: doc.enclosures || '',
         logoUrl: process.env.LETTER_LOGO_URL || undefined,

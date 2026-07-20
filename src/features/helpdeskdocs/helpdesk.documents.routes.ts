@@ -7,7 +7,6 @@ import {
     uploadHelpdeskDocumentSchema,
     listHelpdeskDocumentsSchema,
     getDocumentByIdSchema,
-    updateDocumentStatusSchema,
     submitDocumentForApprovalSchema,
     approveDocumentSchema,
     rejectDocumentSchema,
@@ -15,6 +14,12 @@ import {
     addCommentSchema,
     documentIdSchema,
     linkDocumentSchema,
+    bulkLinkDocumentsSchema,
+    bulkUpdateStatusSchema,
+    batchUploadSchema,
+    updateEStampSchema,
+    deleteCommentSchema,
+    getDocumentsByEntitySchema,
 } from './helpdesk.documents.schema';
 import { protect, requireRole } from '../../middleware/auth.middleware';
 import { validate } from '../../middleware/validate.middleware';
@@ -24,7 +29,10 @@ const router = Router();
 // All routes require authentication
 router.use(protect);
 
-// ── POST /api/helpdesk/documents/upload ──────────────────────────────────────
+// ── Upload Routes ─────────────────────────────────────────────────────────────
+
+// ⚠️ IMPORTANT: For file uploads, multer must come BEFORE validation
+// because validation needs the parsed body from multer
 router.post(
     '/upload',
     upload.single('file'),
@@ -32,27 +40,29 @@ router.post(
     HelpdeskDocumentsController.upload
 );
 
-router.patch(
-    '/:id/link',
-    validate(linkDocumentSchema),
-    HelpdeskDocumentsController.link
+router.post(
+    '/upload/batch',
+    upload.array('files', 20),
+    validate(batchUploadSchema),
+    HelpdeskDocumentsController.batchUpload
 );
 
-// ── GET /api/helpdesk/documents ──────────────────────────────────────────────
+// ── Document CRUD ─────────────────────────────────────────────────────────────
+
 router.get(
     '/',
     validate(listHelpdeskDocumentsSchema),
     HelpdeskDocumentsController.list
 );
 
-// ── GET /api/helpdesk/documents/:id ──────────────────────────────────────────
 router.get(
     '/:id',
     validate(getDocumentByIdSchema),
     HelpdeskDocumentsController.getById
 );
 
-// ── POST /api/helpdesk/documents/:id/submit ─────────────────────────────────
+// ── Document Workflow ─────────────────────────────────────────────────────────
+
 router.post(
     '/:id/submit',
     requireRole('dept_head'),
@@ -60,8 +70,6 @@ router.post(
     HelpdeskDocumentsController.submitForApproval
 );
 
-// ── POST /api/helpdesk/documents/:id/approve ─────────────────────────────────
-// Only Super Admins can approve
 router.post(
     '/:id/approve',
     requireRole('super_admin'),
@@ -69,8 +77,6 @@ router.post(
     HelpdeskDocumentsController.approve
 );
 
-// ── POST /api/helpdesk/documents/:id/reject ──────────────────────────────────
-// Only Super Admins can reject
 router.post(
     '/:id/reject',
     requireRole('super_admin'),
@@ -78,8 +84,6 @@ router.post(
     HelpdeskDocumentsController.reject
 );
 
-// ── POST /api/helpdesk/documents/:id/return ──────────────────────────────────
-// Only Super Admins can return
 router.post(
     '/:id/return',
     requireRole('super_admin'),
@@ -87,19 +91,88 @@ router.post(
     HelpdeskDocumentsController.returnDocument
 );
 
-// ── POST /api/helpdesk/documents/:id/comments ────────────────────────────────
+// ─── E-Stamp ──────────────────────────────────────────────────────────────────
+
+router.post(
+    '/:id/estampt',
+    requireRole('super_admin'),
+    validate(updateEStampSchema),
+    HelpdeskDocumentsController.updateEStamp
+);
+
+// ─── Comments ─────────────────────────────────────────────────────────────────
+
 router.post(
     '/:id/comments',
     validate(addCommentSchema),
     HelpdeskDocumentsController.addComment
 );
 
-// ── DELETE /api/helpdesk/documents/:id ───────────────────────────────────────
+router.delete(
+    '/comments/:commentId',
+    validate(deleteCommentSchema),
+    HelpdeskDocumentsController.deleteComment
+);
+
+// ─── Linking ──────────────────────────────────────────────────────────────────
+
+router.patch(
+    '/:id/link',
+    requireRole('super_admin', 'dept_head'),
+    validate(linkDocumentSchema),
+    HelpdeskDocumentsController.link
+);
+
+router.post(
+    '/bulk/link',
+    requireRole('super_admin', 'dept_head'),
+    validate(bulkLinkDocumentsSchema),
+    HelpdeskDocumentsController.bulkLink
+);
+
+// ─── Bulk Operations ──────────────────────────────────────────────────────────
+
+router.post(
+    '/bulk/status',
+    requireRole('super_admin', 'dept_head'),
+    validate(bulkUpdateStatusSchema),
+    HelpdeskDocumentsController.bulkUpdateStatus
+);
+
+// ─── Stats & Summary ──────────────────────────────────────────────────────────
+
+router.get(
+    '/stats',
+    HelpdeskDocumentsController.getStats
+);
+
+router.get(
+    '/summary',
+    HelpdeskDocumentsController.getSummary
+);
+
+// ─── Entity Routes ────────────────────────────────────────────────────────────
+
+router.get(
+    '/entity/:entityType/:entityId',
+    validate(getDocumentsByEntitySchema),
+    HelpdeskDocumentsController.getByEntity
+);
+
+// ─── Delete Routes ────────────────────────────────────────────────────────────
+
 router.delete(
     '/:id',
-    requireRole('super_admin', 'dept_head'),
     validate(documentIdSchema),
+    requireRole('super_admin', 'dept_head'),
     HelpdeskDocumentsController.remove
+);
+
+router.delete(
+    '/:id/permanent',
+    validate(documentIdSchema),
+    requireRole('super_admin'),
+    HelpdeskDocumentsController.hardRemove
 );
 
 export default router;

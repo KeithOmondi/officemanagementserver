@@ -14,12 +14,14 @@ import type {
     DocumentSummary,
     DocumentFormat,
     DocumentStatus,
+    EStampStatus,
 } from './helpdesk.documents.types';
 
 const FOLDER = 'orhc/helpdesk-documents';
 const E_STAMP_FOLDER = 'orhc/helpdesk-documents/e-stamps';
 
-// ─── UPDATED: Added rank, reporting_date ────────────────────────────────────
+// ─── SELECT Fragment ──────────────────────────────────────────────────────────
+
 const DOC_SELECT = `
     d.id, d.ref, d.subject, d.entity_type, d.entity_id, d.format,
     d.file_url, d.public_id, d.file_size,
@@ -33,25 +35,53 @@ const DOC_SELECT = `
     ru.full_name as returned_by_name
 `;
 
+// ─── Helper: Clean input for database ─────────────────────────────────────────
+
+/**
+ * Cleans the input by converting null/undefined/empty strings to appropriate values
+ * for database insertion.
+ */
+function cleanInput(input: CreateHelpdeskDocumentInput): CreateHelpdeskDocumentInput {
+    return {
+        ref: input.ref?.trim() || '',
+        subject: input.subject?.trim() || '',
+        entity_type: input.entity_type,
+        // ✅ Convert null to undefined for entity_id
+        entity_id: input.entity_id === null ? undefined : input.entity_id?.trim() || undefined,
+        format: input.format,
+        status: input.status || 'draft',
+        // ✅ Convert null to undefined for optional fields
+        request_type: input.request_type === null ? undefined : input.request_type?.trim() || undefined,
+        judge_name: input.judge_name === null ? undefined : input.judge_name?.trim() || undefined,
+        rank: input.rank === null ? undefined : input.rank?.trim() || undefined,
+        reporting_date: input.reporting_date === null ? undefined : input.reporting_date?.trim() || undefined,
+    };
+}
+
+// ─── Service ──────────────────────────────────────────────────────────────────
+
 export class HelpdeskDocumentsService {
 
-    // ── Upload & persist (UPDATED: added rank, reporting_date) ──────────────
+    // ─── Upload & Persist ─────────────────────────────────────────────────────
 
     static async upload(
         file: Express.Multer.File,
         input: CreateHelpdeskDocumentInput,
         userId: string
     ): Promise<HelpdeskDocument> {
-        if (!input.ref?.trim()) {
+        // Clean the input first
+        const cleaned = cleanInput(input);
+
+        if (!cleaned.ref?.trim()) {
             throw new AppError(400, 'Reference number is required');
         }
-        if (!input.subject?.trim()) {
+        if (!cleaned.subject?.trim()) {
             throw new AppError(400, 'Subject is required');
         }
-        if (!input.entity_type) {
+        if (!cleaned.entity_type) {
             throw new AppError(400, 'Entity type is required');
         }
-        if (!input.format) {
+        if (!cleaned.format) {
             throw new AppError(400, 'Document format is required');
         }
 
@@ -66,20 +96,20 @@ export class HelpdeskDocumentsService {
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                  RETURNING id`,
                 [
-                    input.ref.trim(),
-                    input.subject.trim(),
-                    input.entity_type,
-                    input.entity_id || null,
-                    input.format,
+                    cleaned.ref.trim(),
+                    cleaned.subject.trim(),
+                    cleaned.entity_type,
+                    cleaned.entity_id || null,  // Convert undefined to null for DB
+                    cleaned.format,
                     result.secure_url,
                     result.public_id,
                     result.bytes ?? null,
                     userId,
-                    input.status || 'draft',
-                    input.request_type || null,
-                    input.judge_name || null,
-                    input.rank || null,
-                    input.reporting_date || null,
+                    cleaned.status || 'draft',
+                    cleaned.request_type || null,
+                    cleaned.judge_name || null,
+                    cleaned.rank || null,
+                    cleaned.reporting_date || null,
                 ]
             );
 
@@ -94,7 +124,7 @@ export class HelpdeskDocumentsService {
         }
     }
 
-    // ── Find one (returns all fields including new ones) ──────────────────────
+    // ─── Find One ─────────────────────────────────────────────────────────────
 
     static async findById(id: string): Promise<HelpdeskDocument | null> {
         if (!id) return null;
@@ -111,7 +141,6 @@ export class HelpdeskDocumentsService {
 
         if (rows.length === 0) return null;
 
-        // Get approval history
         const history = await this.getApprovalHistory(id);
         const comments = await this.getComments(id);
 
@@ -122,7 +151,7 @@ export class HelpdeskDocumentsService {
         };
     }
 
-    // ── List with filters (UPDATED: added rank and reporting_date filters) ──
+    // ─── Find All with Filters ───────────────────────────────────────────────
 
     static async findAll(filters: HelpdeskDocumentFilters = {}): Promise<HelpdeskDocument[]> {
         let query = `
@@ -171,7 +200,6 @@ export class HelpdeskDocumentsService {
             params.push(`%${filters.judge_name}%`);
             p++;
         }
-        // ─── NEW FILTERS ──────────────────────────────────────────────────────
         if (filters.rank) {
             query += ` AND d.rank = $${p}`;
             params.push(filters.rank);
@@ -201,6 +229,13 @@ export class HelpdeskDocumentsService {
             p++;
         }
 
+        // Pending my approval filter
+        if (filters.pending_my_approval && filters.uploaded_by) {
+            // This would need to check the approval workflow
+            // For now, we'll just filter by status
+            query += ` AND d.status = 'pending_approval'`;
+        }
+
         query += ` ORDER BY d.created_at DESC`;
 
         if (filters.limit) {
@@ -215,7 +250,6 @@ export class HelpdeskDocumentsService {
 
         const { rows } = await pool.query(query, params);
 
-        // Get history and comments for each document
         const docs = await Promise.all(
             rows.map(async (row) => ({
                 ...row,
@@ -227,7 +261,7 @@ export class HelpdeskDocumentsService {
         return docs;
     }
 
-    // ─── Find documents by entity (unchanged) ───────────────────────────────
+    // ─── Find by Entity ──────────────────────────────────────────────────────
 
     static async findByEntity(
         entityType: DocumentEntityType,
@@ -278,37 +312,205 @@ export class HelpdeskDocumentsService {
         return docs;
     }
 
-    // ─── Get Document Stats (unchanged) ──────────────────────────────────────
+    // ─── Get Statistics ──────────────────────────────────────────────────────
 
     static async getStats(filters?: { entity_type?: DocumentEntityType; date_from?: string; date_to?: string }): Promise<DocumentStats> {
-        // ... (unchanged, same as before)
-        // For brevity, I'll omit the full implementation; it's identical to previous.
-        // The stats don't need new fields.
-        // ... (full implementation from the original)
+        const params: unknown[] = [];
+        let whereClause = 'WHERE d.is_active = true';
+        let p = 1;
+
+        if (filters?.entity_type) {
+            whereClause += ` AND d.entity_type = $${p}`;
+            params.push(filters.entity_type);
+            p++;
+        }
+        if (filters?.date_from) {
+            whereClause += ` AND d.created_at >= $${p}::date`;
+            params.push(filters.date_from);
+            p++;
+        }
+        if (filters?.date_to) {
+            whereClause += ` AND d.created_at <= $${p}::date`;
+            params.push(filters.date_to);
+            p++;
+        }
+
+        // Total
+        const totalQuery = `SELECT COUNT(*) as total FROM helpdesk_documents d ${whereClause}`;
+        const { rows: totalRows } = await pool.query(totalQuery, params);
+        const total = Number(totalRows[0]?.total) || 0;
+
+        // Status breakdown
+        const statusQuery = `SELECT d.status, COUNT(*) as count FROM helpdesk_documents d ${whereClause} GROUP BY d.status`;
+        const { rows: statusRows } = await pool.query(statusQuery, params);
+        const statusCounts: Record<string, number> = {};
+        statusRows.forEach(row => {
+            statusCounts[row.status] = Number(row.count);
+        });
+
+        // By entity
+        const entityQuery = `
+            SELECT d.entity_type, COUNT(*) as count, 
+                   COUNT(CASE WHEN d.status = 'pending_approval' THEN 1 END) as pending,
+                   COUNT(CASE WHEN d.status = 'approved' THEN 1 END) as approved
+            FROM helpdesk_documents d ${whereClause}
+            GROUP BY d.entity_type
+        `;
+        const { rows: entityRows } = await pool.query(entityQuery, params);
+
+        // Recent activity
+        const activityQuery = `
+            SELECT d.id, d.ref, d.subject, 'submitted' as action, u.full_name as user_name, d.created_at
+            FROM helpdesk_documents d
+            LEFT JOIN users u ON d.uploaded_by = u.id
+            ${whereClause}
+            ORDER BY d.created_at DESC
+            LIMIT 10
+        `;
+        const { rows: activityRows } = await pool.query(activityQuery, params);
+
         return {
-            total: 0,
-            pending_approval: 0,
-            approved: 0,
-            rejected: 0,
-            returned: 0,
-            draft: 0,
-            by_entity: [],
-            recent_activity: [],
+            total,
+            pending_approval: statusCounts.pending_approval || 0,
+            approved: statusCounts.approved || 0,
+            rejected: statusCounts.rejected || 0,
+            returned: statusCounts.returned || 0,
+            draft: statusCounts.draft || 0,
+            by_entity: entityRows.map(row => ({
+                entity_type: row.entity_type,
+                count: Number(row.count),
+                pending: Number(row.pending) || 0,
+                approved: Number(row.approved) || 0,
+            })),
+            recent_activity: activityRows.map(row => ({
+                id: row.id,
+                ref: row.ref,
+                subject: row.subject,
+                action: row.action,
+                user_name: row.user_name || 'System',
+                created_at: row.created_at,
+            })),
         };
     }
 
-    // ── Submit for approval (unchanged) ──────────────────────────────────────
+    // ─── Get Summary ─────────────────────────────────────────────────────────
+
+    static async getSummary(filters?: { entity_type?: DocumentEntityType }): Promise<DocumentSummary> {
+        const params: unknown[] = [];
+        let whereClause = 'WHERE d.is_active = true';
+        let p = 1;
+
+        if (filters?.entity_type) {
+            whereClause += ` AND d.entity_type = $${p}`;
+            params.push(filters.entity_type);
+            p++;
+        }
+
+        const summaryQuery = `
+            SELECT 
+                COUNT(*) as total,
+                COUNT(CASE WHEN d.status = 'draft' THEN 1 END) as draft,
+                COUNT(CASE WHEN d.status = 'pending_approval' THEN 1 END) as pending_approval,
+                COUNT(CASE WHEN d.status = 'approved' THEN 1 END) as approved,
+                COUNT(CASE WHEN d.status = 'rejected' THEN 1 END) as rejected,
+                COUNT(CASE WHEN d.status = 'returned' THEN 1 END) as returned
+            FROM helpdesk_documents d
+            ${whereClause}
+        `;
+        const { rows } = await pool.query(summaryQuery, params);
+        const summary = rows[0];
+
+        // By status
+        const statusQuery = `SELECT d.status, COUNT(*) as count FROM helpdesk_documents d ${whereClause} GROUP BY d.status`;
+        const { rows: statusRows } = await pool.query(statusQuery, params);
+        const byStatus: Record<string, number> = {};
+        statusRows.forEach(row => {
+            byStatus[row.status] = Number(row.count);
+        });
+
+        // By entity type
+        const entityQuery = `SELECT d.entity_type, COUNT(*) as count FROM helpdesk_documents d ${whereClause} GROUP BY d.entity_type`;
+        const { rows: entityRows } = await pool.query(entityQuery, params);
+        const byEntityType: Record<string, number> = {};
+        entityRows.forEach(row => {
+            byEntityType[row.entity_type] = Number(row.count);
+        });
+
+        // By format
+        const formatQuery = `SELECT d.format, COUNT(*) as count FROM helpdesk_documents d ${whereClause} GROUP BY d.format`;
+        const { rows: formatRows } = await pool.query(formatQuery, params);
+        const byFormat: Record<string, number> = {};
+        formatRows.forEach(row => {
+            byFormat[row.format] = Number(row.count);
+        });
+
+        return {
+            total: Number(summary.total) || 0,
+            by_status: byStatus as Record<DocumentStatus, number>,
+            by_entity_type: byEntityType as Record<DocumentEntityType, number>,
+            by_format: byFormat as Record<DocumentFormat, number>,
+            pending_approval: Number(summary.pending_approval) || 0,
+            draft: Number(summary.draft) || 0,
+            approved: Number(summary.approved) || 0,
+            rejected: Number(summary.rejected) || 0,
+            returned: Number(summary.returned) || 0,
+        };
+    }
+
+    // ─── Submit for Approval ────────────────────────────────────────────────
 
     static async submitForApproval(
         id: string,
         userId: string,
         comments?: string
     ): Promise<HelpdeskDocument> {
-        // ... unchanged
-        return await this.findById(id) as HelpdeskDocument;
+        const doc = await this.findById(id);
+        if (!doc) {
+            throw new AppError(404, 'Document not found');
+        }
+
+        if (doc.status !== 'draft' && doc.status !== 'returned') {
+            throw new AppError(400, `Cannot submit document with status: ${doc.status}`);
+        }
+
+        if (!doc.entity_id) {
+            throw new AppError(400, 'Document must be linked to an entity before submission');
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            await client.query(
+                `UPDATE helpdesk_documents
+                 SET status = 'pending_approval',
+                     updated_at = NOW()
+                 WHERE id = $1 AND is_active = true`,
+                [id]
+            );
+
+            await this.addApprovalHistory(
+                id,
+                userId,
+                'submitted',
+                undefined,
+                comments || 'Document submitted for approval'
+            );
+
+            await client.query('COMMIT');
+
+            const updatedDoc = await this.findById(id);
+            if (!updatedDoc) throw new AppError(500, 'Failed to retrieve updated document');
+            return updatedDoc;
+        } catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+        } finally {
+            client.release();
+        }
     }
 
-    // ── Approve document (unchanged) ─────────────────────────────────────────
+    // ─── Approve Document ────────────────────────────────────────────────────
 
     static async approveDocument(
         id: string,
@@ -316,11 +518,57 @@ export class HelpdeskDocumentsService {
         comments?: string,
         approvedByName?: string
     ): Promise<HelpdeskDocument> {
-        // ... unchanged
-        return await this.findById(id) as HelpdeskDocument;
+        const doc = await this.findById(id);
+        if (!doc) {
+            throw new AppError(404, 'Document not found');
+        }
+
+        if (doc.status !== 'pending_approval') {
+            throw new AppError(400, `Cannot approve document with status: ${doc.status}`);
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            // Generate e-stamp
+            const eStamp = await this.generateEStamp(doc);
+
+            await client.query(
+                `UPDATE helpdesk_documents
+                 SET status = 'approved',
+                     approved_by = $1,
+                     approved_at = NOW(),
+                     e_stamp_url = $2,
+                     e_stamp_public_id = $3,
+                     e_stamp_status = 'stamped',
+                     updated_at = NOW()
+                 WHERE id = $4 AND is_active = true`,
+                [userId, eStamp.secure_url, eStamp.public_id, id]
+            );
+
+            await this.addApprovalHistory(
+                id,
+                userId,
+                'approved',
+                doc.uploaded_by || undefined,
+                comments || 'Document approved'
+            );
+
+            await client.query('COMMIT');
+
+            const updatedDoc = await this.findById(id);
+            if (!updatedDoc) throw new AppError(500, 'Failed to retrieve updated document');
+            return updatedDoc;
+        } catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+        } finally {
+            client.release();
+        }
     }
 
-    // ── Reject document (unchanged) ──────────────────────────────────────────
+    // ─── Reject Document ─────────────────────────────────────────────────────
 
     static async rejectDocument(
         id: string,
@@ -328,11 +576,54 @@ export class HelpdeskDocumentsService {
         reason: string,
         comments?: string
     ): Promise<HelpdeskDocument> {
-        // ... unchanged
-        return await this.findById(id) as HelpdeskDocument;
+        const doc = await this.findById(id);
+        if (!doc) {
+            throw new AppError(404, 'Document not found');
+        }
+
+        if (doc.status !== 'pending_approval') {
+            throw new AppError(400, `Cannot reject document with status: ${doc.status}`);
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            await client.query(
+                `UPDATE helpdesk_documents
+                 SET status = 'rejected',
+                     rejection_reason = $1,
+                     updated_at = NOW()
+                 WHERE id = $2 AND is_active = true`,
+                [reason, id]
+            );
+
+            const fullComment = comments 
+                ? `Rejection reason: ${reason}. ${comments}` 
+                : `Rejection reason: ${reason}`;
+
+            await this.addApprovalHistory(
+                id,
+                userId,
+                'rejected',
+                doc.uploaded_by || undefined,
+                fullComment
+            );
+
+            await client.query('COMMIT');
+
+            const updatedDoc = await this.findById(id);
+            if (!updatedDoc) throw new AppError(500, 'Failed to retrieve updated document');
+            return updatedDoc;
+        } catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+        } finally {
+            client.release();
+        }
     }
 
-    // ── Return document (unchanged) ──────────────────────────────────────────
+    // ─── Return Document ─────────────────────────────────────────────────────
 
     static async returnDocument(
         id: string,
@@ -340,74 +631,111 @@ export class HelpdeskDocumentsService {
         comments?: string,
         instructions?: string
     ): Promise<HelpdeskDocument> {
-        // ... unchanged
-        return await this.findById(id) as HelpdeskDocument;
+        const doc = await this.findById(id);
+        if (!doc) {
+            throw new AppError(404, 'Document not found');
+        }
+
+        if (doc.status !== 'pending_approval' && doc.status !== 'approved') {
+            throw new AppError(400, `Cannot return document with status: ${doc.status}`);
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            await client.query(
+                `UPDATE helpdesk_documents
+                 SET status = 'returned',
+                     returned_by = $1,
+                     returned_at = NOW(),
+                     updated_at = NOW()
+                 WHERE id = $2 AND is_active = true`,
+                [userId, id]
+            );
+
+            const fullComment = instructions 
+                ? `${comments || ''} Instructions: ${instructions}`.trim()
+                : comments || 'Document returned for revision';
+
+            await this.addApprovalHistory(
+                id,
+                userId,
+                'returned',
+                doc.uploaded_by || undefined,
+                fullComment
+            );
+
+            await client.query('COMMIT');
+
+            const updatedDoc = await this.findById(id);
+            if (!updatedDoc) throw new AppError(500, 'Failed to retrieve updated document');
+            return updatedDoc;
+        } catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+        } finally {
+            client.release();
+        }
     }
 
-    // ── Update E-Stamp (unchanged) ───────────────────────────────────────────
+    // ─── Update E-Stamp ──────────────────────────────────────────────────────
 
     static async updateEStamp(
         id: string,
         eStampUrl?: string,
         eStampPublicId?: string,
-        status: 'pending' | 'stamped' | 'failed' = 'stamped'
+        status: EStampStatus = 'stamped'
     ): Promise<HelpdeskDocument> {
-        // ... unchanged
-        return await this.findById(id) as HelpdeskDocument;
+        const doc = await this.findById(id);
+        if (!doc) {
+            throw new AppError(404, 'Document not found');
+        }
+
+        const updates: string[] = [];
+        const values: unknown[] = [];
+        let p = 1;
+
+        if (eStampUrl !== undefined) {
+            updates.push(`e_stamp_url = $${p}`);
+            values.push(eStampUrl);
+            p++;
+        }
+        if (eStampPublicId !== undefined) {
+            updates.push(`e_stamp_public_id = $${p}`);
+            values.push(eStampPublicId);
+            p++;
+        }
+        updates.push(`e_stamp_status = $${p}`);
+        values.push(status);
+        p++;
+        updates.push(`updated_at = NOW()`);
+        values.push(id);
+
+        await pool.query(
+            `UPDATE helpdesk_documents
+             SET ${updates.join(', ')}
+             WHERE id = $${p} AND is_active = true`,
+            values
+        );
+
+        const updatedDoc = await this.findById(id);
+        if (!updatedDoc) throw new AppError(500, 'Failed to retrieve updated document');
+        return updatedDoc;
     }
 
-    // ── E-Stamp generation (unchanged) ──────────────────────────────────────
+    // ─── Generate E-Stamp ────────────────────────────────────────────────────
 
     private static async generateEStamp(doc: HelpdeskDocument): Promise<{ secure_url: string; public_id: string }> {
-        // ... unchanged
-        return { secure_url: '', public_id: '' };
+        // In a real implementation, this would generate an e-stamp PDF
+        // For now, we'll return a placeholder
+        return {
+            secure_url: doc.file_url,
+            public_id: doc.public_id || 'estampt-placeholder',
+        };
     }
 
-    // ── Approval History (unchanged) ─────────────────────────────────────────
-
-    private static async addApprovalHistory(
-        documentId: string,
-        fromUserId: string,
-        action: 'submitted' | 'approved' | 'rejected' | 'returned',
-        toUserId?: string,
-        comments?: string
-    ): Promise<void> {
-        // ... unchanged
-    }
-
-    private static async getApprovalHistory(documentId: string): Promise<ApprovalHistoryEntry[]> {
-        // ... unchanged
-        return [];
-    }
-
-    // ── Comments (unchanged) ─────────────────────────────────────────────────
-
-    static async addComment(
-        documentId: string,
-        userId: string,
-        comment: string,
-        isInternal: boolean
-    ): Promise<Comment> {
-        // ... unchanged
-        return {} as Comment;
-    }
-
-    private static async getComments(documentId: string): Promise<Comment[]> {
-        // ... unchanged
-        return [];
-    }
-
-    static async deleteComment(commentId: string, userId: string): Promise<void> {
-        // ... unchanged
-    }
-
-    // ── Soft-delete (unchanged) ──────────────────────────────────────────────
-
-    static async delete(id: string): Promise<void> {
-        // ... unchanged
-    }
-
-    // ─── UPDATED: Link to Entity (added rank, reporting_date) ────────────────
+    // ─── Link to Entity ──────────────────────────────────────────────────────
 
     static async linkToEntity(
         id: string,
@@ -449,7 +777,6 @@ export class HelpdeskDocumentsService {
             p++;
         }
 
-        // ─── NEW FIELDS ──────────────────────────────────────────────────────
         if (rank !== undefined) {
             updates.push(`rank = $${p}`);
             values.push(rank || null);
@@ -462,6 +789,7 @@ export class HelpdeskDocumentsService {
             p++;
         }
 
+        updates.push(`updated_at = NOW()`);
         values.push(id);
 
         await pool.query(
@@ -476,7 +804,7 @@ export class HelpdeskDocumentsService {
         return updatedDoc;
     }
 
-    // ─── UPDATED: Bulk Link Documents (added rank, reporting_date) ───────────
+    // ─── Bulk Link Documents ─────────────────────────────────────────────────
 
     static async bulkLinkToEntity(
         documentIds: string[],
@@ -503,100 +831,308 @@ export class HelpdeskDocumentsService {
         return { success, failed };
     }
 
-    // ── Bulk Update Status (unchanged) ──────────────────────────────────────
+    // ─── Bulk Update Status ──────────────────────────────────────────────────
 
     static async bulkUpdateStatus(
         documentIds: string[],
         status: string,
         comments?: string
     ): Promise<{ success: string[]; failed: string[] }> {
-        // ... unchanged
-        return { success: [], failed: [] };
+        const success: string[] = [];
+        const failed: string[] = [];
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            for (const id of documentIds) {
+                try {
+                    const doc = await this.findById(id);
+                    if (!doc) {
+                        failed.push(id);
+                        continue;
+                    }
+
+                    // Validate status transition
+                    const validTransitions: Record<string, string[]> = {
+                        draft: ['pending_approval'],
+                        pending_approval: ['approved', 'rejected', 'returned'],
+                        approved: ['returned'],
+                        rejected: ['draft'],
+                        returned: ['draft'],
+                    };
+
+                    if (!validTransitions[doc.status]?.includes(status)) {
+                        failed.push(id);
+                        continue;
+                    }
+
+                    await client.query(
+                        `UPDATE helpdesk_documents
+                         SET status = $1,
+                             updated_at = NOW()
+                         WHERE id = $2 AND is_active = true`,
+                        [status, id]
+                    );
+
+                    // Add to history
+                    await this.addApprovalHistory(
+                        id,
+                        'system',
+                        status as any,
+                        undefined,
+                        comments || `Bulk status update to ${status}`
+                    );
+
+                    success.push(id);
+                } catch (error) {
+                    console.error(`Failed to update status for document ${id}:`, error);
+                    failed.push(id);
+                }
+            }
+
+            await client.query('COMMIT');
+        } catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+        } finally {
+            client.release();
+        }
+
+        return { success, failed };
     }
 
-    // ── Get Document Summary (unchanged) ──────────────────────────────────────
-// ─── Get Document Summary (CORRECTED) ──────────────────────────────────────
+    // ─── Comments ─────────────────────────────────────────────────────────────
 
-static async getSummary(filters?: { entity_type?: DocumentEntityType }): Promise<DocumentSummary> {
-    const params: unknown[] = [];
-    let whereClause = 'WHERE is_active = true';
-    let p = 1;
+    static async addComment(
+        documentId: string,
+        userId: string,
+        comment: string,
+        isInternal: boolean
+    ): Promise<Comment> {
+        const doc = await this.findById(documentId);
+        if (!doc) {
+            throw new AppError(404, 'Document not found');
+        }
 
-    if (filters?.entity_type) {
-        whereClause += ` AND entity_type = $${p}`;
-        params.push(filters.entity_type);
-        p++;
+        const { rows } = await pool.query(
+            `INSERT INTO helpdesk_document_comments
+                (document_id, user_id, comment, is_internal)
+             VALUES ($1, $2, $3, $4)
+             RETURNING id`,
+            [documentId, userId, comment, isInternal]
+        );
+
+        const { rows: result } = await pool.query(
+            `SELECT c.id, c.document_id, c.user_id, c.comment, c.is_internal, c.created_at,
+                    u.full_name as user_name
+             FROM helpdesk_document_comments c
+             LEFT JOIN users u ON c.user_id = u.id
+             WHERE c.id = $1`,
+            [rows[0].id]
+        );
+
+        return result[0];
     }
 
-    // Total count
-    const totalQuery = `SELECT COUNT(*) as total FROM helpdesk_documents ${whereClause}`;
-    const { rows: totalRows } = await pool.query(totalQuery, params);
-    const total = Number(totalRows[0]?.total) || 0;
+    static async deleteComment(commentId: string, userId: string): Promise<void> {
+        const { rows } = await pool.query(
+            `SELECT id, user_id FROM helpdesk_document_comments
+             WHERE id = $1`,
+            [commentId]
+        );
 
-    // By status
-    const statusQuery = `SELECT status, COUNT(*) as count FROM helpdesk_documents ${whereClause} GROUP BY status`;
-    const { rows: statusRows } = await pool.query(statusQuery, params);
-    const byStatus: Record<string, number> = {};
-    statusRows.forEach(row => {
-        byStatus[row.status] = Number(row.count);
-    });
+        if (!rows.length) {
+            throw new AppError(404, 'Comment not found');
+        }
 
-    // By entity type
-    const entityQuery = `SELECT entity_type, COUNT(*) as count FROM helpdesk_documents ${whereClause} GROUP BY entity_type`;
-    const { rows: entityRows } = await pool.query(entityQuery, params);
-    const byEntityType: Record<string, number> = {};
-    entityRows.forEach(row => {
-        byEntityType[row.entity_type] = Number(row.count);
-    });
+        if (rows[0].user_id !== userId) {
+            throw new AppError(403, 'You can only delete your own comments');
+        }
 
-    // By format
-    const formatQuery = `SELECT format, COUNT(*) as count FROM helpdesk_documents ${whereClause} GROUP BY format`;
-    const { rows: formatRows } = await pool.query(formatQuery, params);
-    const byFormat: Record<string, number> = {};
-    formatRows.forEach(row => {
-        byFormat[row.format] = Number(row.count);
-    });
+        await pool.query(
+            `DELETE FROM helpdesk_document_comments WHERE id = $1`,
+            [commentId]
+        );
+    }
 
-    // Cast to the proper types (the records may have missing keys, but we'll fill with 0)
-    const defaultStatus: Record<DocumentStatus, number> = {
-        draft: 0,
-        pending_approval: 0,
-        approved: 0,
-        rejected: 0,
-        returned: 0,
-    };
-    const defaultEntity: Record<DocumentEntityType, number> = {
-        circuit: 0,
-        bench: 0,
-        partHeard: 0,
-        serviceWeek: 0,
-        otherPayment: 0,
-        ticket: 0,
-        medicalClaim: 0,
-        generalRequest: 0,
-        securityRequest: 0,
-    };
-    const defaultFormat: Record<DocumentFormat, number> = {
-        pdf: 0,
-        docx: 0,
-        xlsx: 0,
-    };
+    // ─── Approval History ────────────────────────────────────────────────────
 
-    // Merge the actual counts into the defaults
-    const finalByStatus = { ...defaultStatus, ...byStatus };
-    const finalByEntity = { ...defaultEntity, ...byEntityType };
-    const finalByFormat = { ...defaultFormat, ...byFormat };
+    private static async addApprovalHistory(
+        documentId: string,
+        fromUserId: string,
+        action: 'submitted' | 'approved' | 'rejected' | 'returned',
+        toUserId?: string,
+        comments?: string
+    ): Promise<void> {
+        await pool.query(
+            `INSERT INTO helpdesk_document_approval_history
+                (document_id, from_user_id, to_user_id, action, comments)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [documentId, fromUserId, toUserId || null, action, comments || null]
+        );
+    }
 
-    return {
-        total,
-        by_status: finalByStatus,
-        by_entity_type: finalByEntity,
-        by_format: finalByFormat,
-        pending_approval: finalByStatus.pending_approval,
-        draft: finalByStatus.draft,
-        approved: finalByStatus.approved,
-        rejected: finalByStatus.rejected,
-        returned: finalByStatus.returned,
-    };
-}
+    private static async getApprovalHistory(documentId: string): Promise<ApprovalHistoryEntry[]> {
+        const { rows } = await pool.query(
+            `SELECT h.id, h.document_id, h.action, h.comments, h.created_at,
+                    h.from_user_id, fu.full_name as from_user_name,
+                    h.to_user_id, tu.full_name as to_user_name
+             FROM helpdesk_document_approval_history h
+             LEFT JOIN users fu ON h.from_user_id = fu.id
+             LEFT JOIN users tu ON h.to_user_id = tu.id
+             WHERE h.document_id = $1
+             ORDER BY h.created_at ASC`,
+            [documentId]
+        );
+
+        return rows.map(row => ({
+            ...row,
+            from_user_name: row.from_user_name || 'System',
+        }));
+    }
+
+    private static async getComments(documentId: string): Promise<Comment[]> {
+        const { rows } = await pool.query(
+            `SELECT c.id, c.document_id, c.user_id, c.comment, c.is_internal, c.created_at,
+                    u.full_name as user_name
+             FROM helpdesk_document_comments c
+             LEFT JOIN users u ON c.user_id = u.id
+             WHERE c.document_id = $1
+             ORDER BY c.created_at ASC`,
+            [documentId]
+        );
+
+        return rows;
+    }
+
+    // ─── Delete Document ─────────────────────────────────────────────────────
+
+    static async delete(id: string): Promise<void> {
+        const doc = await this.findById(id);
+        if (!doc) {
+            throw new AppError(404, 'Document not found');
+        }
+
+        if (!doc.is_active) {
+            throw new AppError(400, 'Document is already deleted');
+        }
+
+        // Prevent deleting approved documents (unless forced)
+        if (doc.status === 'approved') {
+            throw new AppError(400, 'Cannot delete approved documents. Return them first.');
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            // Soft delete the document
+            const { rowCount } = await client.query(
+                `UPDATE helpdesk_documents 
+                 SET is_active = false, 
+                     updated_at = NOW() 
+                 WHERE id = $1 AND is_active = true`,
+                [id]
+            );
+
+            if (rowCount === 0) {
+                throw new AppError(404, 'Document not found or already deleted');
+            }
+
+            // Soft delete related comments (keep for audit trail)
+            await client.query(
+                `UPDATE helpdesk_document_comments
+                 SET is_active = false
+                 WHERE document_id = $1`,
+                [id]
+            );
+
+            await client.query('COMMIT');
+
+            // Delete from Cloudinary after DB transaction succeeds
+            if (doc.public_id) {
+                try {
+                    await deleteFromCloudinary(doc.public_id, 'raw');
+                } catch (error) {
+                    console.error('Failed to delete file from Cloudinary:', error);
+                }
+            }
+
+            if (doc.e_stamp_public_id) {
+                try {
+                    await deleteFromCloudinary(doc.e_stamp_public_id, 'raw');
+                } catch (error) {
+                    console.error('Failed to delete e-stamp from Cloudinary:', error);
+                }
+            }
+
+        } catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+        } finally {
+            client.release();
+        }
+    }
+
+    // ─── Hard Delete (Admin Only) ───────────────────────────────────────────
+
+    static async hardDelete(id: string): Promise<void> {
+        const doc = await this.findById(id);
+        if (!doc) {
+            throw new AppError(404, 'Document not found');
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            // Delete comments
+            await client.query(
+                `DELETE FROM helpdesk_document_comments WHERE document_id = $1`,
+                [id]
+            );
+
+            // Delete approval history
+            await client.query(
+                `DELETE FROM helpdesk_document_approval_history WHERE document_id = $1`,
+                [id]
+            );
+
+            // Delete the document
+            const { rowCount } = await client.query(
+                `DELETE FROM helpdesk_documents WHERE id = $1`,
+                [id]
+            );
+
+            if (rowCount === 0) {
+                throw new AppError(404, 'Document not found');
+            }
+
+            await client.query('COMMIT');
+
+            // Delete from Cloudinary
+            if (doc.public_id) {
+                try {
+                    await deleteFromCloudinary(doc.public_id, 'raw');
+                } catch (error) {
+                    console.error('Failed to delete file from Cloudinary:', error);
+                }
+            }
+
+            if (doc.e_stamp_public_id) {
+                try {
+                    await deleteFromCloudinary(doc.e_stamp_public_id, 'raw');
+                } catch (error) {
+                    console.error('Failed to delete e-stamp from Cloudinary:', error);
+                }
+            }
+
+        } catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+        } finally {
+            client.release();
+        }
+    }
 }

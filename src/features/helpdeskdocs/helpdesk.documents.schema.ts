@@ -16,6 +16,10 @@ const documentEntityEnum = z.enum([
     'medicalClaim',
     'generalRequest',   // Unified - includes all security/personnel requests
     'securityRequest',  // Deprecated - kept for backward compatibility
+    'visa',             // Visa support documents
+    'protocol',         // Protocol event documents
+    'club',             // Club membership documents
+    'utility_memo',     // Utility memo documents
 ]);
 
 const documentStatusEnum = z.enum(['draft', 'pending_approval', 'approved', 'rejected', 'returned']);

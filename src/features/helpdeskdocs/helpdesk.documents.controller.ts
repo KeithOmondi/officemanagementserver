@@ -227,7 +227,8 @@ export class HelpdeskDocumentsController {
             const entity_type = getQueryEnum(req, 'entity_type', [
                 'circuit', 'bench', 'partHeard', 'serviceWeek', 
                 'otherPayment', 'ticket', 'medicalClaim', 
-                'generalRequest', 'securityRequest'
+                'generalRequest', 'securityRequest',
+                'visa', 'protocol', 'club', 'utility_memo'  // ADDED
             ] as const);
             
             const entity_id = getQueryParam(req, 'entity_id');

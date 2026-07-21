@@ -739,7 +739,7 @@ export class HelpdeskDocumentsService {
 
     static async linkToEntity(
         id: string,
-        entityType: string,
+        entityType: DocumentEntityType,
         entityId: string,
         requestType?: string,
         judgeName?: string,
@@ -808,7 +808,7 @@ export class HelpdeskDocumentsService {
 
     static async bulkLinkToEntity(
         documentIds: string[],
-        entityType: string,
+        entityType: DocumentEntityType,
         entityId: string,
         requestType?: string,
         judgeName?: string,
@@ -835,7 +835,7 @@ export class HelpdeskDocumentsService {
 
     static async bulkUpdateStatus(
         documentIds: string[],
-        status: string,
+        status: DocumentStatus,
         comments?: string
     ): Promise<{ success: string[]; failed: string[] }> {
         const success: string[] = [];
@@ -854,7 +854,7 @@ export class HelpdeskDocumentsService {
                     }
 
                     // Validate status transition
-                    const validTransitions: Record<string, string[]> = {
+                    const validTransitions: Record<DocumentStatus, DocumentStatus[]> = {
                         draft: ['pending_approval'],
                         pending_approval: ['approved', 'rejected', 'returned'],
                         approved: ['returned'],
@@ -875,11 +875,29 @@ export class HelpdeskDocumentsService {
                         [status, id]
                     );
 
+                    // Map DocumentStatus to approval history action
+                    let action: 'approved' | 'rejected' | 'returned' | 'submitted';
+                    switch (status) {
+                        case 'approved':
+                            action = 'approved';
+                            break;
+                        case 'rejected':
+                            action = 'rejected';
+                            break;
+                        case 'returned':
+                            action = 'returned';
+                            break;
+                        default:
+                            // For 'draft' and 'pending_approval', we use 'submitted' as a fallback
+                            action = 'submitted';
+                            break;
+                    }
+
                     // Add to history
                     await this.addApprovalHistory(
                         id,
                         'system',
-                        status as any,
+                        action,
                         undefined,
                         comments || `Bulk status update to ${status}`
                     );

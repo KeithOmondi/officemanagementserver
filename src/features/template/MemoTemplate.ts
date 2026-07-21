@@ -1,5 +1,3 @@
-// src/templates/MemoTemplate.ts
-
 export interface MemoData {
   to: string;
   from: string;
@@ -10,21 +8,15 @@ export interface MemoData {
   signatureName: string;
   signatureTitle: string;
   draftedByInitials?: string;
+  enclosure?: string;
   logoUrl?: string;
   footerEmblemUrl?: string;
   footerAddress?: string;
   footerContact?: string;
   footerTagline?: string;
   fromFirst?: boolean;
-  // signaturePlacement is removed; placement is now automatic via the anchor
-  // marker, matching LetterTemplate.ts. The old top/bottom/left/right
-  // variants are gone — anchor-based detection in embedSignature.ts always
-  // places the signature directly above the printed name/title block.
 }
 
-// This exact string is what embedSignature.ts looks for to locate the
-// signature block reliably. It MUST stay in sync with SIGNATURE_ANCHOR_TEXT
-// in src/utils/embedSignature.ts — the same constant LetterTemplate.ts uses.
 export const SIGNATURE_ANCHOR_TEXT = 'RHC-SIGNATURE-ANCHOR';
 
 const DEFAULTS = {
@@ -51,25 +43,6 @@ function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (ch) => replacements[ch]);
 }
 
-/**
- * Converts plain-text newlines to <br/> for display, WITHOUT touching
- * newlines that live inside an embedded <table>...</table> block.
- *
- * Why this exists: callers (e.g. the procurement memo generator) sometimes
- * build the memo body as `${plainTextParagraphs}\n${tableHtmlTemplateLiteral}`.
- * A naive `body.replace(/\n/g, "<br/>")` across the whole string also
- * converts the indentation newlines inside the table's multi-line template
- * literal into stray <br/> tags. Browsers can't place <br/> inside
- * <table>/<thead>/<tr>, so they get foster-parented out in front of the
- * table — which visually pushes the table far down the page (in one
- * observed case, all the way to the bottom of page 1, overlapping the
- * footer) instead of it sitting immediately after the preceding paragraph.
- *
- * Splitting the body around any <table>...</table> block and only
- * converting newlines in the non-table segments avoids this entirely,
- * while leaving plain-text-only memos (no table) behaving exactly as
- * before.
- */
 function formatBodyHtml(rawBody: string): string {
   if (!rawBody || !rawBody.trim()) return "<p>&nbsp;</p>";
 
@@ -78,11 +51,8 @@ function formatBodyHtml(rawBody: string): string {
   return parts
     .map((part) => {
       if (/^<table[\s\S]*<\/table>$/i.test(part.trim())) {
-        // Raw table markup — strip stray indentation newlines/whitespace
-        // between tags but leave the table structure completely intact.
         return part.replace(/>\s*\n\s*</g, "><").trim();
       }
-      // Plain text — convert newlines to line breaks as before.
       return part.replace(/\n/g, "<br/>");
     })
     .join("");
@@ -99,6 +69,7 @@ export function getMemoHTML(data: MemoData): string {
     signatureName,
     signatureTitle,
     draftedByInitials,
+    enclosure,
     logoUrl = DEFAULTS.logoUrl,
     footerEmblemUrl = DEFAULTS.footerEmblemUrl,
     footerAddress = DEFAULTS.footerAddress,
@@ -112,10 +83,11 @@ export function getMemoHTML(data: MemoData): string {
   const fields = [
     { label: "TO", value: to },
     { label: "FROM", value: from },
+    { label: "CC", value: "" }, // Left flexible if needed
     { label: "REF", value: ref },
     { label: "DATE", value: date },
     { label: "SUBJECT", value: subject },
-  ];
+  ].filter((f) => f.label !== "CC" || f.value);
 
   const orderedFields = fromFirst
     ? [fields[1], fields[0], ...fields.slice(2)]
@@ -140,35 +112,52 @@ export function getMemoHTML(data: MemoData): string {
   <title>MEMO</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: Arial, Helvetica, sans-serif; color: #000; background: #fff; }
+    body { 
+      font-family: Tahoma, Geneva, Verdana, sans-serif; 
+      color: #000; 
+      background: #fff; 
+    }
     .page { max-width: 794px; min-height: 1123px; margin: 0 auto; padding: 50px 60px 170px; position: relative; }
-    .header { text-align: center; margin-bottom: 20px; }
+    .header { text-align: center; margin-bottom: 15px; }
     .header img { height: 78px; width: auto; display: inline-block; }
-    .title-block { text-align: center; margin: 18px 0 22px; }
-    .title-block h1 { font-size: 19px; font-weight: bold; text-transform: uppercase; line-height: 1.4; }
+    
+    /* Header Titles: Arial Bold 18 & 16 */
+    .title-block { text-align: center; margin: 18px 0 22px; font-family: Arial, Helvetica, sans-serif; }
+    .title-block .office-title { font-size: 18px; font-weight: bold; text-transform: uppercase; line-height: 1.3; }
+    .title-block .memo-title { font-size: 16px; font-weight: bold; text-transform: uppercase; line-height: 1.3; margin-top: 4px; }
+    
     .top-rule { border-top: 2.5px solid #000; margin-bottom: 10px; }
     .fields { margin: 10px 0 0; }
-    .field { display: flex; font-size: 13.5px; font-weight: bold; line-height: 2; }
-    .field .label { width: 95px; flex-shrink: 0; text-transform: uppercase; }
-    .field .colon { width: 20px; flex-shrink: 0; }
-    .field .value { flex: 1; }
-    .bottom-rule { border-top: 2.5px solid #000; margin: 12px 0 40px; }
-    .body-content { margin: 0 0 40px; font-size: 13.5px; line-height: 1.8; text-align: justify; min-height: 120px; }
-    .body-content p { margin-bottom: 10px; }
-    .body-content table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 12.5px; page-break-inside: avoid; break-inside: avoid; }
+    
+    /* Fields: Tahoma Bold 12pt (16px) */
+    .field { display: flex; font-size: 12pt; font-weight: bold; line-height: 2; font-family: Tahoma, Geneva, Verdana, sans-serif; }
+    .field .label { width: 110px; flex-shrink: 0; text-transform: uppercase; }
+    .field .colon { width: 25px; flex-shrink: 0; }
+    .field .value { flex: 1; text-transform: uppercase; }
+    
+    .bottom-rule { border-top: 2.5px solid #000; margin: 12px 0 30px; }
+    
+    /* Body: Tahoma Bold 12pt (16px) */
+    .body-content { 
+      margin: 0 0 30px; 
+      font-size: 12pt; 
+      font-weight: bold; 
+      line-height: 1.8; 
+      text-align: justify; 
+      min-height: 120px; 
+      font-family: Tahoma, Geneva, Verdana, sans-serif;
+    }
+    .body-content p { margin-bottom: 12px; }
+    .body-content table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 11pt; page-break-inside: avoid; break-inside: avoid; }
     .body-content table th, .body-content table td { border: 1px solid #333; padding: 6px 10px; text-align: left; vertical-align: top; }
-    .body-content table th { background: #f0ede4; font-weight: bold; text-transform: uppercase; font-size: 11px; }
+    .body-content table th { background: #f0ede4; font-weight: bold; text-transform: uppercase; font-size: 10pt; }
 
-    /* Signature section container - ensures proper spacing, mirrors LetterTemplate.ts */
     .signature-section {
       margin-top: 30px;
       page-break-inside: avoid;
       break-inside: avoid;
     }
 
-    /* Invisible marker painted immediately before the signature block so
-       the PDF/e-sign pipeline can locate it unambiguously instead of
-       pattern-matching visible text. See SIGNATURE_ANCHOR_TEXT above. */
     .signature-anchor {
       font-size: 1px;
       line-height: 1px;
@@ -178,31 +167,44 @@ export function getMemoHTML(data: MemoData): string {
       user-select: none;
     }
 
-    /* Signature block - displayed right after the anchor. margin-top gives
-       the embedded signature image (placed relative to the anchor above)
-       clearance so it doesn't overlap the printed name/title text. */
+    /* Signature: Tahoma Bold 12pt (16px) */
     .signature {
-      font-size: 13.5px;
+      font-size: 12pt;
+      font-weight: bold;
       text-align: left;
-      margin-top: 55px;
+      margin-top: 45px;
       page-break-inside: avoid;
       break-inside: avoid;
+      font-family: Tahoma, Geneva, Verdana, sans-serif;
     }
-    .signature .signatory-name { font-weight: bold; text-transform: uppercase; margin-bottom: 4px; }
-    .signature .org-unit { font-weight: bold; text-decoration: underline; text-transform: uppercase; }
-    .signature .drafted-by { font-weight: normal; text-transform: lowercase; margin-top: 4px; font-size: 12px; color: #333; }
+    .signature .signatory-name { text-transform: uppercase; margin-bottom: 2px; }
+    .signature .org-unit { text-transform: uppercase; }
+    
+    /* Enclosure: Tahoma 12pt */
+    .signature .enclosure { font-weight: normal; font-size: 12pt; margin-top: 8px; }
+    
+    /* Drafted By: Tahoma 6pt Italic Underline */
+    .signature .drafted-by { 
+      font-weight: normal; 
+      font-style: italic; 
+      text-decoration: underline; 
+      text-transform: lowercase; 
+      margin-top: 6px; 
+      font-size: 6pt; 
+      color: #000; 
+    }
 
     .footer { position: fixed; bottom: 30px; left: 60px; right: 60px; border-top: 1px solid #999; padding-top: 14px; }
     .footer-top { display: flex; align-items: center; gap: 18px; }
     .footer-emblem { flex: 0 0 70px; }
     .footer-emblem img { width: 70px; height: 70px; display: block; object-fit: contain; }
-    .footer-text { flex: 1; text-align: right; font-size: 11px; color: #1a1a1a; }
+    .footer-text { flex: 1; text-align: right; font-size: 10pt; color: #1a1a1a; }
     .footer-text p { margin: 2px 0; line-height: 1.5; }
-    .footer-tagline { text-align: right; font-size: 12px; font-weight: bold; color: #1E4620; margin-top: 8px; }
+    .footer-tagline { text-align: right; font-size: 11pt; font-weight: bold; color: #1E4620; margin-top: 8px; }
 
     @media (max-width: 600px) {
       .page { padding: 30px 20px 170px; }
-      .field .label { width: 70px; }
+      .field .label { width: 80px; }
       .footer { left: 20px; right: 20px; }
       .footer-top { flex-direction: column; text-align: center; gap: 10px; }
       .footer-text, .footer-tagline { text-align: center; }
@@ -216,7 +218,8 @@ export function getMemoHTML(data: MemoData): string {
   </div>
 
   <div class="title-block">
-    <h1>OFFICE OF THE REGISTRAR HIGH COURT<br/>INTERNAL MEMO</h1>
+    <div class="office-title">OFFICE OF THE REGISTRAR HIGH COURT</div>
+    <div class="memo-title">INTERNAL MEMO</div>
   </div>
 
   <div class="top-rule"></div>
@@ -231,15 +234,13 @@ export function getMemoHTML(data: MemoData): string {
     ${formatBodyHtml(body)}
   </div>
 
-  <!-- Signature section with anchor marker -->
   <div class="signature-section">
-    <!-- Explicit, unambiguous anchor for signature-placement detection -->
     <div class="signature-anchor" aria-hidden="true">${SIGNATURE_ANCHOR_TEXT}</div>
 
-    <!-- Signature block – displayed immediately after the anchor -->
     <div class="signature">
       <div class="signatory-name">${escaped(signatureName || from || "")}</div>
-      <div class="org-unit">${escaped(signatureTitle || "Registrar, High Court")}</div>
+      <div class="org-unit">${escaped(signatureTitle || "REGISTRAR, HIGH COURT")}</div>
+      ${enclosure ? `<div class="enclosure">${escaped(enclosure)}</div>` : ""}
       ${draftedByInitials ? `<div class="drafted-by">rhc/${escaped(draftedByInitials)}</div>` : ""}
     </div>
   </div>

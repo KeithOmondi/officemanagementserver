@@ -11,7 +11,11 @@ export type DocumentEntityType =
     | 'ticket'
     | 'medicalClaim'
     | 'generalRequest'   // Unified - includes all security/personnel requests
-    | 'securityRequest'; // Deprecated - kept for backward compatibility
+    | 'securityRequest'  // Deprecated - kept for backward compatibility
+    | 'visa'             // Visa support documents
+    | 'protocol'         // Protocol event documents
+    | 'club'             // Club membership documents
+    | 'utility_memo';    // Utility memo documents
 
 export type DocumentStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected' | 'returned';
 
@@ -200,6 +204,10 @@ export const DOCUMENT_ENTITY_LABELS: Record<DocumentEntityType, string> = {
     medicalClaim: 'Medical Claim',
     generalRequest: 'General Request',
     securityRequest: 'Security Request (Deprecated)',
+    visa: 'Visa Support',
+    protocol: 'Protocol Event',
+    club: 'Club Membership',
+    utility_memo: 'Utility Memo',
 };
 
 export const DOCUMENT_ENTITY_ICONS: Record<DocumentEntityType, string> = {
@@ -212,6 +220,10 @@ export const DOCUMENT_ENTITY_ICONS: Record<DocumentEntityType, string> = {
     medicalClaim: 'Stethoscope',
     generalRequest: 'FileText',
     securityRequest: 'Shield',
+    visa: 'Plane',
+    protocol: 'Calendar',
+    club: 'Users',
+    utility_memo: 'FileText',
 };
 
 export const DOCUMENT_ENTITY_COLORS: Record<DocumentEntityType, string> = {
@@ -224,6 +236,10 @@ export const DOCUMENT_ENTITY_COLORS: Record<DocumentEntityType, string> = {
     medicalClaim: 'text-emerald-600 bg-emerald-50',
     generalRequest: 'text-amber-600 bg-amber-50',
     securityRequest: 'text-gray-600 bg-gray-50',
+    visa: 'text-indigo-600 bg-indigo-50',
+    protocol: 'text-blue-600 bg-blue-50',
+    club: 'text-purple-600 bg-purple-50',
+    utility_memo: 'text-amber-600 bg-amber-50',
 };
 
 export const DOCUMENT_STATUS_LABELS: Record<DocumentStatus, string> = {
@@ -296,7 +312,11 @@ export function isDocumentEntityType(value: string): value is DocumentEntityType
         'ticket',
         'medicalClaim',
         'generalRequest',
-        'securityRequest'
+        'securityRequest',
+        'visa',
+        'protocol',
+        'club',
+        'utility_memo'
     ].includes(value);
 }
 

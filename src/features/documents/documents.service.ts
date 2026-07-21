@@ -10,6 +10,11 @@ import type {
   DocumentMark,
   DocumentFlowEntry,
   DocumentResponse,
+  FollowUp,
+  FollowUpComment,
+  FollowUpWithComments,
+  FollowUpPaginationResponse,
+  FollowUpReminder,
 } from './documents.types';
 import type {
   CreateComposedDocumentInput,
@@ -22,6 +27,12 @@ import type {
   ComposeMemoInput,
   ComposeLetterInput,
   UpdateMarkInput,
+  CreateFollowUpInput,
+  UpdateFollowUpInput,
+  CompleteFollowUpInput,
+  CancelFollowUpInput,
+  AddFollowUpCommentInput,
+  FollowUpFilters,
 } from './documents.validator';
 import axios from 'axios';
 import { generateOTP } from '../../utils/SendOTP';
@@ -127,7 +138,37 @@ const RESPONSE_JOIN = `
   JOIN users ru ON ru.id = r.responded_by
 `;
 
+// ── Follow-up SELECT fragments ───────────────────────────────────────────────
+
+const FOLLOW_UP_SELECT = `
+  fu.id, fu.document_id, fu.mark_id, fu.title, fu.description,
+  fu.assigned_to, u.full_name AS assigned_to_name,
+  fu.created_by, c.full_name AS created_by_name,
+  fu.due_date, fu.priority, fu.status,
+  fu.completed_at, fu.cancelled_at, fu.cancellation_reason,
+  fu.completion_notes, fu.is_active, fu.created_at, fu.updated_at,
+  (SELECT COUNT(*) FROM follow_up_comments fc WHERE fc.follow_up_id = fu.id) AS comment_count
+`;
+
+const FOLLOW_UP_JOIN = `
+  FROM follow_ups fu
+  LEFT JOIN users u ON u.id = fu.assigned_to
+  LEFT JOIN users c ON c.id = fu.created_by
+`;
+
+const FOLLOW_UP_COMMENT_SELECT = `
+  fc.id, fc.follow_up_id, fc.user_id,
+  u.full_name AS user_name,
+  fc.comment, fc.file_url, fc.file_public_id, fc.created_at
+`;
+
+const FOLLOW_UP_COMMENT_JOIN = `
+  FROM follow_up_comments fc
+  LEFT JOIN users u ON u.id = fc.user_id
+`;
+
 const ALLOWED_SORT = new Set(['created_at', 'updated_at', 'title', 'status']);
+const ALLOWED_FOLLOW_UP_SORT = new Set(['created_at', 'due_date', 'priority', 'status', 'title']);
 
 // ─── Service ───────────────────────────────────────────────────────────────────
 
@@ -397,7 +438,7 @@ export class DocumentService {
   }
 
   static async findByIdWithAnnotations(id: string): Promise<DocumentWithAnnotations | null> {
-    const [docResult, annotResult, markResult, historyResult, responseResult] = await Promise.all([
+    const [docResult, annotResult, markResult, historyResult, responseResult, followUpResult] = await Promise.all([
       pool.query(
         `SELECT ${DOC_SELECT} ${DOC_JOIN} WHERE d.id = $1 AND d.is_active = true`,
         [id]
@@ -427,6 +468,12 @@ export class DocumentService {
          ORDER BY r.response_number ASC`,
         [id]
       ),
+      pool.query(
+        `SELECT ${FOLLOW_UP_SELECT} ${FOLLOW_UP_JOIN}
+         WHERE fu.document_id = $1 AND fu.is_active = true
+         ORDER BY fu.due_date ASC`,
+        [id]
+      ),
     ]);
 
     if (!docResult.rows[0]) return null;
@@ -437,6 +484,7 @@ export class DocumentService {
       active_mark: markResult.rows[0] ?? null,
       mark_history: historyResult.rows,
       responses: responseResult.rows,
+      follow_ups: followUpResult.rows,
       response_count: parseInt(docResult.rows[0].response_count ?? '0', 10),
     };
   }
@@ -2015,5 +2063,676 @@ export class DocumentService {
     }
 
     return rows.length;
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  //  FOLLOW-UP OPERATIONS
+  // ════════════════════════════════════════════════════════════════════════════
+
+  // ── Create Follow-Up ────────────────────────────────────────────────────────
+
+  static async createFollowUp(
+    input: CreateFollowUpInput,
+    createdBy: string
+  ): Promise<FollowUp> {
+    console.log('[FollowUp] Creating new follow-up');
+
+    // Validate document exists
+    const doc = await this.findById(input.document_id);
+    if (!doc) {
+      throw new AppError(404, 'Document not found');
+    }
+
+    // Validate mark exists and is active
+    const { rows: markRows } = await pool.query(
+      `SELECT id, bring_up_date FROM document_marks
+       WHERE id = $1 AND document_id = $2 AND is_active = true`,
+      [input.mark_id, input.document_id]
+    );
+    if (!markRows.length) {
+      throw new AppError(404, 'Active mark not found for this document');
+    }
+
+    // Validate assigned user exists
+    const { rows: userRows } = await pool.query(
+      `SELECT id, full_name FROM users WHERE id = $1 AND is_active = true`,
+      [input.assigned_to]
+    );
+    if (!userRows.length) {
+      throw new AppError(400, 'Assigned user not found or inactive');
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const { rows } = await client.query(
+        `INSERT INTO follow_ups
+           (document_id, mark_id, title, description, assigned_to, created_by, due_date, priority, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending')
+         RETURNING id`,
+        [
+          input.document_id,
+          input.mark_id,
+          input.title.trim(),
+          input.description?.trim() || null,
+          input.assigned_to,
+          createdBy,
+          input.due_date,
+          input.priority,
+        ]
+      );
+
+      const followUpId = rows[0].id;
+
+      // Log to document flow
+      await this.logFlow(
+        client,
+        input.document_id,
+        'follow_up_created',
+        createdBy,
+        input.assigned_to,
+        `Follow-up created: ${input.title}`
+      );
+
+      await client.query('COMMIT');
+
+      // Create notification for assigned user
+      await this.createFollowUpNotification(
+        input.assigned_to,
+        createdBy,
+        input.document_id,
+        followUpId,
+        input.title,
+        'created'
+      );
+
+      console.log(`[FollowUp] Follow-up created successfully with ID: ${followUpId}`);
+      return (await this.getFollowUpById(followUpId))!;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      console.error('[FollowUp] Error creating follow-up:', err);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  // ── Get Follow-Ups by Filters ─────────────────────────────────────────────
+
+  static async getFollowUps(
+    filters: FollowUpFilters
+  ): Promise<FollowUpPaginationResponse> {
+    const {
+      document_id,
+      assigned_to,
+      status,
+      priority,
+      due_from,
+      due_to,
+      search,
+      page = 1,
+      limit = 20,
+      sort_by = 'due_date',
+      sort_order = 'ASC',
+    } = filters;
+
+    const sortCol = ALLOWED_FOLLOW_UP_SORT.has(sort_by) ? `fu.${sort_by}` : 'fu.due_date';
+    const sortDir = sort_order === 'ASC' ? 'ASC' : 'DESC';
+    const offset = (page - 1) * limit;
+
+    const conditions: string[] = ['fu.is_active = true'];
+    const values: unknown[] = [];
+    let p = 1;
+
+    if (document_id) {
+      conditions.push(`fu.document_id = $${p}`);
+      values.push(document_id);
+      p++;
+    }
+    if (assigned_to) {
+      conditions.push(`fu.assigned_to = $${p}`);
+      values.push(assigned_to);
+      p++;
+    }
+    if (status) {
+      conditions.push(`fu.status = $${p}`);
+      values.push(status);
+      p++;
+    }
+    if (priority) {
+      conditions.push(`fu.priority = $${p}`);
+      values.push(priority);
+      p++;
+    }
+    if (due_from) {
+      conditions.push(`fu.due_date >= $${p}`);
+      values.push(due_from);
+      p++;
+    }
+    if (due_to) {
+      conditions.push(`fu.due_date <= $${p}`);
+      values.push(due_to);
+      p++;
+    }
+    if (search) {
+      conditions.push(`(fu.title ILIKE $${p} OR fu.description ILIKE $${p})`);
+      values.push(`%${search}%`);
+      p++;
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const [countResult, dataResult] = await Promise.all([
+      pool.query(
+        `SELECT COUNT(*) AS total ${FOLLOW_UP_JOIN} ${where}`,
+        values
+      ),
+      pool.query(
+        `SELECT ${FOLLOW_UP_SELECT} ${FOLLOW_UP_JOIN}
+         ${where}
+         ORDER BY ${sortCol} ${sortDir}
+         LIMIT $${p} OFFSET $${p + 1}`,
+        [...values, limit, offset]
+      ),
+    ]);
+
+    const total = parseInt(countResult.rows[0]?.total ?? '0', 10);
+    return {
+      data: dataResult.rows,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  // ── Get Follow-Ups by Document ────────────────────────────────────────────
+
+ static async getFollowUpsByDocument(
+  documentId: string,
+  filters?: Omit<FollowUpFilters, 'document_id'>
+): Promise<FollowUpPaginationResponse> {
+  return this.getFollowUps({
+    sort_by: 'due_date',  // Provide default
+    sort_order: 'ASC',   // Provide default
+    ...filters,
+    document_id: documentId,
+  });
+}
+
+  // ── Get Follow-Ups by User ────────────────────────────────────────────────
+
+ static async getFollowUpsByUser(
+  userId: string,
+  filters?: Omit<FollowUpFilters, 'assigned_to'>
+): Promise<FollowUpPaginationResponse> {
+  return this.getFollowUps({
+    sort_by: 'due_date',  // Provide default
+    sort_order: 'ASC',   // Provide default
+    ...filters,
+    assigned_to: userId,
+  });
+}
+
+  // ── Get Follow-Up by ID ───────────────────────────────────────────────────
+
+  static async getFollowUpById(followUpId: string): Promise<FollowUp | null> {
+    const { rows } = await pool.query(
+      `SELECT ${FOLLOW_UP_SELECT} ${FOLLOW_UP_JOIN}
+       WHERE fu.id = $1 AND fu.is_active = true`,
+      [followUpId]
+    );
+    return rows[0] || null;
+  }
+
+  // ── Get Follow-Up with Comments ───────────────────────────────────────────
+
+  static async getFollowUpWithComments(followUpId: string): Promise<FollowUpWithComments | null> {
+    const followUp = await this.getFollowUpById(followUpId);
+    if (!followUp) return null;
+
+    const { rows: comments } = await pool.query(
+      `SELECT ${FOLLOW_UP_COMMENT_SELECT} ${FOLLOW_UP_COMMENT_JOIN}
+       WHERE fc.follow_up_id = $1
+       ORDER BY fc.created_at ASC`,
+      [followUpId]
+    );
+
+    return {
+      ...followUp,
+      comments,
+    };
+  }
+
+  // ── Update Follow-Up ──────────────────────────────────────────────────────
+
+  static async updateFollowUp(
+    followUpId: string,
+    input: UpdateFollowUpInput,
+    userId: string
+  ): Promise<FollowUp> {
+    console.log(`[FollowUp] Updating follow-up ${followUpId}`);
+
+    const existing = await this.getFollowUpById(followUpId);
+    if (!existing) {
+      throw new AppError(404, 'Follow-up not found');
+    }
+
+    // Check if user has permission (creator or assigned user or super admin)
+    const { rows: userRows } = await pool.query(
+      `SELECT role FROM users WHERE id = $1 AND is_active = true`,
+      [userId]
+    );
+    const role = userRows[0]?.role;
+
+    if (existing.created_by !== userId && existing.assigned_to !== userId && role !== 'super_admin') {
+      throw new AppError(403, 'You do not have permission to update this follow-up');
+    }
+
+    const updates: string[] = [];
+    const values: unknown[] = [];
+    let p = 1;
+
+    if (input.title !== undefined) {
+      updates.push(`title = $${p++}`);
+      values.push(input.title.trim());
+    }
+    if (input.description !== undefined) {
+      updates.push(`description = $${p++}`);
+      values.push(input.description.trim() || null);
+    }
+    if (input.assigned_to !== undefined) {
+      // Validate user exists
+      const { rows: userCheck } = await pool.query(
+        `SELECT id FROM users WHERE id = $1 AND is_active = true`,
+        [input.assigned_to]
+      );
+      if (!userCheck.length) {
+        throw new AppError(400, 'Assigned user not found or inactive');
+      }
+      updates.push(`assigned_to = $${p++}`);
+      values.push(input.assigned_to);
+    }
+    if (input.due_date !== undefined) {
+      updates.push(`due_date = $${p++}`);
+      values.push(input.due_date);
+    }
+    if (input.priority !== undefined) {
+      updates.push(`priority = $${p++}`);
+      values.push(input.priority);
+    }
+    if (input.status !== undefined) {
+      updates.push(`status = $${p++}`);
+      values.push(input.status);
+    }
+    if (input.completion_notes !== undefined && input.status === 'completed') {
+      updates.push(`completion_notes = $${p++}`);
+      values.push(input.completion_notes.trim() || null);
+    }
+    if (input.cancellation_reason !== undefined && input.status === 'cancelled') {
+      updates.push(`cancellation_reason = $${p++}`);
+      values.push(input.cancellation_reason.trim() || null);
+    }
+
+    if (!updates.length) {
+      throw new AppError(400, 'No fields to update');
+    }
+
+    updates.push(`updated_at = NOW()`);
+    values.push(followUpId);
+
+    await pool.query(
+      `UPDATE follow_ups SET ${updates.join(', ')} WHERE id = $${p}`,
+      values
+    );
+
+    // Log to document flow
+    await this.logFlow(
+      pool,
+      existing.document_id,
+      'follow_up_updated',
+      userId,
+      existing.assigned_to,
+      `Follow-up updated: ${existing.title}`
+    );
+
+    console.log(`[FollowUp] Follow-up ${followUpId} updated successfully`);
+    return (await this.getFollowUpById(followUpId))!;
+  }
+
+  // ── Complete Follow-Up ────────────────────────────────────────────────────
+
+  static async completeFollowUp(
+    followUpId: string,
+    userId: string,
+    input: CompleteFollowUpInput
+  ): Promise<FollowUp> {
+    console.log(`[FollowUp] Completing follow-up ${followUpId}`);
+
+    const existing = await this.getFollowUpById(followUpId);
+    if (!existing) {
+      throw new AppError(404, 'Follow-up not found');
+    }
+
+    if (existing.status === 'completed') {
+      throw new AppError(409, 'Follow-up is already completed');
+    }
+    if (existing.status === 'cancelled') {
+      throw new AppError(409, 'Follow-up has been cancelled');
+    }
+
+    // Check if user has permission (assigned user or super admin)
+    const { rows: userRows } = await pool.query(
+      `SELECT role FROM users WHERE id = $1 AND is_active = true`,
+      [userId]
+    );
+    const role = userRows[0]?.role;
+
+    if (existing.assigned_to !== userId && role !== 'super_admin') {
+      throw new AppError(403, 'Only the assigned user or a super admin can complete this follow-up');
+    }
+
+    await pool.query(
+      `UPDATE follow_ups
+       SET status = 'completed',
+           completed_at = NOW(),
+           completion_notes = $1,
+           updated_at = NOW()
+       WHERE id = $2`,
+      [input.completion_notes?.trim() || null, followUpId]
+    );
+
+    // Log to document flow
+    await this.logFlow(
+      pool,
+      existing.document_id,
+      'follow_up_completed',
+      userId,
+      existing.created_by,
+      `Follow-up completed: ${existing.title}`
+    );
+
+    // Notify creator that follow-up is completed
+    await this.createFollowUpNotification(
+      existing.created_by,
+      userId,
+      existing.document_id,
+      followUpId,
+      existing.title,
+      'completed'
+    );
+
+    console.log(`[FollowUp] Follow-up ${followUpId} completed successfully`);
+    return (await this.getFollowUpById(followUpId))!;
+  }
+
+  // ── Cancel Follow-Up ──────────────────────────────────────────────────────
+
+  static async cancelFollowUp(
+    followUpId: string,
+    userId: string,
+    input: CancelFollowUpInput
+  ): Promise<FollowUp> {
+    console.log(`[FollowUp] Cancelling follow-up ${followUpId}`);
+
+    const existing = await this.getFollowUpById(followUpId);
+    if (!existing) {
+      throw new AppError(404, 'Follow-up not found');
+    }
+
+    if (existing.status === 'completed') {
+      throw new AppError(409, 'Cannot cancel a completed follow-up');
+    }
+    if (existing.status === 'cancelled') {
+      throw new AppError(409, 'Follow-up is already cancelled');
+    }
+
+    // Check if user has permission (creator, assigned user, or super admin)
+    const { rows: userRows } = await pool.query(
+      `SELECT role FROM users WHERE id = $1 AND is_active = true`,
+      [userId]
+    );
+    const role = userRows[0]?.role;
+
+    if (existing.created_by !== userId && existing.assigned_to !== userId && role !== 'super_admin') {
+      throw new AppError(403, 'You do not have permission to cancel this follow-up');
+    }
+
+    await pool.query(
+      `UPDATE follow_ups
+       SET status = 'cancelled',
+           cancelled_at = NOW(),
+           cancellation_reason = $1,
+           updated_at = NOW()
+       WHERE id = $2`,
+      [input.cancellation_reason.trim(), followUpId]
+    );
+
+    // Log to document flow
+    await this.logFlow(
+      pool,
+      existing.document_id,
+      'follow_up_cancelled',
+      userId,
+      existing.assigned_to,
+      `Follow-up cancelled: ${existing.title} - ${input.cancellation_reason}`
+    );
+
+    // Notify assigned user that follow-up was cancelled
+    if (existing.assigned_to !== userId) {
+      await this.createFollowUpNotification(
+        existing.assigned_to,
+        userId,
+        existing.document_id,
+        followUpId,
+        existing.title,
+        'cancelled',
+        input.cancellation_reason
+      );
+    }
+
+    console.log(`[FollowUp] Follow-up ${followUpId} cancelled successfully`);
+    return (await this.getFollowUpById(followUpId))!;
+  }
+
+  // ── Add Follow-Up Comment ────────────────────────────────────────────────
+
+  static async addFollowUpComment(
+    followUpId: string,
+    input: AddFollowUpCommentInput,
+    userId: string,
+    file?: Express.Multer.File
+  ): Promise<FollowUpComment> {
+    console.log(`[FollowUp] Adding comment to follow-up ${followUpId}`);
+
+    const existing = await this.getFollowUpById(followUpId);
+    if (!existing) {
+      throw new AppError(404, 'Follow-up not found');
+    }
+
+    let uploaded: { secure_url: string; public_id: string } | null = null;
+    if (file) {
+      uploaded = await uploadToCloudinary(file, 'registrar/follow-up-comments');
+    }
+
+    const { rows } = await pool.query(
+      `INSERT INTO follow_up_comments
+         (follow_up_id, user_id, comment, file_url, file_public_id)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id`,
+      [
+        followUpId,
+        userId,
+        input.comment.trim(),
+        uploaded?.secure_url || null,
+        uploaded?.public_id || null,
+      ]
+    );
+
+    // Log to document flow
+    await this.logFlow(
+      pool,
+      existing.document_id,
+      'follow_up_comment_added',
+      userId,
+      existing.assigned_to,
+      `Comment added to follow-up: ${existing.title}`
+    );
+
+    const { rows: commentRows } = await pool.query(
+      `SELECT ${FOLLOW_UP_COMMENT_SELECT} ${FOLLOW_UP_COMMENT_JOIN}
+       WHERE fc.id = $1`,
+      [rows[0].id]
+    );
+
+    console.log(`[FollowUp] Comment added to follow-up ${followUpId}`);
+    return commentRows[0];
+  }
+
+  // ── Get Follow-Up Comments ───────────────────────────────────────────────
+
+  static async getFollowUpComments(followUpId: string): Promise<FollowUpComment[]> {
+    const { rows } = await pool.query(
+      `SELECT ${FOLLOW_UP_COMMENT_SELECT} ${FOLLOW_UP_COMMENT_JOIN}
+       WHERE fc.follow_up_id = $1
+       ORDER BY fc.created_at ASC`,
+      [followUpId]
+    );
+    return rows;
+  }
+
+  // ── Get Follow-Up Thread ─────────────────────────────────────────────────
+
+  static async getFollowUpThread(followUpId: string): Promise<FollowUpWithComments | null> {
+    return this.getFollowUpWithComments(followUpId);
+  }
+
+  // ── Follow-Up Notification Helper ────────────────────────────────────────
+
+  private static async createFollowUpNotification(
+    userId: string,
+    actorId: string,
+    documentId: string,
+    followUpId: string,
+    title: string,
+    action: 'created' | 'completed' | 'cancelled' | 'updated',
+    reason?: string
+  ): Promise<void> {
+    try {
+      const { rows: userRows } = await pool.query(
+        `SELECT full_name FROM users WHERE id = $1 AND is_active = true`,
+        [actorId]
+      );
+      const actorName = userRows[0]?.full_name || 'A user';
+
+      const messages = {
+        created: `created a follow-up "${title}" for you.`,
+        completed: `has completed the follow-up "${title}".`,
+        cancelled: `has cancelled the follow-up "${title}".${reason ? ` Reason: ${reason}` : ''}`,
+        updated: `has updated the follow-up "${title}".`,
+      };
+
+      await NotificationsService.createNotification({
+        user_id: userId,
+        type_name: 'follow_up',
+        title: `Follow-up ${action}: ${title}`,
+        message: `${actorName} ${messages[action]}`,
+        icon: 'Clipboard',
+        color: action === 'created' ? '#2563eb' : action === 'completed' ? '#16a34a' : '#dc2626',
+        link: `/documents/${documentId}?followUp=${followUpId}`,
+        priority: 'high',
+        metadata: {
+          document_id: documentId,
+          follow_up_id: followUpId,
+          action,
+        },
+        send_email: true,
+      });
+    } catch (error) {
+      console.error(`[FollowUp] Failed to create notification for user ${userId}:`, error);
+    }
+  }
+
+  // ── Send Follow-Up Reminders ─────────────────────────────────────────────
+
+  static async sendFollowUpReminders(io?: any): Promise<{ dueToday: number; overdue: number }> {
+    console.log('[FollowUp] Sending follow-up reminders');
+
+    // Get follow-ups due today
+    const dueTodayResult = await pool.query(
+      `SELECT ${FOLLOW_UP_SELECT} ${FOLLOW_UP_JOIN}
+       WHERE fu.status = 'pending'
+         AND fu.is_active = true
+         AND DATE(fu.due_date) = CURRENT_DATE`
+    );
+
+    // Get overdue follow-ups
+    const overdueResult = await pool.query(
+      `SELECT ${FOLLOW_UP_SELECT} ${FOLLOW_UP_JOIN}
+       WHERE fu.status = 'pending'
+         AND fu.is_active = true
+         AND DATE(fu.due_date) < CURRENT_DATE`
+    );
+
+    let dueTodayCount = 0;
+    for (const followUp of dueTodayResult.rows) {
+      try {
+        await NotificationsService.createNotification(
+          {
+            user_id: followUp.assigned_to,
+            type_name: 'follow_up_reminder',
+            title: `Follow-up due today: ${followUp.title}`,
+            message: `Follow-up "${followUp.title}" is due today.${followUp.description ? `\n\n${followUp.description}` : ''}`,
+            icon: 'Clock',
+            color: '#2563eb',
+            link: `/documents/${followUp.document_id}?followUp=${followUp.id}`,
+            priority: 'high',
+            metadata: {
+              document_id: followUp.document_id,
+              follow_up_id: followUp.id,
+              type: 'follow_up_due_today',
+            },
+            send_email: true,
+          },
+          io
+        );
+        dueTodayCount++;
+      } catch (error) {
+        console.error(`[FollowUp] Failed to send due today reminder for follow-up ${followUp.id}:`, error);
+      }
+    }
+
+    let overdueCount = 0;
+    for (const followUp of overdueResult.rows) {
+      try {
+        await NotificationsService.createNotification(
+          {
+            user_id: followUp.assigned_to,
+            type_name: 'follow_up_reminder',
+            title: `⚠️ Follow-up overdue: ${followUp.title}`,
+            message: `Follow-up "${followUp.title}" was due on ${new Date(followUp.due_date).toLocaleDateString()} and is now overdue.${followUp.description ? `\n\n${followUp.description}` : ''}`,
+            icon: 'AlertTriangle',
+            color: '#dc2626',
+            link: `/documents/${followUp.document_id}?followUp=${followUp.id}`,
+            priority: 'urgent',
+            metadata: {
+              document_id: followUp.document_id,
+              follow_up_id: followUp.id,
+              type: 'follow_up_overdue',
+              due_date: followUp.due_date,
+            },
+            send_email: true,
+          },
+          io
+        );
+        overdueCount++;
+      } catch (error) {
+        console.error(`[FollowUp] Failed to send overdue reminder for follow-up ${followUp.id}:`, error);
+      }
+    }
+
+    console.log(`[FollowUp] Sent ${dueTodayCount} due today reminders and ${overdueCount} overdue reminders`);
+    return { dueToday: dueTodayCount, overdue: overdueCount };
   }
 }

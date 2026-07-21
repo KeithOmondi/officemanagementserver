@@ -55,9 +55,20 @@ export const refTypeEnum = z.enum([
   'other',
 ]);
 
-// ── Signature Placement enum has been removed.
-// Signature is now placed either automatically (by detecting the signatory block)
-// or via absolute positioning using signature_position_x/y/width/height.
+// ── Follow-up Enums ──────────────────────────────────────────────────────────
+
+export const followUpStatusEnum = z.enum([
+  'pending',
+  'in_progress',
+  'completed',
+  'cancelled',
+]);
+
+export const followUpPriorityEnum = z.enum([
+  'low',
+  'normal',
+  'urgent',
+]);
 
 // ── Create composed document ────────────────────────────────────────────────
 
@@ -207,6 +218,21 @@ export const annotationIdSchema = z.object({
   }),
 });
 
+// ── Follow-up ID params ────────────────────────────────────────────────────
+
+export const followUpIdSchema = z.object({
+  params: z.object({
+    followUpId: z.string().uuid('Follow-up ID must be a valid UUID'),
+  }),
+});
+
+export const documentFollowUpIdSchema = z.object({
+  params: z.object({
+    id: z.string().uuid('Document ID must be a valid UUID'),
+    followUpId: z.string().uuid('Follow-up ID must be a valid UUID'),
+  }),
+});
+
 // ── Annotation ─────────────────────────────────────────────────────────────
 
 export const createAnnotationSchema = z.object({
@@ -310,6 +336,156 @@ export const updateMarkSchema = z.object({
     .refine((b) => b.instructions !== undefined || b.bring_up_date !== undefined, {
       message: 'At least one field (instructions or bring_up_date) must be provided',
     }),
+});
+
+// ════════════════════════════════════════════════════════════════════════
+//  Follow-up Schemas
+// ════════════════════════════════════════════════════════════════════════
+
+// ─── Date transformer helper ────────────────────────────────────────────────
+
+/**
+ * Transforms a date string to ISO datetime format.
+ * Accepts:
+ * - ISO datetime strings: "2026-07-23T00:00:00.000Z"
+ * - Date-only strings: "2026-07-23"
+ * - Date objects
+ */
+const transformDate = (val: unknown): string => {
+  if (val instanceof Date) {
+    return val.toISOString();
+  }
+  if (typeof val === 'string') {
+    // If it's a date-only string (YYYY-MM-DD), convert to ISO datetime
+    if (/^\d{4}-\d{2}-\d{2}$/.test(val)) {
+      return new Date(val + 'T00:00:00.000Z').toISOString();
+    }
+    // If it's already an ISO datetime, return as-is
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(val)) {
+      return val;
+    }
+    // If it's a date string like "2026-07-23T00:00:00", ensure it's valid
+    const parsed = new Date(val);
+    if (!isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+  }
+  // If it's not a string or Date, let Zod handle the error
+  return val as string;
+};
+
+// ─── Date validator helper ──────────────────────────────────────────────────
+
+/**
+ * Zod schema that accepts both date-only and datetime strings,
+ * and transforms them to ISO datetime format.
+ */
+const dateSchema = z
+  .union([
+    z.string().datetime({ message: 'Invalid due date format' }),
+    z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Invalid date format (expected YYYY-MM-DD)'),
+    z.date(),
+  ])
+  .transform(transformDate);
+
+// ─── Create Follow-Up Schema ───────────────────────────────────────────────
+
+export const createFollowUpSchema = z.object({
+  body: z
+    .object({
+      document_id: z.string().uuid('Document ID must be a valid UUID'),
+      mark_id: z.string().uuid('Mark ID must be a valid UUID'),
+      title: z.string().min(1, 'Title is required').max(255).trim(),
+      description: z.string().max(2000).trim().optional(),
+      assigned_to: z.string().uuid('Must be a valid user ID'),
+      due_date: dateSchema,
+      priority: followUpPriorityEnum.default('normal'),
+    })
+    .strict(),
+});
+
+// ─── Update Follow-Up Schema ───────────────────────────────────────────────
+
+export const updateFollowUpSchema = z.object({
+  params: z.object({
+    followUpId: z.string().uuid('Follow-up ID must be a valid UUID'),
+  }),
+  body: z
+    .object({
+      title: z.string().min(1).max(255).trim().optional(),
+      description: z.string().max(2000).trim().optional(),
+      assigned_to: z.string().uuid('Must be a valid user ID').optional(),
+      due_date: dateSchema.optional(),
+      priority: followUpPriorityEnum.optional(),
+      status: followUpStatusEnum.optional(),
+      completion_notes: z.string().max(2000).trim().optional(),
+      cancellation_reason: z.string().max(1000).trim().optional(),
+    })
+    .strict()
+    .refine((b) => Object.keys(b).length > 0, {
+      message: 'At least one field must be provided to update',
+    }),
+});
+
+// ─── Complete Follow-Up Schema ─────────────────────────────────────────────
+
+export const completeFollowUpSchema = z.object({
+  body: z
+    .object({
+      completion_notes: z.string().max(2000).trim().optional(),
+    })
+    .strict(),
+});
+
+// ─── Cancel Follow-Up Schema ───────────────────────────────────────────────
+
+export const cancelFollowUpSchema = z.object({
+  body: z
+    .object({
+      cancellation_reason: z.string().min(1, 'Cancellation reason is required').max(1000).trim(),
+    })
+    .strict(),
+});
+
+// ─── Add Follow-Up Comment Schema ─────────────────────────────────────────
+
+export const addFollowUpCommentSchema = z.object({
+  params: z.object({
+    followUpId: z.string().uuid('Follow-up ID must be a valid UUID'),
+  }),
+  body: z
+    .object({
+      comment: z.string().min(1, 'Comment is required').max(2000).trim(),
+    })
+    .strict(),
+});
+
+// ─── Follow-Up Filters Schema ──────────────────────────────────────────────
+
+export const followUpFiltersSchema = z.object({
+  query: z.object({
+    document_id: z.string().uuid('Document ID must be a valid UUID').optional(),
+    assigned_to: z.string().uuid('User ID must be a valid UUID').optional(),
+    status: followUpStatusEnum.optional(),
+    priority: followUpPriorityEnum.optional(),
+    due_from: dateSchema.optional(),
+    due_to: dateSchema.optional(),
+    search: z.string().trim().max(100).optional(),
+    page: z
+      .string()
+      .regex(/^\d+$/)
+      .transform(Number)
+      .pipe(z.number().int().min(1))
+      .optional(),
+    limit: z
+      .string()
+      .regex(/^\d+$/)
+      .transform(Number)
+      .pipe(z.number().int().min(1).max(100))
+      .optional(),
+    sort_by: z.enum(['created_at', 'due_date', 'priority', 'status', 'title']).default('due_date'),
+    sort_order: z.enum(['ASC', 'DESC']).default('ASC'),
+  }),
 });
 
 // ════════════════════════════════════════════════════════════════════════
@@ -424,3 +600,12 @@ export type UpdateMarkInput = z.infer<typeof updateMarkSchema>['body'];
 export type RedirectToFolderInput = z.infer<typeof redirectToFolderSchema>['body'];
 export type RemoveFromFolderInput = z.infer<typeof removeFromFolderSchema>['body'];
 export type GetFolderDocumentsQuery = z.infer<typeof getFolderDocumentsSchema>['query'];
+
+// ── Follow-up types ────────────────────────────────────────────────────────
+
+export type CreateFollowUpInput = z.infer<typeof createFollowUpSchema>['body'];
+export type UpdateFollowUpInput = z.infer<typeof updateFollowUpSchema>['body'];
+export type CompleteFollowUpInput = z.infer<typeof completeFollowUpSchema>['body'];
+export type CancelFollowUpInput = z.infer<typeof cancelFollowUpSchema>['body'];
+export type AddFollowUpCommentInput = z.infer<typeof addFollowUpCommentSchema>['body'];
+export type FollowUpFilters = z.infer<typeof followUpFiltersSchema>['query'];

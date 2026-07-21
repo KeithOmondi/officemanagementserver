@@ -1,5 +1,3 @@
-// src/templates/LetterTemplate.ts
-
 export interface LetterData {
   ref: string;
   date: string;
@@ -12,7 +10,6 @@ export interface LetterData {
   enclosures?: string;
   logoUrl?: string;
   footerEmblemUrl?: string;
-  // signaturePlacement is removed; placement is now automatic via the anchor marker.
 }
 
 const DEFAULT_LOGO_URL =
@@ -20,9 +17,6 @@ const DEFAULT_LOGO_URL =
 const DEFAULT_FOOTER_EMBLEM_URL =
   'https://res.cloudinary.com/do0yflasl/image/upload/v1784364354/ORHC_EMBLEM_wzmp94.jpg';
 
-// This exact string is what embedSignature.ts looks for to locate the
-// signature block reliably. It MUST stay in sync with SIGNATURE_ANCHOR_TEXT
-// in src/utils/embedSignature.ts.
 export const SIGNATURE_ANCHOR_TEXT = 'RHC-SIGNATURE-ANCHOR';
 
 function escapeHtml(text: string): string {
@@ -44,6 +38,39 @@ function formatBody(html: string): string {
     .replace(/(?:<div>\s*(?:<br\s*\/?>)?\s*<\/div>\s*){2,}/gi, '<div><br></div>')
     .replace(/(?:<p>\s*(?:<br\s*\/?>)?\s*<\/p>\s*){2,}/gi, '<p><br></p>')
     .replace(/(?:<br\s*\/?>\s*){3,}/gi, '<br/><br/>');
+}
+
+function formatToBlock(toText: string): string {
+  if (!toText) return '';
+  const lines = toText.split('\n').map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return '';
+
+  const salutationRegex = /^(YOUR HONOR|DEAR SIR|DEAR MADAM|DEAR JUDGE|RESPECTED SIR|RESPECTED MADAM)[,. ]*$/i;
+
+  let salutationLine = '';
+  let locationLine = '';
+  let bodyLines = [...lines];
+
+  // Extract salutation
+  if (lines.length > 0 && salutationRegex.test(lines[lines.length - 1])) {
+    salutationLine = lines.pop()!;
+    bodyLines = [...lines];
+  }
+
+  // Extract location line (e.g. NAIROBI)
+  if (bodyLines.length > 0) {
+    locationLine = bodyLines.pop()!;
+  }
+
+  const bodyHtml = bodyLines.map((line) => `<p>${escapeHtml(line)}</p>`).join('');
+  const locationHtml = locationLine
+    ? `<p class="to-location">${escapeHtml(locationLine)}</p>`
+    : '';
+  const salutationHtml = salutationLine
+    ? `<p class="to-salutation">${escapeHtml(salutationLine)}</p>`
+    : '';
+
+  return `<div class="to-block">${bodyHtml}${locationHtml}${salutationHtml}</div>`;
 }
 
 function formatCC(cc: string): string {
@@ -114,6 +141,7 @@ export function getLetterHTML(data: LetterData): string {
           font-family: Arial, Helvetica, sans-serif;
           color: #000000;
           background: white;
+          font-size: 12pt;
         }
 
         .page {
@@ -148,6 +176,7 @@ export function getLetterHTML(data: LetterData): string {
           font-weight: bold;
           color: #000000;
           line-height: 1.3;
+          text-transform: uppercase;
         }
 
         .header-text .office-name {
@@ -161,14 +190,14 @@ export function getLetterHTML(data: LetterData): string {
 
         .header-rule {
           border-top: 1.5px solid #C29B38;
-          margin-bottom: 28px;
+          margin-bottom: 24px;
         }
 
         .ref-date {
           display: flex;
           justify-content: space-between;
-          margin: 0 0 30px 0;
-          font-size: 13px;
+          margin: 0 0 28px 0;
+          font-size: 12pt;
           font-weight: bold;
           page-break-inside: avoid;
           break-inside: avoid;
@@ -176,44 +205,59 @@ export function getLetterHTML(data: LetterData): string {
 
         .body-content {
           margin: 0 0 40px 0;
-          font-size: 13px;
-          line-height: 1.8;
+          font-size: 12pt;
+          line-height: 1.5;
           text-align: justify;
         }
 
         .body-content .to-block {
-          margin-bottom: 18px;
+          margin-bottom: 20px;
           page-break-inside: avoid;
           break-inside: avoid;
         }
 
         .body-content .to-block p {
           margin: 0;
-          line-height: 1.5;
+          line-height: 1.4;
         }
 
+        /* Bold & Underlined Location Line (e.g. NAIROBI) */
+        .body-content .to-block .to-location {
+          font-weight: bold;
+          text-decoration: underline;
+          text-transform: uppercase;
+          margin-top: 2px;
+        }
+
+        /* Regular Salutation (e.g. YOUR HONOR,) */
+        .body-content .to-block .to-salutation {
+          font-weight: normal;
+          text-decoration: none;
+          text-transform: uppercase;
+          margin-top: 12px;
+        }
+
+        /* Subject line */
         .body-content .subject-line {
           font-weight: bold;
           text-decoration: underline;
-          margin: 18px 0;
+          text-transform: uppercase;
+          margin: 20px 0;
+          line-height: 1.4;
           page-break-inside: avoid;
           break-inside: avoid;
         }
 
         .body-content p {
-          margin-bottom: 10px;
+          margin-bottom: 12px;
         }
 
-        /* Signature section container - ensures proper spacing */
         .signature-section {
-          margin-top: 50px;
+          margin-top: 40px;
           page-break-inside: avoid;
           break-inside: avoid;
         }
 
-        /* Invisible marker painted immediately before the signature block
-           so the PDF/e-sign pipeline can locate it unambiguously instead
-           of pattern-matching visible text. See SIGNATURE_ANCHOR_TEXT above. */
         .signature-anchor {
           font-size: 1px;
           line-height: 1px;
@@ -223,17 +267,10 @@ export function getLetterHTML(data: LetterData): string {
           user-select: none;
         }
 
-        /* Signature block - displayed right after the anchor */
         .signature {
-  font-size: 13px;
-  /* Extra clearance above the printed name/title so the embedded
-     signature image (placed by embedSignature.ts relative to the
-     invisible anchor immediately above this block) has room to sit
-     without overlapping the text. Without this, the anchor and the
-     name were only ~15-20pt apart, but the signature image is roughly
-     40-50pt tall once scaled, so it ended up covering the name. */
-  margin-top: 70px;
-}
+          font-size: 12pt;
+          margin-top: 60px;
+        }
 
         .signature .name {
           font-weight: bold;
@@ -249,7 +286,7 @@ export function getLetterHTML(data: LetterData): string {
 
         .cc-block {
           margin-top: 30px;
-          font-size: 13px;
+          font-size: 12pt;
           line-height: 1.5;
           display: flex;
           page-break-inside: avoid;
@@ -258,6 +295,7 @@ export function getLetterHTML(data: LetterData): string {
 
         .cc-block .cc-label {
           flex: 0 0 90px;
+          font-weight: bold;
           font-style: italic;
           text-decoration: underline;
         }
@@ -268,7 +306,7 @@ export function getLetterHTML(data: LetterData): string {
 
         .cc-entry {
           display: flex;
-          margin-bottom: 16px;
+          margin-bottom: 12px;
           page-break-inside: avoid;
           break-inside: avoid;
         }
@@ -279,22 +317,24 @@ export function getLetterHTML(data: LetterData): string {
 
         .cc-entry .cc-number {
           flex: 0 0 24px;
+          font-weight: bold;
         }
 
         .cc-entry .cc-text p {
           margin: 0;
-          line-height: 1.5;
+          line-height: 1.4;
         }
 
         .cc-entry .cc-text .cc-location {
           font-weight: bold;
           text-decoration: underline;
+          text-transform: uppercase;
         }
 
         .enclosures-block {
           margin-top: 20px;
-          font-size: 12px;
-          line-height: 1.6;
+          font-size: 12pt;
+          line-height: 1.5;
           page-break-inside: avoid;
           break-inside: avoid;
         }
@@ -332,7 +372,7 @@ export function getLetterHTML(data: LetterData): string {
         .footer-text {
           flex: 1;
           text-align: right;
-          font-size: 11px;
+          font-size: 10pt;
           color: #1a1a1a;
         }
 
@@ -343,7 +383,7 @@ export function getLetterHTML(data: LetterData): string {
 
         .footer-tagline {
           text-align: right;
-          font-size: 12px;
+          font-size: 11pt;
           font-weight: bold;
           color: #1E4620;
           margin-top: 8px;
@@ -382,17 +422,14 @@ export function getLetterHTML(data: LetterData): string {
         </div>
 
         <div class="body-content">
-          ${to ? `<div class="to-block"><p>${escapeHtml(to).replace(/\n/g, '<br/>')}</p></div>` : ''}
+          ${to ? formatToBlock(to) : ''}
           ${subject ? `<div class="subject-line">RE: ${escapeHtml(subject)}</div>` : ''}
           ${formatBody(body)}
         </div>
 
-        <!-- Signature section with anchor marker -->
         <div class="signature-section">
-          <!-- Explicit, unambiguous anchor for signature-placement detection -->
           <div class="signature-anchor" aria-hidden="true">${SIGNATURE_ANCHOR_TEXT}</div>
 
-          <!-- Signature block – displayed immediately after the anchor -->
           <div class="signature">
             <div class="name">${escapeHtml(sender)}</div>
             <div class="title">${escapeHtml(senderTitle || 'Registrar, High Court')}</div>

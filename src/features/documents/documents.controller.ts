@@ -23,6 +23,14 @@ import {
   redirectToFolderSchema,
   removeFromFolderSchema,
   getFolderDocumentsSchema,
+  // ── Follow-up schemas ──────────────────────────────────────────────
+  createFollowUpSchema,
+  updateFollowUpSchema,
+  completeFollowUpSchema,
+  cancelFollowUpSchema,
+  addFollowUpCommentSchema,
+  followUpFiltersSchema,
+  followUpIdSchema,
 } from './documents.validator';
 
 export const documentController = {
@@ -110,7 +118,6 @@ export const documentController = {
     if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
     const doc = await DocumentService.findByIdWithAnnotations(result.data.params.id);
     if (!doc) throw new AppError(404, 'Document not found');
-    // signature_placement is no longer used – signature placement is auto-detected
     return sendSuccess(res, doc, 'Document retrieved successfully');
   }),
 
@@ -304,7 +311,6 @@ export const documentController = {
     const paramsResult = documentIdSchema.safeParse({ params: req.params });
     if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
 
-    // Validate OTP
     const otp = req.body?.otp as string | undefined;
     if (!otp) throw new AppError(400, 'OTP is required');
     if (!/^\d{6}$/.test(otp)) throw new AppError(400, 'OTP must be exactly 6 digits');
@@ -314,14 +320,11 @@ export const documentController = {
 
     const isTemplatedDocument = doc.type === 'memo' || doc.type === 'letter';
 
-    // Get position data from request body (sent from frontend)
     const positionX = req.body?.position_x as number | undefined;
     const positionY = req.body?.position_y as number | undefined;
     const positionWidth = req.body?.position_width as number | undefined;
     const positionHeight = req.body?.position_height as number | undefined;
 
-    // Only persist/honor a custom position for non-templated (i.e. uploaded) documents.
-    // For memo/letter we always use anchor-based auto-detection in DocumentService.sign().
     if (!isTemplatedDocument && positionX !== undefined && positionY !== undefined) {
       console.log(`[Sign] Saving custom signature position: x=${positionX}, y=${positionY}, w=${positionWidth || 200}, h=${positionHeight || 80}`);
 
@@ -444,5 +447,207 @@ export const documentController = {
     if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
     const doc = await DocumentService.regeneratePdf(result.data.params.id);
     return sendSuccess(res, doc, 'Document PDF regenerated successfully');
+  }),
+
+  // ════════════════════════════════════════════════════════════════════════════
+  //  FOLLOW-UP CONTROLLER METHODS
+  // ════════════════════════════════════════════════════════════════════════════
+
+  // ── Create Follow-Up ────────────────────────────────────────────────────────
+
+  createFollowUp: asyncHandler(async (req: Request, res: Response) => {
+    const result = createFollowUpSchema.safeParse({ body: req.body });
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid follow-up data');
+    }
+
+    const followUp = await DocumentService.createFollowUp(
+      result.data.body,
+      req.user!.id
+    );
+
+    return sendSuccess(res, followUp, 'Follow-up created successfully', 201);
+  }),
+
+  // ── Get Follow-Ups ──────────────────────────────────────────────────────────
+
+  getFollowUps: asyncHandler(async (req: Request, res: Response) => {
+    const parsed = followUpFiltersSchema.safeParse({ query: req.query });
+    if (!parsed.success) {
+      throw new AppError(400, parsed.error.issues[0]?.message ?? 'Invalid filters');
+    }
+
+    const result = await DocumentService.getFollowUps(parsed.data.query);
+    return sendSuccess(res, result, 'Follow-ups retrieved successfully');
+  }),
+
+  // ── Get Follow-Ups by Document ─────────────────────────────────────────────
+
+  getFollowUpsByDocument: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = documentIdSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) {
+      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid document ID');
+    }
+
+    const parsed = followUpFiltersSchema.safeParse({ query: req.query });
+    if (!parsed.success) {
+      throw new AppError(400, parsed.error.issues[0]?.message ?? 'Invalid filters');
+    }
+
+    const result = await DocumentService.getFollowUpsByDocument(
+      paramsResult.data.params.id,
+      parsed.data.query
+    );
+
+    return sendSuccess(res, result, 'Document follow-ups retrieved successfully');
+  }),
+
+  // ── Get My Follow-Ups ──────────────────────────────────────────────────────
+
+  getMyFollowUps: asyncHandler(async (req: Request, res: Response) => {
+    const parsed = followUpFiltersSchema.safeParse({ query: req.query });
+    if (!parsed.success) {
+      throw new AppError(400, parsed.error.issues[0]?.message ?? 'Invalid filters');
+    }
+
+    const result = await DocumentService.getFollowUpsByUser(
+      req.user!.id,
+      parsed.data.query
+    );
+
+    return sendSuccess(res, result, 'Your follow-ups retrieved successfully');
+  }),
+
+  // ── Get Follow-Up by ID ──────────────────────────────────────────────────────
+
+  getFollowUpById: asyncHandler(async (req: Request, res: Response) => {
+    const result = followUpIdSchema.safeParse({ params: req.params });
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid follow-up ID');
+    }
+
+    const followUp = await DocumentService.getFollowUpById(result.data.params.followUpId);
+    if (!followUp) {
+      throw new AppError(404, 'Follow-up not found');
+    }
+
+    return sendSuccess(res, followUp, 'Follow-up retrieved successfully');
+  }),
+
+  // ── Get Follow-Up Thread ─────────────────────────────────────────────────────
+
+  getFollowUpThread: asyncHandler(async (req: Request, res: Response) => {
+    const result = followUpIdSchema.safeParse({ params: req.params });
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid follow-up ID');
+    }
+
+    const thread = await DocumentService.getFollowUpThread(result.data.params.followUpId);
+    if (!thread) {
+      throw new AppError(404, 'Follow-up not found');
+    }
+
+    return sendSuccess(res, thread, 'Follow-up thread retrieved successfully');
+  }),
+
+  // ── Update Follow-Up ─────────────────────────────────────────────────────────
+
+  updateFollowUp: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = updateFollowUpSchema.shape.params.safeParse(req.params);
+    if (!paramsResult.success) {
+      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid follow-up ID');
+    }
+
+    const bodyResult = updateFollowUpSchema.shape.body.safeParse(req.body);
+    if (!bodyResult.success) {
+      throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+    }
+
+    const updated = await DocumentService.updateFollowUp(
+      paramsResult.data.followUpId,
+      bodyResult.data,
+      req.user!.id
+    );
+
+    return sendSuccess(res, updated, 'Follow-up updated successfully');
+  }),
+
+  // ── Complete Follow-Up ───────────────────────────────────────────────────────
+
+  completeFollowUp: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = followUpIdSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) {
+      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid follow-up ID');
+    }
+
+    const bodyResult = completeFollowUpSchema.safeParse({ body: req.body });
+    if (!bodyResult.success) {
+      throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid completion data');
+    }
+
+    const completed = await DocumentService.completeFollowUp(
+      paramsResult.data.params.followUpId,
+      req.user!.id,
+      bodyResult.data.body
+    );
+
+    return sendSuccess(res, completed, 'Follow-up completed successfully');
+  }),
+
+  // ── Cancel Follow-Up ─────────────────────────────────────────────────────────
+
+  cancelFollowUp: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = followUpIdSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) {
+      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid follow-up ID');
+    }
+
+    const bodyResult = cancelFollowUpSchema.safeParse({ body: req.body });
+    if (!bodyResult.success) {
+      throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid cancellation data');
+    }
+
+    const cancelled = await DocumentService.cancelFollowUp(
+      paramsResult.data.params.followUpId,
+      req.user!.id,
+      bodyResult.data.body
+    );
+
+    return sendSuccess(res, cancelled, 'Follow-up cancelled successfully');
+  }),
+
+  // ── Add Follow-Up Comment ───────────────────────────────────────────────────
+
+  addFollowUpComment: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = addFollowUpCommentSchema.shape.params.safeParse(req.params);
+    if (!paramsResult.success) {
+      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid follow-up ID');
+    }
+
+    const bodyResult = addFollowUpCommentSchema.shape.body.safeParse(req.body);
+    if (!bodyResult.success) {
+      throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid comment data');
+    }
+
+    const comment = await DocumentService.addFollowUpComment(
+      paramsResult.data.followUpId,
+      bodyResult.data,
+      req.user!.id,
+      req.file
+    );
+
+    return sendSuccess(res, comment, 'Comment added successfully', 201);
+  }),
+
+  // ── Get Follow-Up Comments ──────────────────────────────────────────────────
+
+  getFollowUpComments: asyncHandler(async (req: Request, res: Response) => {
+    const result = followUpIdSchema.safeParse({ params: req.params });
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid follow-up ID');
+    }
+
+    const comments = await DocumentService.getFollowUpComments(result.data.params.followUpId);
+    return sendSuccess(res, comments, 'Comments retrieved successfully');
   }),
 };

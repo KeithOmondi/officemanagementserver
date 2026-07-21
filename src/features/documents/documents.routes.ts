@@ -9,26 +9,115 @@ const router = Router();
 
 router.use(protect);
 
-// ── Read ──────────────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+//  1. ALL STATIC ROUTES FIRST (no parameters)
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── Follow-up routes (ALL static paths first) ──────────────────────────────
+router.post(
+  '/follow-ups',
+  requireRole('super_admin', 'dept_head'),
+  documentController.createFollowUp
+);
+
+router.get(
+  '/follow-ups',
+  requireRole('super_admin', 'dept_head'),
+  documentController.getFollowUps
+);
+
+router.get(
+  '/follow-ups/my',
+  requireRole('super_admin', 'dept_head'),
+  documentController.getMyFollowUps
+);
+
+// ── Other static routes ──────────────────────────────────────────────────────
 router.get('/', documentController.getAll);
 router.get('/my-marked', documentController.getMyMarked);
 router.get('/received', documentController.getReceivedDocuments);
+
+// ── Create routes ────────────────────────────────────────────────────────────
+router.post('/compose', requireRole('staff'), documentController.createComposed);
+router.post('/upload', requireRole('staff', 'dept_head'), upload.single('file'), documentController.createUpload);
+router.post('/compose-memo', requireRole('staff'), documentController.composeMemo);
+router.post('/compose-letter', requireRole('staff'), documentController.composeLetter);
+
+// ════════════════════════════════════════════════════════════════════════════
+//  2. ROUTES WITH PARAMETERS (but specific patterns)
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── Follow-up routes with parameters ────────────────────────────────────────
+router.get(
+  '/follow-ups/:followUpId',
+  requireRole('super_admin', 'dept_head'),
+  documentController.getFollowUpById
+);
+
+router.get(
+  '/follow-ups/:followUpId/thread',
+  requireRole('super_admin', 'dept_head'),
+  documentController.getFollowUpThread
+);
+
+router.put(
+  '/follow-ups/:followUpId',
+  requireRole('super_admin', 'dept_head'),
+  documentController.updateFollowUp
+);
+
+router.patch(
+  '/follow-ups/:followUpId/complete',
+  requireRole('super_admin', 'dept_head'),
+  documentController.completeFollowUp
+);
+
+router.patch(
+  '/follow-ups/:followUpId/cancel',
+  requireRole('super_admin', 'dept_head'),
+  documentController.cancelFollowUp
+);
+
+router.post(
+  '/follow-ups/:followUpId/comments',
+  requireRole('super_admin', 'dept_head'),
+  upload.single('file'),
+  documentController.addFollowUpComment
+);
+
+router.get(
+  '/follow-ups/:followUpId/comments',
+  requireRole('super_admin', 'dept_head'),
+  documentController.getFollowUpComments
+);
+
+// ── Other parameter routes (specific patterns) ─────────────────────────────
+router.get(
+  '/:id/follow-ups',
+  documentController.getFollowUpsByDocument
+);
+
+router.post(
+  '/:id/send-to-user',
+  requireRole('staff', 'super_admin'),
+  documentController.sendToUser
+);
+
+router.post(
+  '/:id/regenerate-pdf',
+  requireRole('super_admin'),
+  documentController.regeneratePdf
+);
+
+// ════════════════════════════════════════════════════════════════════════════
+//  3. GENERIC /:id ROUTES (MUST BE LAST)
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── Read ──────────────────────────────────────────────────────────────────────
 router.get('/:id', documentController.getById);
 router.get('/:id/mark-history', documentController.getMarkHistory);
 router.get('/:id/flow', documentController.getFlowHistory);
 router.get('/:id/responses', documentController.getResponses);
-
-// ── Create ────────────────────────────────────────────────────────────────────
-router.post('/compose', requireRole('staff'), documentController.createComposed);
-router.post('/upload', requireRole('staff', 'dept_head'), upload.single('file'), documentController.createUpload);
-
-// ── Compose Memo / Letter ──────────────────────────────────────────────────────
-router.post('/compose-memo', requireRole('staff'), documentController.composeMemo);
-router.post('/compose-letter', requireRole('staff'), documentController.composeLetter);
-router.post('/:id/regenerate-pdf', requireRole('super_admin'), documentController.regeneratePdf);
-
-// ── Send to User ─────────────────────────────────────────────────────────────
-router.post('/:id/send-to-user', requireRole('staff', 'super_admin'), documentController.sendToUser);
 
 // ── Edit / lifecycle ──────────────────────────────────────────────────────────
 router.put('/:id', requireRole('staff'), documentController.update);
@@ -38,8 +127,7 @@ router.delete('/:id', requireRole('dept_head'), documentController.delete);
 router.post('/:id/request-sign-otp', requireRole('super_admin'), documentController.requestSignOtp);
 router.post('/:id/sign', requireRole('dept_head'), documentController.sign);
 
-// ── Release Document (Super Admin only) ──────────────────────────────────────
-// ⚠️ IMPORTANT: This must come BEFORE the generic /:id/send route
+// ── Release Document ──────────────────────────────────────────────────────────
 router.post('/:id/release', requireRole('super_admin'), documentController.releaseDocument);
 
 // ── Send ──────────────────────────────────────────────────────────────────────
@@ -63,7 +151,7 @@ router.post('/:id/return', requireRole('super_admin'), documentController.return
 // ── Response thread ───────────────────────────────────────────────────────────
 router.post('/:id/respond', upload.single('file'), documentController.respond);
 
-// ── Update Mark (instructions & bring_up_date) ──────────────────────────────
+// ── Update Mark ──────────────────────────────────────────────────────────────
 router.patch(
   '/marks/:markId',
   requireRole('super_admin'),
@@ -74,21 +162,18 @@ router.patch(
 //  Folder Operations
 // ════════════════════════════════════════════════════════════════════════════
 
-// ── Redirect Document to Folder ────────────────────────────────────────────
 router.post(
   '/:id/redirect-to-folder',
   requireRole('super_admin', 'dept_head'),
   documentController.redirectToFolder
 );
 
-// ── Remove Document from Folder ────────────────────────────────────────────
 router.delete(
   '/:id/remove-from-folder',
   requireRole('super_admin', 'dept_head'),
   documentController.removeFromFolder
 );
 
-// ── Get Documents by Folder ────────────────────────────────────────────────
 router.get(
   '/folder/:folderId',
   documentController.getDocumentsByFolder

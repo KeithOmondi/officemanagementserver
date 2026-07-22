@@ -20,6 +20,7 @@ const documentEntityEnum = z.enum([
     'protocol',         // Protocol event documents
     'club',             // Club membership documents
     'utility_memo',     // Utility memo documents
+    'aide',             // Aide request documents
 ]);
 
 const documentStatusEnum = z.enum(['draft', 'pending_approval', 'approved', 'rejected', 'returned']);
@@ -33,6 +34,24 @@ const requestTypeEnum = z.enum([
     'Residence Security',
     'Sentry'
 ]);
+
+const aideStatusEnum = z.enum(['in_progress', 'rejected', 'attached']);
+
+const officerRankEnum = z.enum([
+    'Police Constable (PC)',
+    'Corporal (CPL)',
+    'Sergeant (SGT)',
+    'Inspector (IP)',
+    'Chief Inspector (CIP)',
+    'Assistant Superintendent (ASP)',
+    'Superintendent (SP)',
+    'Senior Superintendent (SSP)',
+    'Assistant Commissioner (ACP)',
+    'Senior Assistant Commissioner (SACP)',
+    'Commissioner (CP)',
+]);
+
+const unitTypeEnum = z.enum(['KPS', 'APS', 'GSU', 'DCI', 'VIPPU', 'Other']);
 
 const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format').optional();
 
@@ -52,6 +71,17 @@ export const uploadHelpdeskDocumentSchema = z.object({
         status: z.string().default('draft').pipe(documentStatusEnum).optional(),
         request_type: z.string().pipe(requestTypeEnum).optional().nullable(),
         judge_name: z.string().max(100).optional().nullable(),
+        
+        // ─── Aide Request Fields ──────────────────────────────────────────────
+        officer_rank: z.string().pipe(officerRankEnum).optional().nullable(),
+        officer_name: z.string().max(100).optional().nullable(),
+        employment_number: z.string().max(50).optional().nullable(),
+        current_station: z.string().max(100).optional().nullable(),
+        current_unit: z.string().pipe(unitTypeEnum).optional().nullable(),
+        proposed_assignment: z.string().max(500).optional().nullable(),
+        aide_status: z.string().pipe(aideStatusEnum).optional().nullable(),
+        
+        // ─── Legacy fields ──────────────────────────────────────────────────────
         rank: z.string().max(50).optional().nullable(),
         reporting_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format').optional().nullable(),
     }),
@@ -74,6 +104,16 @@ export const listHelpdeskDocumentsSchema = z.object({
         judge_name: z.string().optional(),
         date_from: dateStringSchema.optional(),
         date_to: dateStringSchema.optional(),
+        
+        // ─── Aide Request Filters ──────────────────────────────────────────────
+        officer_rank: z.string().pipe(officerRankEnum).optional(),
+        officer_name: z.string().optional(),
+        employment_number: z.string().optional(),
+        current_station: z.string().optional(),
+        current_unit: z.string().pipe(unitTypeEnum).optional(),
+        aide_status: z.string().pipe(aideStatusEnum).optional(),
+        
+        // ─── Legacy fields ──────────────────────────────────────────────────────
         rank: z.string().optional(),
         reporting_date: dateStringSchema.optional(),
     }).strict(),
@@ -187,8 +227,19 @@ export const linkDocumentSchema = z.object({
         entity_id: z.string().uuid('entity_id must be a valid UUID'),
         request_type: requestTypeEnum.optional(),
         judge_name: z.string().max(100).optional(),
-        rank: z.string().max(50).optional(),
-        reporting_date: dateStringSchema.optional(),
+        
+        // ─── Aide Request Fields ──────────────────────────────────────────────
+        officer_rank: z.string().pipe(officerRankEnum).optional().nullable(),
+        officer_name: z.string().max(100).optional().nullable(),
+        employment_number: z.string().max(50).optional().nullable(),
+        current_station: z.string().max(100).optional().nullable(),
+        current_unit: z.string().pipe(unitTypeEnum).optional().nullable(),
+        proposed_assignment: z.string().max(500).optional().nullable(),
+        aide_status: z.string().pipe(aideStatusEnum).optional().nullable(),
+        
+        // ─── Legacy fields ──────────────────────────────────────────────────────
+        rank: z.string().max(50).optional().nullable(),
+        reporting_date: dateStringSchema.optional().nullable(),
     }),
 });
 
@@ -248,8 +299,19 @@ export const bulkLinkDocumentsSchema = z.object({
         entity_id: z.string().uuid('Entity ID must be a valid UUID'),
         request_type: requestTypeEnum.optional(),
         judge_name: z.string().max(100).optional(),
-        rank: z.string().max(50).optional(),
-        reporting_date: dateStringSchema.optional(),
+        
+        // ─── Aide Request Fields ──────────────────────────────────────────────
+        officer_rank: z.string().pipe(officerRankEnum).optional().nullable(),
+        officer_name: z.string().max(100).optional().nullable(),
+        employment_number: z.string().max(50).optional().nullable(),
+        current_station: z.string().max(100).optional().nullable(),
+        current_unit: z.string().pipe(unitTypeEnum).optional().nullable(),
+        proposed_assignment: z.string().max(500).optional().nullable(),
+        aide_status: z.string().pipe(aideStatusEnum).optional().nullable(),
+        
+        // ─── Legacy fields ──────────────────────────────────────────────────────
+        rank: z.string().max(50).optional().nullable(),
+        reporting_date: dateStringSchema.optional().nullable(),
     }),
 });
 
@@ -275,8 +337,19 @@ export const batchUploadSchema = z.object({
                 status: documentStatusEnum.default('draft'),
                 request_type: requestTypeEnum.optional(),
                 judge_name: z.string().max(100).optional(),
-                rank: z.string().max(50).optional(),
-                reporting_date: dateStringSchema.optional(),
+                
+                // ─── Aide Request Fields ──────────────────────────────────────────────
+                officer_rank: z.string().pipe(officerRankEnum).optional().nullable(),
+                officer_name: z.string().max(100).optional().nullable(),
+                employment_number: z.string().max(50).optional().nullable(),
+                current_station: z.string().max(100).optional().nullable(),
+                current_unit: z.string().pipe(unitTypeEnum).optional().nullable(),
+                proposed_assignment: z.string().max(500).optional().nullable(),
+                aide_status: z.string().pipe(aideStatusEnum).optional().nullable(),
+                
+                // ─── Legacy fields ──────────────────────────────────────────────────────
+                rank: z.string().max(50).optional().nullable(),
+                reporting_date: dateStringSchema.optional().nullable(),
             })
         ).min(1, 'At least one document is required').max(20, 'Maximum 20 documents per batch'),
     }),
@@ -311,5 +384,8 @@ export {
     documentEntityEnum,
     documentStatusEnum,
     requestTypeEnum,
+    aideStatusEnum,
+    officerRankEnum,
+    unitTypeEnum,
     dateStringSchema,
 };

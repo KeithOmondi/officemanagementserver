@@ -15,7 +15,8 @@ export type DocumentEntityType =
     | 'visa'             // Visa support documents
     | 'protocol'         // Protocol event documents
     | 'club'             // Club membership documents
-    | 'utility_memo';    // Utility memo documents
+    | 'utility_memo'     // Utility memo documents
+    | 'aide';            // Aide request documents
 
 export type DocumentStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected' | 'returned';
 
@@ -53,9 +54,18 @@ export interface HelpdeskDocument {
     request_type?: string;      // For general requests - Driver, Bodyguard, etc.
     judge_name?: string;        // Associated judge name
 
-    // ─── NEW FIELDS ──────────────────────────────────────────────────────────
-    rank?: string | null;       // Officer's rank (for Driver/Bodyguard)
-    reporting_date?: string | null; // Expected reporting date
+    // ─── Aide Request Fields ──────────────────────────────────────────────────
+    officer_rank?: string | null;      // Police officer rank
+    officer_name?: string | null;      // Police officer name
+    employment_number?: string | null; // Employment/Service number
+    current_station?: string | null;   // Current station
+    current_unit?: string | null;      // Current unit (KPS, APS, GSU, etc.)
+    proposed_assignment?: string | null; // Proposed assignment description
+    aide_status?: string | null;       // Aide request status (in_progress, rejected, attached)
+    
+    // ─── Legacy fields ──────────────────────────────────────────────────────
+    rank?: string | null;              // Officer's rank (deprecated, use officer_rank)
+    reporting_date?: string | null;    // Expected reporting date
 }
 
 export interface ApprovalHistoryEntry {
@@ -89,6 +99,17 @@ export interface CreateHelpdeskDocumentInput {
     status?: DocumentStatus;
     request_type?: string | null;      // For general requests
     judge_name?: string | null;        // For better tracking
+    
+    // ─── Aide Request Fields ──────────────────────────────────────────────
+    officer_rank?: string | null;
+    officer_name?: string | null;
+    employment_number?: string | null;
+    current_station?: string | null;
+    current_unit?: string | null;
+    proposed_assignment?: string | null;
+    aide_status?: string | null;
+    
+    // ─── Legacy fields ──────────────────────────────────────────────────────
     rank?: string | null;
     reporting_date?: string | null;
 }
@@ -118,9 +139,18 @@ export interface HelpdeskDocumentFilters {
     judge_name?: string;    // Filter by judge name
     date_from?: string;     // Filter by date range
     date_to?: string;
-    // ─── NEW FIELDS ──────────────────────────────────────────────────────────
-    rank?: string;          // Filter by rank
-    reporting_date?: string; // Filter by reporting date
+    
+    // ─── Aide Request Filters ──────────────────────────────────────────────
+    officer_rank?: string;      // Filter by officer rank
+    officer_name?: string;      // Filter by officer name
+    employment_number?: string; // Filter by employment number
+    current_station?: string;   // Filter by current station
+    current_unit?: string;      // Filter by current unit
+    aide_status?: string;       // Filter by aide status
+    
+    // ─── Legacy fields ──────────────────────────────────────────────────────
+    rank?: string;              // Filter by rank
+    reporting_date?: string;    // Filter by reporting date
 }
 
 export interface DocumentApprovalRequest {
@@ -150,9 +180,19 @@ export interface LinkDocumentInput {
     entity_id: string;
     request_type?: string;      // For general requests
     judge_name?: string;        // For better tracking
-    // ─── NEW FIELDS ──────────────────────────────────────────────────────────
-    rank?: string;
-    reporting_date?: string;
+    
+    // ─── Aide Request Fields ──────────────────────────────────────────────
+    officer_rank?: string | null;
+    officer_name?: string | null;
+    employment_number?: string | null;
+    current_station?: string | null;
+    current_unit?: string | null;
+    proposed_assignment?: string | null;
+    aide_status?: string | null;
+    
+    // ─── Legacy fields ──────────────────────────────────────────────────────
+    rank?: string | null;
+    reporting_date?: string | null;
 }
 
 // ─── Document Summary Types ──────────────────────────────────────────────────
@@ -208,6 +248,7 @@ export const DOCUMENT_ENTITY_LABELS: Record<DocumentEntityType, string> = {
     protocol: 'Protocol Event',
     club: 'Club Membership',
     utility_memo: 'Utility Memo',
+    aide: 'Aide Request',
 };
 
 export const DOCUMENT_ENTITY_ICONS: Record<DocumentEntityType, string> = {
@@ -224,6 +265,7 @@ export const DOCUMENT_ENTITY_ICONS: Record<DocumentEntityType, string> = {
     protocol: 'Calendar',
     club: 'Users',
     utility_memo: 'FileText',
+    aide: 'Shield',
 };
 
 export const DOCUMENT_ENTITY_COLORS: Record<DocumentEntityType, string> = {
@@ -240,6 +282,7 @@ export const DOCUMENT_ENTITY_COLORS: Record<DocumentEntityType, string> = {
     protocol: 'text-blue-600 bg-blue-50',
     club: 'text-purple-600 bg-purple-50',
     utility_memo: 'text-amber-600 bg-amber-50',
+    aide: 'text-blue-600 bg-blue-50',
 };
 
 export const DOCUMENT_STATUS_LABELS: Record<DocumentStatus, string> = {
@@ -316,7 +359,8 @@ export function isDocumentEntityType(value: string): value is DocumentEntityType
         'visa',
         'protocol',
         'club',
-        'utility_memo'
+        'utility_memo',
+        'aide'
     ].includes(value);
 }
 
@@ -419,7 +463,28 @@ export function buildDocumentFilters(filters: HelpdeskDocumentFilters): Record<s
     if (filters.pending_my_approval !== undefined) {
         result.pending_my_approval = filters.pending_my_approval;
     }
-    // ─── NEW FILTERS ──────────────────────────────────────────────────────────
+    
+    // ─── Aide Request Filters ──────────────────────────────────────────────
+    if (filters.officer_rank) {
+        result.officer_rank = filters.officer_rank;
+    }
+    if (filters.officer_name) {
+        result.officer_name = filters.officer_name;
+    }
+    if (filters.employment_number) {
+        result.employment_number = filters.employment_number;
+    }
+    if (filters.current_station) {
+        result.current_station = filters.current_station;
+    }
+    if (filters.current_unit) {
+        result.current_unit = filters.current_unit;
+    }
+    if (filters.aide_status) {
+        result.aide_status = filters.aide_status;
+    }
+    
+    // ─── Legacy fields ──────────────────────────────────────────────────────
     if (filters.rank) {
         result.rank = filters.rank;
     }

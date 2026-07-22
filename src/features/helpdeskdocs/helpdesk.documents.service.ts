@@ -30,6 +30,8 @@ const DOC_SELECT = `
     d.approved_at, d.approved_by, d.returned_at, d.returned_by,
     d.rejection_reason, d.request_type, d.judge_name,
     d.rank, d.reporting_date,
+    d.officer_rank, d.officer_name, d.employment_number,
+    d.current_station, d.current_unit, d.proposed_assignment, d.aide_status,
     u.full_name as uploaded_by_name,
     au.full_name as approved_by_name,
     ru.full_name as returned_by_name
@@ -55,6 +57,14 @@ function cleanInput(input: CreateHelpdeskDocumentInput): CreateHelpdeskDocumentI
         judge_name: input.judge_name === null ? undefined : input.judge_name?.trim() || undefined,
         rank: input.rank === null ? undefined : input.rank?.trim() || undefined,
         reporting_date: input.reporting_date === null ? undefined : input.reporting_date?.trim() || undefined,
+        // ─── Aide Request Fields ──────────────────────────────────────────────
+        officer_rank: input.officer_rank === null ? undefined : input.officer_rank?.trim() || undefined,
+        officer_name: input.officer_name === null ? undefined : input.officer_name?.trim() || undefined,
+        employment_number: input.employment_number === null ? undefined : input.employment_number?.trim() || undefined,
+        current_station: input.current_station === null ? undefined : input.current_station?.trim() || undefined,
+        current_unit: input.current_unit === null ? undefined : input.current_unit?.trim() || undefined,
+        proposed_assignment: input.proposed_assignment === null ? undefined : input.proposed_assignment?.trim() || undefined,
+        aide_status: input.aide_status === null ? undefined : input.aide_status?.trim() || undefined,
     };
 }
 
@@ -92,8 +102,10 @@ export class HelpdeskDocumentsService {
                 `INSERT INTO helpdesk_documents
                     (ref, subject, entity_type, entity_id, format,
                      file_url, public_id, file_size, uploaded_by, status,
-                     request_type, judge_name, rank, reporting_date)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                     request_type, judge_name, rank, reporting_date,
+                     officer_rank, officer_name, employment_number,
+                     current_station, current_unit, proposed_assignment, aide_status)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
                  RETURNING id`,
                 [
                     cleaned.ref.trim(),
@@ -110,6 +122,13 @@ export class HelpdeskDocumentsService {
                     cleaned.judge_name || null,
                     cleaned.rank || null,
                     cleaned.reporting_date || null,
+                    cleaned.officer_rank || null,
+                    cleaned.officer_name || null,
+                    cleaned.employment_number || null,
+                    cleaned.current_station || null,
+                    cleaned.current_unit || null,
+                    cleaned.proposed_assignment || null,
+                    cleaned.aide_status || null,
                 ]
             );
 
@@ -208,6 +227,37 @@ export class HelpdeskDocumentsService {
         if (filters.reporting_date) {
             query += ` AND d.reporting_date = $${p}`;
             params.push(filters.reporting_date);
+            p++;
+        }
+        // ─── Aide Request Filters ──────────────────────────────────────────────
+        if (filters.officer_rank) {
+            query += ` AND d.officer_rank = $${p}`;
+            params.push(filters.officer_rank);
+            p++;
+        }
+        if (filters.officer_name) {
+            query += ` AND d.officer_name ILIKE $${p}`;
+            params.push(`%${filters.officer_name}%`);
+            p++;
+        }
+        if (filters.employment_number) {
+            query += ` AND d.employment_number = $${p}`;
+            params.push(filters.employment_number);
+            p++;
+        }
+        if (filters.current_station) {
+            query += ` AND d.current_station ILIKE $${p}`;
+            params.push(`%${filters.current_station}%`);
+            p++;
+        }
+        if (filters.current_unit) {
+            query += ` AND d.current_unit = $${p}`;
+            params.push(filters.current_unit);
+            p++;
+        }
+        if (filters.aide_status) {
+            query += ` AND d.aide_status = $${p}`;
+            params.push(filters.aide_status);
             p++;
         }
         if (filters.date_from) {
@@ -744,7 +794,15 @@ export class HelpdeskDocumentsService {
         requestType?: string,
         judgeName?: string,
         rank?: string,
-        reportingDate?: string
+        reportingDate?: string,
+        // ─── Aide Request Fields ──────────────────────────────────────────────
+        officerRank?: string,
+        officerName?: string,
+        employmentNumber?: string,
+        currentStation?: string,
+        currentUnit?: string,
+        proposedAssignment?: string,
+        aideStatus?: string
     ): Promise<HelpdeskDocument> {
         const doc = await this.findById(id);
         if (!doc) throw new AppError(404, 'Document not found');
@@ -789,6 +847,49 @@ export class HelpdeskDocumentsService {
             p++;
         }
 
+        // ─── Aide Request Fields ──────────────────────────────────────────────
+        if (officerRank !== undefined) {
+            updates.push(`officer_rank = $${p}`);
+            values.push(officerRank || null);
+            p++;
+        }
+
+        if (officerName !== undefined) {
+            updates.push(`officer_name = $${p}`);
+            values.push(officerName || null);
+            p++;
+        }
+
+        if (employmentNumber !== undefined) {
+            updates.push(`employment_number = $${p}`);
+            values.push(employmentNumber || null);
+            p++;
+        }
+
+        if (currentStation !== undefined) {
+            updates.push(`current_station = $${p}`);
+            values.push(currentStation || null);
+            p++;
+        }
+
+        if (currentUnit !== undefined) {
+            updates.push(`current_unit = $${p}`);
+            values.push(currentUnit || null);
+            p++;
+        }
+
+        if (proposedAssignment !== undefined) {
+            updates.push(`proposed_assignment = $${p}`);
+            values.push(proposedAssignment || null);
+            p++;
+        }
+
+        if (aideStatus !== undefined) {
+            updates.push(`aide_status = $${p}`);
+            values.push(aideStatus || null);
+            p++;
+        }
+
         updates.push(`updated_at = NOW()`);
         values.push(id);
 
@@ -813,14 +914,37 @@ export class HelpdeskDocumentsService {
         requestType?: string,
         judgeName?: string,
         rank?: string,
-        reportingDate?: string
+        reportingDate?: string,
+        // ─── Aide Request Fields ──────────────────────────────────────────────
+        officerRank?: string,
+        officerName?: string,
+        employmentNumber?: string,
+        currentStation?: string,
+        currentUnit?: string,
+        proposedAssignment?: string,
+        aideStatus?: string
     ): Promise<{ success: string[]; failed: string[] }> {
         const success: string[] = [];
         const failed: string[] = [];
 
         for (const id of documentIds) {
             try {
-                await this.linkToEntity(id, entityType, entityId, requestType, judgeName, rank, reportingDate);
+                await this.linkToEntity(
+                    id, 
+                    entityType, 
+                    entityId, 
+                    requestType, 
+                    judgeName, 
+                    rank, 
+                    reportingDate,
+                    officerRank,
+                    officerName,
+                    employmentNumber,
+                    currentStation,
+                    currentUnit,
+                    proposedAssignment,
+                    aideStatus
+                );
                 success.push(id);
             } catch (error) {
                 console.error(`Failed to link document ${id}:`, error);
@@ -888,7 +1012,6 @@ export class HelpdeskDocumentsService {
                             action = 'returned';
                             break;
                         default:
-                            // For 'draft' and 'pending_approval', we use 'submitted' as a fallback
                             action = 'submitted';
                             break;
                     }

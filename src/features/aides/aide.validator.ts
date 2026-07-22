@@ -25,11 +25,15 @@ export const AideStatusEnum = z.enum(['in_progress', 'rejected', 'attached']);
 // ─── Reusable Schemas ────────────────────────────────────────────────────────
 
 /**
- * Date validator that accepts both string and Date objects
+ * Date validator that accepts:
+ * - YYYY-MM-DD strings
+ * - ISO datetime strings
+ * - Date objects
  * Ensures the date is valid and properly formatted
  */
 const dateSchema = z
   .union([
+    z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format'),
     z.string().datetime({ offset: true, message: 'Invalid date format' }),
     z.date(),
   ])

@@ -29,6 +29,7 @@ import judgesRoutes from './features/judges/judges.routes';
 import registryorhcRoutes from "./features/registryfolders/registryorhc.routes"
 import stampRoutes from "./features/e-stamp/e-stamp.routes"
 import aiReportsRoutes from './features/reports/ai-reports.routes';
+import aidesRoutes from './features/aides/aide.routes';
 
 // ── Middleware ────────────────────────────────────────────────────────────
 import { errorMiddleware } from './middleware/error.middleware';
@@ -90,6 +91,7 @@ app.use('/api/v1/judges', judgesRoutes);
 app.use('/api/v1/orhc-folders', registryorhcRoutes);
 app.use('/api/v1/e-stamp', stampRoutes);
 app.use('/api/v1/reports', aiReportsRoutes);
+app.use('/api/v1/aide', aidesRoutes);
 
 // ── 404 ─────────────────────────────────────────────────────────────────────
 app.use((_req: Request, res: Response, _next: NextFunction) => {

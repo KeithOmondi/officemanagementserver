@@ -20,10 +20,36 @@ export const aideController = {
   // ─── Create Aide Request ────────────────────────────────────────────────────
 
   createAideRequest: asyncHandler(async (req: Request, res: Response) => {
+    console.log('📥 Request body:', JSON.stringify(req.body, null, 2));
+    console.log('📥 User:', req.user?.id, req.user?.full_name);
+
+    // Check each field individually
+    console.log('🔍 Field validation:');
+    console.log('  judge_name:', req.body.judge_name, typeof req.body.judge_name);
+    console.log('  officer_rank:', req.body.officer_rank, typeof req.body.officer_rank);
+    console.log('  officer_name:', req.body.officer_name, typeof req.body.officer_name);
+    console.log('  employment_number:', req.body.employment_number, typeof req.body.employment_number);
+    console.log('  current_station:', req.body.current_station, typeof req.body.current_station);
+    console.log('  current_unit:', req.body.current_unit, typeof req.body.current_unit);
+    console.log('  proposed_assignment:', req.body.proposed_assignment, typeof req.body.proposed_assignment);
+    console.log('  reporting_date:', req.body.reporting_date, typeof req.body.reporting_date);
+    console.log('  remarks:', req.body.remarks, typeof req.body.remarks);
+
     const result = createAideRequestSchema.safeParse({ body: req.body });
     if (!result.success) {
+      console.error('❌ Validation errors:', result.error.issues);
+      // Log each error in detail
+      result.error.issues.forEach((issue, index) => {
+        console.error(`  Error ${index + 1}:`, {
+          path: issue.path.join('.'),
+          message: issue.message,
+          code: issue.code,
+        });
+      });
       throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid aide request data');
     }
+
+    console.log('✅ Validation passed');
 
     const aideRequest = await AideService.createAideRequest(
       result.data.body,
@@ -64,6 +90,8 @@ export const aideController = {
   // ─── Update Aide Request ────────────────────────────────────────────────────
 
   updateAideRequest: asyncHandler(async (req: Request, res: Response) => {
+    console.log('📥 Update request body:', JSON.stringify(req.body, null, 2));
+    
     const paramsResult = getAideRequestSchema.safeParse({ params: req.params });
     if (!paramsResult.success) {
       throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
@@ -71,6 +99,14 @@ export const aideController = {
 
     const bodyResult = updateAideRequestSchema.safeParse({ body: req.body });
     if (!bodyResult.success) {
+      console.error('❌ Validation errors:', bodyResult.error.issues);
+      bodyResult.error.issues.forEach((issue, index) => {
+        console.error(`  Error ${index + 1}:`, {
+          path: issue.path.join('.'),
+          message: issue.message,
+          code: issue.code,
+        });
+      });
       throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid update data');
     }
 

@@ -1,4 +1,5 @@
 // src/features/tickets/tickets.service.ts
+
 import { pool } from '../../config/db';
 import { AppError } from '../../utils/response';
 import { sendMail } from '../../utils/sendMail';
@@ -9,6 +10,8 @@ import type {
   TicketApprovalStep,
   TicketComment,
   TicketStatus,
+  TicketTripType,
+  FlightTimePreference,
 } from './tickets.types';
 import type {
   CreateTicketInput,
@@ -26,9 +29,12 @@ import type {
 const TICKET_SELECT = `
   t.id, t.reference_no, t.title, t.description,
   t.department_id, d.name AS department_name,
-  t.date_of_travel, t.return_date,
+  t.trip_type,
+  t.date_of_travel, t.time_of_travel,
+  t.return_date, t.return_time,
+  t.preferred_departure_time, t.preferred_return_time,
   t.departure_from, t.destination,
-  t.preferred_flight_time, t.remarks,
+  t.remarks,
   t.judge_name, t.pj_number,
   t.travel_class, t.number_of_passengers, t.special_requests,
   t.status, t.priority,
@@ -92,7 +98,7 @@ export class TicketService {
     return `TKT-${newNum}`;
   }
 
-  // ── Helper: Add Approval History Step (now accepts optional client) ────────
+  // ── Helper: Add Approval History Step ───────────────────────────────────────
 
   private static async addApprovalHistory(
     ticketId: string,
@@ -100,7 +106,7 @@ export class TicketService {
     fromUserId: string,
     toUserId: string | null,
     comments: string | null = null,
-    client?: any // optional transaction client
+    client?: any
   ): Promise<void> {
     const db = client || pool;
     await db.query(
@@ -111,7 +117,7 @@ export class TicketService {
     );
   }
 
-  // ── Helper: Validate department & assignment for dept_head ─────────────────
+  // ── Helper: Validate department & assignment ───────────────────────────────
 
   private static async validateDepartmentScope(
     userId: string,
@@ -185,23 +191,31 @@ export class TicketService {
       const { rows } = await client.query(
         `INSERT INTO tickets
            (reference_no, title, description, department_id,
-            date_of_travel, return_date, departure_from, destination,
-            preferred_flight_time, remarks,
+            trip_type,
+            date_of_travel, time_of_travel,
+            return_date, return_time,
+            preferred_departure_time, preferred_return_time,
+            departure_from, destination,
+            remarks,
             judge_name, pj_number,
             travel_class, number_of_passengers, special_requests,
             status, priority, assigned_to, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
          RETURNING id`,
         [
           referenceNo,
           input.title.trim(),
           input.description?.trim() ?? null,
           departmentId,
+          input.trip_type,
           new Date(input.date_of_travel),
+          input.time_of_travel ?? null,
           input.return_date ? new Date(input.return_date) : null,
+          input.return_time ?? null,
+          input.preferred_departure_time,
+          input.preferred_return_time ?? null,
           input.departure_from.trim(),
           input.destination.trim(),
-          input.preferred_flight_time,
           input.remarks?.trim() ?? null,
           input.judge_name?.trim() ?? null,
           input.pj_number?.trim() ?? null,
@@ -217,7 +231,6 @@ export class TicketService {
 
       const ticketId = rows[0].id;
 
-      // Pass the transaction client
       await this.addApprovalHistory(
         ticketId,
         'submitted',
@@ -244,7 +257,7 @@ export class TicketService {
     requestingUserId: string
   ): Promise<TicketPaginationResponse> {
     const {
-      search, status, priority, department_id, assigned_to, created_by,
+      search, status, priority, trip_type, department_id, assigned_to, created_by,
       date_from, date_to, departure_from, destination,
       judge_name, pj_number,
       for_my_action,
@@ -266,6 +279,7 @@ export class TicketService {
     }
     if (status) { conditions.push(`t.status = $${p}`); values.push(status); p++; }
     if (priority) { conditions.push(`t.priority = $${p}`); values.push(priority); p++; }
+    if (trip_type) { conditions.push(`t.trip_type = $${p}`); values.push(trip_type); p++; }
     if (department_id) { conditions.push(`t.department_id = $${p}`); values.push(department_id); p++; }
     if (assigned_to) { conditions.push(`t.assigned_to = $${p}`); values.push(assigned_to); p++; }
     if (created_by) { conditions.push(`t.created_by = $${p}`); values.push(created_by); p++; }
@@ -344,7 +358,7 @@ export class TicketService {
     };
   }
 
-    // ── Update ───────────────────────────────────────────────────────────────────
+  // ── Update ───────────────────────────────────────────────────────────────────
 
   static async update(id: string, input: UpdateTicketInput, userId: string): Promise<Ticket> {
     const existing = await this.findById(id);
@@ -369,11 +383,15 @@ export class TicketService {
     if (input.title !== undefined) { updates.push(`title = $${p++}`); values.push(input.title.trim()); }
     if (input.description !== undefined) { updates.push(`description = $${p++}`); values.push(input.description?.trim() ?? null); }
     if (input.department_id !== undefined) { updates.push(`department_id = $${p++}`); values.push(departmentId); }
+    if (input.trip_type !== undefined) { updates.push(`trip_type = $${p++}`); values.push(input.trip_type); }
     if (input.date_of_travel !== undefined) { updates.push(`date_of_travel = $${p++}`); values.push(new Date(input.date_of_travel)); }
+    if (input.time_of_travel !== undefined) { updates.push(`time_of_travel = $${p++}`); values.push(input.time_of_travel ?? null); }
     if (input.return_date !== undefined) { updates.push(`return_date = $${p++}`); values.push(input.return_date ? new Date(input.return_date) : null); }
+    if (input.return_time !== undefined) { updates.push(`return_time = $${p++}`); values.push(input.return_time ?? null); }
+    if (input.preferred_departure_time !== undefined) { updates.push(`preferred_departure_time = $${p++}`); values.push(input.preferred_departure_time); }
+    if (input.preferred_return_time !== undefined) { updates.push(`preferred_return_time = $${p++}`); values.push(input.preferred_return_time ?? null); }
     if (input.departure_from !== undefined) { updates.push(`departure_from = $${p++}`); values.push(input.departure_from.trim()); }
     if (input.destination !== undefined) { updates.push(`destination = $${p++}`); values.push(input.destination.trim()); }
-    if (input.preferred_flight_time !== undefined) { updates.push(`preferred_flight_time = $${p++}`); values.push(input.preferred_flight_time); }
     if (input.remarks !== undefined) { updates.push(`remarks = $${p++}`); values.push(input.remarks?.trim() ?? null); }
     if (input.judge_name !== undefined) { updates.push(`judge_name = $${p++}`); values.push(input.judge_name?.trim() ?? null); }
     if (input.pj_number !== undefined) { updates.push(`pj_number = $${p++}`); values.push(input.pj_number?.trim() ?? null); }
@@ -425,7 +443,6 @@ export class TicketService {
         [superAdmin.id, id]
       );
 
-      // Pass the transaction client
       await this.addApprovalHistory(
         id,
         'submitted',
@@ -447,7 +464,9 @@ export class TicketService {
             <p style="font-weight:bold;color:#333;font-size:16px;">${ticket.title}</p>
             <p style="color:#555;font-size:14px;">Reference: ${ticket.reference_no}</p>
             <p style="color:#555;font-size:14px;">Travel Date: ${new Date(ticket.date_of_travel).toLocaleDateString()}</p>
+            ${ticket.time_of_travel ? `<p style="color:#555;font-size:14px;">Time: ${ticket.time_of_travel}</p>` : ''}
             <p style="color:#555;font-size:14px;">From: ${ticket.departure_from} → ${ticket.destination}</p>
+            ${ticket.trip_type === 'round_trip' ? `<p style="color:#555;font-size:14px;">Return Date: ${ticket.return_date ? new Date(ticket.return_date).toLocaleDateString() : 'N/A'}</p>` : ''}
             ${ticket.judge_name ? `<p style="color:#555;font-size:14px;">Judge: ${ticket.judge_name}</p>` : ''}
             ${ticket.pj_number ? `<p style="color:#555;font-size:14px;">PJ Number: ${ticket.pj_number}</p>` : ''}
             <p style="font-size:12px;color:#999;margin-top:16px;">Please log in to review and take action.</p>
@@ -491,16 +510,7 @@ export class TicketService {
         [userId, id]
       );
 
-      // Cascade: approving the ticket must approve every document attached
-      // to it, not just the one the reviewer happened to stamp from the
-      // Document Viewer modal. Without this, sibling documents on the same
-      // ticket stay stuck at 'pending_approval' forever — which was the bug.
-      //
-      // NOTE: column/table names here are inferred from the HelpdeskDocument
-      // frontend type (helpdeskDocumentsSlice / DocumentViewerModal), not
-      // from a migration file. Verify against your actual schema — if your
-      // table is named differently, or uses `ticket_id` instead of
-      // `entity_type`/`entity_id`, adjust the WHERE clause accordingly.
+      // Cascade: approving the ticket approves all pending documents attached to it
       const { rowCount: documentsApprovedCount } = await client.query(
         `UPDATE helpdesk_documents
          SET status = 'approved',
@@ -513,7 +523,6 @@ export class TicketService {
         [userId, id]
       );
 
-      // Pass the transaction client
       await this.addApprovalHistory(
         id,
         'approved',
@@ -576,18 +585,25 @@ export class TicketService {
     try {
       await client.query('BEGIN');
 
-      // inside TicketService.rejectTicket, right after the tickets UPDATE, same transaction:
-  await client.query(
-    `UPDATE helpdesk_documents
-     SET status = 'rejected',
-         updated_at = NOW()
-     WHERE entity_type = 'ticket'
-       AND entity_id = $1
-       AND status = 'pending_approval'`,
-    [id]
-  );
+      await client.query(
+        `UPDATE tickets
+         SET status = 'rejected',
+             rejected_reason = $1,
+             updated_at = NOW()
+         WHERE id = $2`,
+        [input.reason, id]
+      );
 
-      // Pass the transaction client
+      await client.query(
+        `UPDATE helpdesk_documents
+         SET status = 'rejected',
+             updated_at = NOW()
+         WHERE entity_type = 'ticket'
+           AND entity_id = $1
+           AND status = 'pending_approval'`,
+        [id]
+      );
+
       await this.addApprovalHistory(
         id,
         'rejected',
@@ -655,7 +671,6 @@ export class TicketService {
         [ticket.created_by, id]
       );
 
-      // Pass the transaction client
       await this.addApprovalHistory(
         id,
         'returned',
@@ -703,7 +718,6 @@ export class TicketService {
         [userId, input.booking_reference, id]
       );
 
-      // Pass the transaction client
       await this.addApprovalHistory(
         id,
         'booked',
@@ -744,7 +758,6 @@ export class TicketService {
         [id]
       );
 
-      // Pass the transaction client
       await this.addApprovalHistory(
         id,
         'cancelled',

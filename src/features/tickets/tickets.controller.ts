@@ -1,4 +1,5 @@
 // src/features/tickets/tickets.controller.ts
+
 import { Request, Response } from 'express';
 import { asyncHandler } from '../../utils/asyncHandler';
 import { AppError, sendSuccess } from '../../utils/response';
@@ -18,40 +19,51 @@ import {
 
 export const ticketController = {
 
-  // ── Create ────────────────────────────────────────────────────────────────────
+  // ─── Create ────────────────────────────────────────────────────────────────────
 
   create: asyncHandler(async (req: Request, res: Response) => {
     const result = createTicketSchema.safeParse({ body: req.body });
-    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
+    }
     const ticket = await TicketService.createTicket(result.data.body, req.user!.id);
     return sendSuccess(res, ticket, 'Ticket created successfully', 201);
   }),
 
-  // ── Read ──────────────────────────────────────────────────────────────────────
+  // ─── Read ──────────────────────────────────────────────────────────────────────
 
   getAll: asyncHandler(async (req: Request, res: Response) => {
     const result = ticketFiltersSchema.safeParse({ query: req.query });
-    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid filters');
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid filters');
+    }
     const tickets = await TicketService.findAll(result.data.query, req.user!.id);
     return sendSuccess(res, tickets, 'Tickets retrieved successfully');
   }),
 
   getById: asyncHandler(async (req: Request, res: Response) => {
     const result = ticketIdSchema.safeParse({ params: req.params });
-    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    }
     const ticket = await TicketService.findByIdWithHistory(result.data.params.id);
-    if (!ticket) throw new AppError(404, 'Ticket not found');
+    if (!ticket) {
+      throw new AppError(404, 'Ticket not found');
+    }
     return sendSuccess(res, ticket, 'Ticket retrieved successfully');
   }),
 
-  // ── Update ────────────────────────────────────────────────────────────────────
+  // ─── Update ────────────────────────────────────────────────────────────────────
 
   update: asyncHandler(async (req: Request, res: Response) => {
     const paramsResult = ticketIdSchema.safeParse({ params: req.params });
-    if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    if (!paramsResult.success) {
+      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    }
     const bodyResult = updateTicketSchema.safeParse({ body: req.body });
-    if (!bodyResult.success) throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
-    // Pass the authenticated user's ID for scope validation
+    if (!bodyResult.success) {
+      throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+    }
     const ticket = await TicketService.update(
       paramsResult.data.params.id,
       bodyResult.data.body,
@@ -60,20 +72,26 @@ export const ticketController = {
     return sendSuccess(res, ticket, 'Ticket updated successfully');
   }),
 
-  // ── Workflow ─────────────────────────────────────────────────────────────────
+  // ─── Workflow ─────────────────────────────────────────────────────────────────
 
   submitForApproval: asyncHandler(async (req: Request, res: Response) => {
     const result = ticketIdSchema.safeParse({ params: req.params });
-    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    }
     const ticket = await TicketService.submitForApproval(result.data.params.id, req.user!.id);
     return sendSuccess(res, ticket, 'Ticket submitted for approval');
   }),
 
   approve: asyncHandler(async (req: Request, res: Response) => {
     const paramsResult = ticketIdSchema.safeParse({ params: req.params });
-    if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    if (!paramsResult.success) {
+      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    }
     const bodyResult = approveTicketSchema.safeParse({ body: req.body });
-    if (!bodyResult.success) throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+    if (!bodyResult.success) {
+      throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+    }
     const ticket = await TicketService.approveTicket(
       paramsResult.data.params.id,
       bodyResult.data.body,
@@ -84,9 +102,13 @@ export const ticketController = {
 
   reject: asyncHandler(async (req: Request, res: Response) => {
     const paramsResult = ticketIdSchema.safeParse({ params: req.params });
-    if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    if (!paramsResult.success) {
+      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    }
     const bodyResult = rejectTicketSchema.safeParse({ body: req.body });
-    if (!bodyResult.success) throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+    if (!bodyResult.success) {
+      throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+    }
     const ticket = await TicketService.rejectTicket(
       paramsResult.data.params.id,
       bodyResult.data.body,
@@ -97,9 +119,13 @@ export const ticketController = {
 
   return: asyncHandler(async (req: Request, res: Response) => {
     const paramsResult = ticketIdSchema.safeParse({ params: req.params });
-    if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    if (!paramsResult.success) {
+      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    }
     const bodyResult = returnTicketSchema.safeParse({ body: req.body });
-    if (!bodyResult.success) throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+    if (!bodyResult.success) {
+      throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+    }
     const ticket = await TicketService.returnTicket(
       paramsResult.data.params.id,
       bodyResult.data.body,
@@ -110,9 +136,13 @@ export const ticketController = {
 
   book: asyncHandler(async (req: Request, res: Response) => {
     const paramsResult = ticketIdSchema.safeParse({ params: req.params });
-    if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    if (!paramsResult.success) {
+      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    }
     const bodyResult = bookTicketSchema.safeParse({ body: req.body });
-    if (!bodyResult.success) throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+    if (!bodyResult.success) {
+      throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+    }
     const ticket = await TicketService.bookTicket(
       paramsResult.data.params.id,
       bodyResult.data.body,
@@ -123,25 +153,33 @@ export const ticketController = {
 
   cancel: asyncHandler(async (req: Request, res: Response) => {
     const result = ticketIdSchema.safeParse({ params: req.params });
-    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    }
     const ticket = await TicketService.cancelTicket(result.data.params.id, req.user!.id);
     return sendSuccess(res, ticket, 'Ticket cancelled');
   }),
 
   complete: asyncHandler(async (req: Request, res: Response) => {
     const result = ticketIdSchema.safeParse({ params: req.params });
-    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    }
     const ticket = await TicketService.completeTicket(result.data.params.id, req.user!.id);
     return sendSuccess(res, ticket, 'Ticket completed');
   }),
 
-  // ── Comments ─────────────────────────────────────────────────────────────────
+  // ─── Comments ─────────────────────────────────────────────────────────────────
 
   addComment: asyncHandler(async (req: Request, res: Response) => {
     const paramsResult = ticketIdSchema.safeParse({ params: req.params });
-    if (!paramsResult.success) throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    if (!paramsResult.success) {
+      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    }
     const bodyResult = addCommentSchema.safeParse({ body: req.body });
-    if (!bodyResult.success) throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+    if (!bodyResult.success) {
+      throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+    }
     const comment = await TicketService.addComment(
       paramsResult.data.params.id,
       bodyResult.data.body,
@@ -152,7 +190,9 @@ export const ticketController = {
 
   deleteComment: asyncHandler(async (req: Request, res: Response) => {
     const result = ticketCommentIdSchema.safeParse({ params: req.params });
-    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    }
     await TicketService.deleteComment(
       result.data.params.id,
       result.data.params.commentId,
@@ -161,11 +201,13 @@ export const ticketController = {
     return sendSuccess(res, null, 'Comment deleted successfully');
   }),
 
-  // ── Delete ───────────────────────────────────────────────────────────────────
+  // ─── Delete ───────────────────────────────────────────────────────────────────
 
   delete: asyncHandler(async (req: Request, res: Response) => {
     const result = ticketIdSchema.safeParse({ params: req.params });
-    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    }
     await TicketService.softDelete(result.data.params.id);
     return sendSuccess(res, null, 'Ticket deleted successfully');
   }),

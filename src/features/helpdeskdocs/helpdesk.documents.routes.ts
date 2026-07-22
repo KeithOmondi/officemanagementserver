@@ -118,14 +118,14 @@ router.delete(
 
 router.patch(
     '/:id/link',
-    requireRole('super_admin', 'dept_head'),
+    requireRole('super_admin', 'dept_head', "staff"),
     validate(linkDocumentSchema),
     HelpdeskDocumentsController.link
 );
 
 router.post(
     '/bulk/link',
-    requireRole('super_admin', 'dept_head'),
+    requireRole('super_admin', 'dept_head', "staff"),
     validate(bulkLinkDocumentsSchema),
     HelpdeskDocumentsController.bulkLink
 );
@@ -134,7 +134,7 @@ router.post(
 
 router.post(
     '/bulk/status',
-    requireRole('super_admin', 'dept_head'),
+    requireRole('super_admin', 'dept_head', "staff"),
     validate(bulkUpdateStatusSchema),
     HelpdeskDocumentsController.bulkUpdateStatus
 );

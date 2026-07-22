@@ -65,7 +65,7 @@ router.get(
 
 router.post(
     '/:id/submit',
-    requireRole('dept_head'),
+    requireRole('dept_head', "staff"),
     validate(submitDocumentForApprovalSchema),
     HelpdeskDocumentsController.submitForApproval
 );

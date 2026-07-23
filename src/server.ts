@@ -1,3 +1,5 @@
+// src/index.ts
+
 // ── MUST BE THE FIRST IMPORT ──────────────────────────────────────────────────
 import { profileImport } from './profile-imports';
 
@@ -8,6 +10,7 @@ import { env } from './config/env';
 import { setupWebSocket } from './socket';
 import { scheduleBringUpReminders } from './jobs/bringUpReminders.job';
 import { scheduleMonthlyReportGeneration } from './cron/monthly-report.cron';
+import RealtimeService from './services/realtime.service';
 
 profileImport('After imports');
 
@@ -27,14 +30,20 @@ const startServer = async () => {
     // ── Setup WebSocket ──────────────────────────────────────────────────────
     const io = setupWebSocket(server);
 
-    // Make io available to routes
+    // ── Initialize Realtime Service ──────────────────────────────────────────
+    const realtimeService = new RealtimeService(io);
+
+    // Make io and realtimeService available to routes
     app.set('io', io);
+    app.set('realtimeService', realtimeService);
+
+    console.log('✅ Realtime service initialized');
 
     // ── Schedule Background Jobs ─────────────────────────────────────────────
     scheduleBringUpReminders(io);
     scheduleMonthlyReportGeneration();
 
-    return { server, io };
+    return { server, io, realtimeService };
 
   } catch (error) {
     console.error('❌ Failed to initialize application framework:', error);

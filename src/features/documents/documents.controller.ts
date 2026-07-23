@@ -25,6 +25,7 @@ import {
   getFolderDocumentsSchema,
   // ── Follow-up schemas ──────────────────────────────────────────────
   createFollowUpSchema,
+  fileAwayFollowUpSchema,
   updateFollowUpSchema,
   completeFollowUpSchema,
   cancelFollowUpSchema,
@@ -32,6 +33,74 @@ import {
   followUpFiltersSchema,
   followUpIdSchema,
 } from './documents.validator';
+import { getRealtimeService } from '../../middleware/realtime.middleware';
+
+// ─── Helper: Safe realtime broadcast ─────────────────────────────────────────
+
+const safeBroadcast = (req: Request, event: string, data: unknown) => {
+  const realtime = getRealtimeService(req);
+  if (realtime) {
+    realtime.broadcast(event, data);
+  } else {
+    console.warn(`⚠️ Realtime service not available, skipping broadcast for event: ${event}`);
+  }
+};
+
+const safeEmitToRoom = (req: Request, room: string, event: string, data: unknown) => {
+  const realtime = getRealtimeService(req);
+  if (realtime) {
+    realtime.emitToRoom(room, event, data);
+  } else {
+    console.warn(`⚠️ Realtime service not available, skipping emit to room ${room} for event: ${event}`);
+  }
+};
+
+const safeEmitToUser = (req: Request, userId: string, event: string, data: unknown) => {
+  const realtime = getRealtimeService(req);
+  if (realtime) {
+    realtime.emitToUser(userId, event, data);
+  } else {
+    console.warn(`⚠️ Realtime service not available, skipping emit to user ${userId} for event: ${event}`);
+  }
+};
+
+// ─── Helper: Safe document methods ──────────────────────────────────────────
+
+const safeDocumentCreated = (req: Request, doc: unknown) => {
+  const realtime = getRealtimeService(req);
+  if (realtime && realtime.documentCreated) {
+    realtime.documentCreated(doc);
+  } else if (realtime) {
+    realtime.broadcast('document_created', doc);
+  }
+};
+
+const safeDocumentUpdated = (req: Request, doc: unknown, targetUserId?: string) => {
+  const realtime = getRealtimeService(req);
+  if (realtime && realtime.documentUpdated) {
+    realtime.documentUpdated(doc, targetUserId);
+  } else if (realtime) {
+    realtime.broadcast('document_updated', doc);
+  }
+};
+
+const safeDocumentDeleted = (req: Request, documentId: string) => {
+  const realtime = getRealtimeService(req);
+  if (realtime && realtime.documentDeleted) {
+    realtime.documentDeleted(documentId);
+  } else if (realtime) {
+    realtime.broadcast('document_deleted', { id: documentId });
+  }
+};
+
+const safeMarkUpdated = (req: Request, data: unknown, targetUserId: string) => {
+  const realtime = getRealtimeService(req);
+  if (realtime && realtime.markUpdated) {
+    realtime.markUpdated(data, targetUserId);
+  } else if (realtime) {
+    realtime.broadcast('mark_updated', data);
+  }
+};
 
 export const documentController = {
 
@@ -41,6 +110,9 @@ export const documentController = {
     const result = createComposedDocumentSchema.safeParse({ body: req.body });
     if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
     const doc = await DocumentService.createComposed(result.data.body, req.user!.id);
+    
+    safeDocumentCreated(req, doc);
+    
     return sendSuccess(res, doc, 'Document created successfully', 201);
   }),
 
@@ -57,6 +129,9 @@ export const documentController = {
       req.user!.role,
       io
     );
+    
+    safeDocumentCreated(req, doc);
+    
     return sendSuccess(res, doc, 'Document uploaded successfully', 201);
   }),
 
@@ -66,6 +141,9 @@ export const documentController = {
     const result = composeMemoSchema.safeParse({ body: req.body });
     if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid memo data');
     const doc = await DocumentService.generateMemo(result.data.body, req.user!.id);
+    
+    safeDocumentCreated(req, doc);
+    
     return sendSuccess(res, doc, 'Memo generated successfully', 201);
   }),
 
@@ -73,6 +151,9 @@ export const documentController = {
     const result = composeLetterSchema.safeParse({ body: req.body });
     if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid letter data');
     const doc = await DocumentService.generateLetter(result.data.body, req.user!.id);
+    
+    safeDocumentCreated(req, doc);
+    
     return sendSuccess(res, doc, 'Letter generated successfully', 201);
   }),
 
@@ -89,6 +170,9 @@ export const documentController = {
       req.user!.id,
       bodyResult.data.body.note
     );
+    
+    safeDocumentUpdated(req, doc, bodyResult.data.body.recipient_id);
+    
     return sendSuccess(res, doc, 'Document sent successfully');
   }),
 
@@ -162,6 +246,9 @@ export const documentController = {
     }
 
     const updated = await DocumentService.update(paramsResult.data.params.id, bodyResult.data.body);
+    
+    safeDocumentUpdated(req, updated, req.user!.id);
+    
     return sendSuccess(res, updated, 'Document updated successfully');
   }),
 
@@ -171,6 +258,9 @@ export const documentController = {
     const result = documentIdSchema.safeParse({ params: req.params });
     if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
     const doc = await DocumentService.send(result.data.params.id);
+    
+    safeDocumentUpdated(req, doc);
+    
     return sendSuccess(res, doc, 'Document sent and filed successfully');
   }),
 
@@ -178,6 +268,9 @@ export const documentController = {
     const result = documentIdSchema.safeParse({ params: req.params });
     if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
     await DocumentService.softDelete(result.data.params.id);
+    
+    safeDocumentDeleted(req, result.data.params.id);
+    
     return sendSuccess(res, null, 'Document deleted successfully');
   }),
 
@@ -195,6 +288,16 @@ export const documentController = {
       req.user!.id,
       io
     );
+    
+    safeDocumentUpdated(req, doc);
+    if (bodyResult.data.body.assigned_to) {
+      safeEmitToUser(req, bodyResult.data.body.assigned_to, 'document_assigned', {
+        document_id: doc.id,
+        title: doc.title,
+        message: `Document "${doc.title}" has been assigned to you`
+      });
+    }
+    
     return sendSuccess(res, doc, 'Draft finalized successfully');
   }),
 
@@ -210,6 +313,9 @@ export const documentController = {
       bodyResult.data.body,
       req.user!.id
     );
+    
+    safeDocumentUpdated(req, doc);
+    
     return sendSuccess(res, doc, 'Document returned for action');
   }),
 
@@ -233,6 +339,9 @@ export const documentController = {
       req.user!.id,
       req.file
     );
+    
+    safeEmitToRoom(req, `document:${paramsResult.data.params.id}`, 'new_response', response);
+    
     return sendSuccess(res, response, 'Response added successfully', 201);
   }),
 
@@ -255,6 +364,24 @@ export const documentController = {
       bodyResult.data.body,
       req.user!.id
     );
+    
+    if (bodyResult.data.body.assigned_to) {
+      safeMarkUpdated(req, 
+        { 
+          document_id: doc.id, 
+          status: doc.status, 
+          assigned_to: bodyResult.data.body.assigned_to,
+          assigned_to_name: doc.assigned_to_name,
+          document_title: doc.title,
+          marked_by: req.user!.full_name,
+          marked_at: new Date().toISOString(),
+        }, 
+        bodyResult.data.body.assigned_to
+      );
+    }
+    
+    safeDocumentUpdated(req, doc);
+    
     return sendSuccess(res, doc, 'Document marked successfully');
   }),
 
@@ -262,6 +389,20 @@ export const documentController = {
     const result = documentIdSchema.safeParse({ params: req.params });
     if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
     const doc = await DocumentService.acknowledgeMark(result.data.params.id, req.user!.id);
+    
+    safeMarkUpdated(req,
+      { 
+        document_id: doc.id, 
+        status: doc.status, 
+        acknowledged_by: req.user!.id,
+        acknowledged_by_name: req.user!.full_name,
+        document_title: doc.title,
+        acknowledged_at: new Date().toISOString(),
+      }, 
+      doc.created_by
+    );
+    safeDocumentUpdated(req, doc);
+    
     return sendSuccess(res, doc, 'Document acknowledged');
   }),
 
@@ -269,6 +410,20 @@ export const documentController = {
     const result = documentIdSchema.safeParse({ params: req.params });
     if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
     const doc = await DocumentService.completeMark(result.data.params.id, req.user!.id);
+    
+    safeMarkUpdated(req,
+      { 
+        document_id: doc.id, 
+        status: doc.status, 
+        completed_by: req.user!.id,
+        completed_by_name: req.user!.full_name,
+        document_title: doc.title,
+        completed_at: new Date().toISOString(),
+      }, 
+      doc.created_by
+    );
+    safeDocumentUpdated(req, doc);
+    
     return sendSuccess(res, doc, 'Document marked as completed');
   }),
 
@@ -284,6 +439,9 @@ export const documentController = {
       bodyResult.data.body,
       req.user!.id
     );
+    
+    safeEmitToRoom(req, `document:${paramsResult.data.params.id}`, 'annotation_added', annotation);
+    
     return sendSuccess(res, annotation, 'Annotation added successfully', 201);
   }),
 
@@ -295,6 +453,11 @@ export const documentController = {
       result.data.params.annotationId,
       req.user!.id
     );
+    
+    safeEmitToRoom(req, `document:${result.data.params.id}`, 'annotation_deleted', {
+      annotationId: result.data.params.annotationId
+    });
+    
     return sendSuccess(res, null, 'Annotation deleted successfully');
   }),
 
@@ -341,6 +504,14 @@ export const documentController = {
     }
 
     const signedDoc = await DocumentService.sign(paramsResult.data.params.id, req.user!.id, otp);
+    
+    safeDocumentUpdated(req, signedDoc);
+    safeEmitToRoom(req, `document:${paramsResult.data.params.id}`, 'document_signed', {
+      document_id: signedDoc.id,
+      signed_by: req.user!.full_name,
+      signed_at: new Date().toISOString(),
+    });
+    
     return sendSuccess(res, signedDoc, 'Document signed successfully. Ready for release.');
   }),
 
@@ -365,6 +536,16 @@ export const documentController = {
       note,
       recipientId
     );
+    
+    safeDocumentUpdated(req, doc);
+    if (recipientId) {
+      safeEmitToUser(req, recipientId, 'document_released', {
+        document_id: doc.id,
+        title: doc.title,
+        message: `Document "${doc.title}" has been released to you`
+      });
+    }
+    
     return sendSuccess(res, doc, 'Document released to admin side successfully.');
   }),
 
@@ -383,6 +564,12 @@ export const documentController = {
       paramsResult.data.markId,
       bodyResult.data
     );
+    
+    safeEmitToRoom(req, `document:${updatedMark.document_id}`, 'mark_updated', updatedMark);
+    if (updatedMark.assigned_to) {
+      safeEmitToUser(req, updatedMark.assigned_to, 'mark_updated', updatedMark);
+    }
+    
     return sendSuccess(res, updatedMark, 'Mark updated successfully');
   }),
 
@@ -401,6 +588,10 @@ export const documentController = {
       req.user!.id,
       bodyResult.data.body.note
     );
+    
+    safeDocumentUpdated(req, doc);
+    safeEmitToRoom(req, `folder:${bodyResult.data.body.folder_id}`, 'document_added_to_folder', doc);
+    
     return sendSuccess(res, doc, 'Document redirected to folder successfully');
   }),
 
@@ -416,6 +607,9 @@ export const documentController = {
       req.user!.id,
       bodyResult.data.body?.note
     );
+    
+    safeDocumentUpdated(req, doc);
+    
     return sendSuccess(res, doc, 'Document removed from folder successfully');
   }),
 
@@ -446,14 +640,17 @@ export const documentController = {
     const result = documentIdSchema.safeParse({ params: req.params });
     if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
     const doc = await DocumentService.regeneratePdf(result.data.params.id);
+    
+    safeDocumentUpdated(req, doc);
+    
     return sendSuccess(res, doc, 'Document PDF regenerated successfully');
   }),
 
   // ════════════════════════════════════════════════════════════════════════════
-  //  FOLLOW-UP CONTROLLER METHODS
+  //  FOLLOW-UP CONTROLLER METHODS (UPDATED - SIMPLIFIED)
   // ════════════════════════════════════════════════════════════════════════════
 
-  // ── Create Follow-Up ────────────────────────────────────────────────────────
+  // ── Create Follow-Up (Simplified) ──────────────────────────────────────────
 
   createFollowUp: asyncHandler(async (req: Request, res: Response) => {
     const result = createFollowUpSchema.safeParse({ body: req.body });
@@ -466,7 +663,43 @@ export const documentController = {
       req.user!.id
     );
 
+    safeBroadcast(req, 'follow_up_created', followUp);
+    if (followUp.assigned_to) {
+      safeEmitToUser(req, followUp.assigned_to, 'follow_up_created', followUp);
+    }
+    if (followUp.document_id) {
+      safeEmitToRoom(req, `document:${followUp.document_id}`, 'follow_up_created', followUp);
+    }
+
     return sendSuccess(res, followUp, 'Follow-up created successfully', 201);
+  }),
+
+  // ── File Away Follow-Up (New) ─────────────────────────────────────────────
+
+  fileAwayFollowUp: asyncHandler(async (req: Request, res: Response) => {
+    const result = fileAwayFollowUpSchema.safeParse({ body: req.body });
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid file away data');
+    }
+
+    const followUp = await DocumentService.fileAwayFollowUp(
+      result.data.body,
+      req.user!.id
+    );
+
+    safeBroadcast(req, 'follow_up_filed_away', followUp);
+    if (followUp.document_id) {
+      safeEmitToRoom(req, `document:${followUp.document_id}`, 'follow_up_filed_away', followUp);
+    }
+
+    return sendSuccess(res, followUp, 'Follow-up filed away successfully', 201);
+  }),
+
+  // ── Get Follow-Up Summary (New) ────────────────────────────────────────────
+
+  getFollowUpSummary: asyncHandler(async (req: Request, res: Response) => {
+    const summary = await DocumentService.getFollowUpSummary(req.user!.id);
+    return sendSuccess(res, summary, 'Follow-up summary retrieved successfully');
   }),
 
   // ── Get Follow-Ups ──────────────────────────────────────────────────────────
@@ -569,6 +802,14 @@ export const documentController = {
       req.user!.id
     );
 
+    safeBroadcast(req, 'follow_up_updated', updated);
+    if (updated.assigned_to) {
+      safeEmitToUser(req, updated.assigned_to, 'follow_up_updated', updated);
+    }
+    if (updated.document_id) {
+      safeEmitToRoom(req, `document:${updated.document_id}`, 'follow_up_updated', updated);
+    }
+
     return sendSuccess(res, updated, 'Follow-up updated successfully');
   }),
 
@@ -590,6 +831,14 @@ export const documentController = {
       req.user!.id,
       bodyResult.data.body
     );
+
+    safeBroadcast(req, 'follow_up_completed', completed);
+    if (completed.assigned_to) {
+      safeEmitToUser(req, completed.assigned_to, 'follow_up_completed', completed);
+    }
+    if (completed.document_id) {
+      safeEmitToRoom(req, `document:${completed.document_id}`, 'follow_up_completed', completed);
+    }
 
     return sendSuccess(res, completed, 'Follow-up completed successfully');
   }),
@@ -613,6 +862,14 @@ export const documentController = {
       bodyResult.data.body
     );
 
+    safeBroadcast(req, 'follow_up_cancelled', cancelled);
+    if (cancelled.assigned_to) {
+      safeEmitToUser(req, cancelled.assigned_to, 'follow_up_cancelled', cancelled);
+    }
+    if (cancelled.document_id) {
+      safeEmitToRoom(req, `document:${cancelled.document_id}`, 'follow_up_cancelled', cancelled);
+    }
+
     return sendSuccess(res, cancelled, 'Follow-up cancelled successfully');
   }),
 
@@ -635,6 +892,14 @@ export const documentController = {
       req.user!.id,
       req.file
     );
+
+    safeBroadcast(req, 'follow_up_comment_added', comment);
+    if (comment.follow_up_id) {
+      const followUp = await DocumentService.getFollowUpById(comment.follow_up_id);
+      if (followUp?.assigned_to) {
+        safeEmitToUser(req, followUp.assigned_to, 'follow_up_comment_added', comment);
+      }
+    }
 
     return sendSuccess(res, comment, 'Comment added successfully', 201);
   }),

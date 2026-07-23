@@ -1,152 +1,34 @@
 // src/features/documents/documents.types.ts
 
-export type DocumentType =
-  | 'judgment'
-  | 'ruling'
-  | 'order'
-  | 'correspondence'
-  | 'upload'
-  | 'memo'
-  | 'letter';
-
-/**
- * Document status lifecycle:
- * 
- * ┌────────────┐      ┌───────────────┐      ┌──────────────┐      ┌──────────────┐
- * │   draft    │ ──▶ │  uploaded /   │ ──▶ │ dept_assigned│ ──▶ │ user_assigned│
- * │            │     │ pending_review│      │ (SuperAdmin) │     │ (DeptHead)   │
- * └────────────┘     └───────────────┘      └──────────────┘     └──────────────┘
- *                                                                        │
- *                                                                        ▼
- *                                                              ┌──────────────┐
- *                                                              │ in_progress  │
- *                                                              │ (user works) │
- *                                                              └──────────────┘
- *                                                                        │
- *                                                                        ▼
- *                                                              ┌──────────────┐
- *                                                              │  completed   │
- *                                                              └──────────────┘
- *                                                                        │
- *                                                          ┌─────────────┴─────────────┐
- *                                                          ▼                           ▼
- *                                                   ┌─────────────┐           ┌──────────────┐
- *                                                   │ ready_to_release │         │    filed    │
- *                                                   └─────────────┘           └──────────────┘
- *                                                          │
- *                                                          ▼
- *                                                   ┌─────────────┐
- *                                                   │  released   │
- *                                                   └─────────────┘
- */
-export type DocumentStatus =
-  | 'draft'
-  | 'uploaded'
-  | 'pending_review'
-  | 'dept_assigned'   // Assigned to a department (by Super Admin)
-  | 'user_assigned'   // Assigned to a specific user (by Department Head)
-  | 'in_progress'
-  | 'completed'
-  | 'filed'
-  | 'ready_to_release'
-  | 'released';
-
-// Legacy alias for backward compatibility – 'marked' is now 'dept_assigned'
-// but we keep it so old clients still work.
-export type LegacyDocumentStatus = 'marked';
-// You can keep 'marked' in the union temporarily:
-// export type DocumentStatus = ... | 'marked';
-
-export type DocumentCategory =
-  | 'judgments' | 'rulings' | 'correspondence' | 'orders' | 'drafts' | 'general';
-
-export type RoutePriority = 'low' | 'normal' | 'urgent';
-
-export type RefType = 'for_signature' | 'for_attention' | 'for_information' | 'direction' | 'other';
-
-// ── Signature Placement ──────────────────────────────────────────────────
-// NOTE: Signature placement is now auto‑detected by scanning the document
-// for the signatory block (name + title). Custom absolute positioning can
-// still be applied via signature_position_x/y/width/height fields.
-
-// ── Document Mark ──────────────────────────────────────────────────────────
-
-export interface DocumentMark {
-  id: string;
-  document_id: string;
-  marked_by: string;
-  marked_by_name: string;
-  marked_to_dept: string;
-  marked_to_dept_name: string;
-  assigned_to: string | null;
-  assigned_to_name: string | null;
-  instructions: string | null;
-  bring_up_date: string | null;
-  priority: RoutePriority;
-  marked_at: Date;
-  acknowledged_at: Date | null;
-  completed_at: Date | null;
-  is_active: boolean;
-}
-
-// ── Document Annotation ────────────────────────────────────────────────────
-
-export interface DocumentAnnotation {
-  id: string;
-  document_id: string;
-  annotated_by: string;
-  annotated_by_name: string;
-  comment: string;
-  is_urgent: boolean;
-  visible_in_summary: boolean;
-  created_at: Date;
-}
-
-// ── Document Response ─────────────────────────────────────────────────────
-
-export interface DocumentResponse {
-  id: string;
-  document_id: string;
-  response_number: number;
-  responded_by: string;
-  responded_by_name: string;
-  note: string;
-  file_url: string | null;
-  file_public_id: string | null;
-  file_size_bytes: number | null;
-  mime_type: string | null;
-  original_name: string | null;
-  created_at: Date;
-}
+// ... (keep all existing types above)
 
 // ════════════════════════════════════════════════════════════════════════════
-//  FOLLOW-UP TYPES
+//  FOLLOW-UP TYPES (UPDATED)
 // ════════════════════════════════════════════════════════════════════════════
 
-export type FollowUpStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled';
+export type FollowUpStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled' | 'filed_away';
 
 export type FollowUpPriority = 'low' | 'normal' | 'urgent';
 
 export interface FollowUp {
   id: string;
   document_id: string;
-  mark_id: string; // Links to the bring-up mark
-  title: string;
-  description: string | null;
+  mark_id: string | null;        // Optional - link to bring-up mark
+  notes: string;                 // Required - what was done or needs to be done
   assigned_to: string;
   assigned_to_name: string | null;
   created_by: string;
   created_by_name: string | null;
-  due_date: Date;
+  due_date: string | null;       // ✅ Optional - can be null (for filed away items)
   priority: FollowUpPriority;
   status: FollowUpStatus;
-  completed_at: Date | null;
-  cancelled_at: Date | null;
+  completed_at: string | null;
+  cancelled_at: string | null;
   cancellation_reason: string | null;
   completion_notes: string | null;
   is_active: boolean;
-  created_at: Date;
-  updated_at: Date;
+  created_at: string;
+  updated_at: string;
   comment_count?: number;
 }
 
@@ -158,7 +40,7 @@ export interface FollowUpComment {
   comment: string;
   file_url: string | null;
   file_public_id: string | null;
-  created_at: Date;
+  created_at: string;
 }
 
 export interface FollowUpWithComments extends FollowUp {
@@ -178,47 +60,69 @@ export type FollowUpReminderType = 'one_day_before' | 'due_date' | 'overdue';
 export interface FollowUpReminder {
   id: string;
   follow_up_id: string;
-  reminder_date: Date;
+  reminder_date: string;
   reminder_type: FollowUpReminderType;
-  sent_at: Date | null;
-  created_at: Date;
+  sent_at: string | null;
+  created_at: string;
 }
 
 // ── Follow-up Input Types ──────────────────────────────────────────────────
 
+/**
+ * Create Follow-Up Input
+ * 
+ * Simplified for user needs:
+ * - notes: Required - what was done or needs to be done
+ * - due_date: Optional - only set if future follow-up needed
+ * - status: Optional - defaults to 'pending' if due_date set, 'filed_away' if not
+ * - title: Removed - auto-generated from document title
+ */
 export interface CreateFollowUpInput {
   document_id: string;
-  mark_id: string;
-  title: string;
-  description?: string;
-  assigned_to: string;
-  due_date: Date | string;
-  priority: FollowUpPriority;
+  mark_id?: string;              // Optional - may not always be linked to a mark
+  notes: string;                 // Required - the main content
+  assigned_to: string;           // Who this follow-up is for
+  due_date?: Date | string | null; // Optional - if not provided, it's "filed away"
+  priority?: FollowUpPriority;   // Optional - defaults to 'normal'
 }
 
+/**
+ * Update Follow-Up Input
+ */
 export interface UpdateFollowUpInput {
-  title?: string;
-  description?: string;
+  notes?: string;
   assigned_to?: string;
-  due_date?: Date | string;
+  due_date?: Date | string | null;
   priority?: FollowUpPriority;
   status?: FollowUpStatus;
   completion_notes?: string;
   cancellation_reason?: string;
 }
 
+/**
+ * Complete Follow-Up Input
+ */
 export interface CompleteFollowUpInput {
   completion_notes?: string;
 }
 
+/**
+ * Cancel Follow-Up Input
+ */
 export interface CancelFollowUpInput {
   cancellation_reason: string;
 }
 
+/**
+ * Add Follow-Up Comment Input
+ */
 export interface AddFollowUpCommentInput {
   comment: string;
 }
 
+/**
+ * Follow-Up Filters
+ */
 export interface FollowUpFilters {
   document_id?: string;
   assigned_to?: string;
@@ -229,67 +133,17 @@ export interface FollowUpFilters {
   search?: string;
   page?: number;
   limit?: number;
-  sort_by?: 'created_at' | 'due_date' | 'priority' | 'status' | 'title';
+  sort_by?: 'created_at' | 'due_date' | 'priority' | 'status' | 'notes';
   sort_order?: 'ASC' | 'DESC';
+  // ✅ New filter: Show only "active" follow-ups (not filed away)
+  active_only?: boolean;
+  // ✅ New filter: Show only "filed away" items
+  filed_only?: boolean;
 }
 
 // ── Document ──────────────────────────────────────────────────────────────
 
-export interface Document {
-  id: string;
-  title: string;
-  type: DocumentType;
-  category: DocumentCategory | null;
-  status: DocumentStatus;
-  reference_no: string | null;
-  ref_type: RefType | null;
-  ref_other_description: string | null;
-  body: string | null;
-  file_url: string | null;
-  file_public_id: string | null;
-  file_size_bytes: number | null;
-  mime_type: string | null;
-  original_name: string | null;
-  assigned_to: string | null;
-  assigned_to_name: string | null;
-  created_by: string;
-  created_by_name: string;
-  department_id: string | null;
-  department_name: string | null;
-  folder_id: string | null;
-  folder_name: string | null;
-  is_signed: boolean;
-  signed_by: string | null;
-  signed_by_name: string | null;
-  signed_at: Date | null;
-  released_at: Date | null;
-  released_by: string | null;
-  released_by_name: string | null;
-  is_sent: boolean;
-  sent_at: Date | null;
-  is_draft: boolean;
-  is_active: boolean;
-  created_at: Date;
-  updated_at: Date;
-  active_mark: DocumentMark | null;
-  response_count?: number;
-
-  // Memo/Letter specific fields
-  to_recipient: string | null;
-  from_sender: string | null;
-  document_date: string | null;
-  subject: string | null;
-  cc: string | null;
-  enclosures: string | null;
-  signature_name: string | null;
-  signature_title: string | null;
-
-  // ── Custom signature position (draggable) ──────────────────────────────
-  signature_position_x: number | null;
-  signature_position_y: number | null;
-  signature_position_width: number | null;
-  signature_position_height: number | null;
-}
+// ... (keep Document interface as is)
 
 export interface DocumentWithAnnotations extends Document {
   annotations: DocumentAnnotation[];
@@ -298,26 +152,17 @@ export interface DocumentWithAnnotations extends Document {
   follow_ups: FollowUp[]; // Add follow-ups to document details
 }
 
-export interface DocumentPaginationResponse {
-  data: Document[];
-  total: number;
-  page: number;
-  limit: number;
-  totalPages: number;
-}
-
 // ── Document Flow Entry ────────────────────────────────────────────────────
-// Expanded action types for better audit trail
 
 export type DocumentFlowAction =
   | 'created'
   | 'uploaded'
   | 'updated'
-  | 'assigned_to_dept'      // Super Admin assigns to department
-  | 'assigned_to_user'      // Dept Head assigns to a specific user
-  | 'acknowledged'          // User acknowledges assignment
-  | 'started'               // User starts working (optional)
-  | 'completed'             // User finishes
+  | 'assigned_to_dept'
+  | 'assigned_to_user'
+  | 'acknowledged'
+  | 'started'
+  | 'completed'
   | 'filed'
   | 'released'
   | 'signed'
@@ -333,18 +178,19 @@ export type DocumentFlowAction =
   | 'follow_up_updated'
   | 'follow_up_completed'
   | 'follow_up_cancelled'
-  | 'follow_up_comment_added';
+  | 'follow_up_comment_added'
+  | 'follow_up_filed_away';      // ✅ New action for filing away
 
 export interface DocumentFlowEntry {
   id: string;
   document_id: string;
-  action: DocumentFlowAction;  // now strongly typed
+  action: DocumentFlowAction;
   from_user: string | null;
   from_user_name: string | null;
   to_user: string | null;
   to_user_name: string | null;
   note: string | null;
-  created_at: Date;
+  created_at: string;
 }
 
 // ── Document Folder Operations ─────────────────────────────────────────────
@@ -361,4 +207,44 @@ export interface FolderDocumentFilters {
   search?: string;
   type?: DocumentType;
   status?: DocumentStatus;
+}
+
+// ── Follow-up View Models ────────────────────────────────────────────────────
+
+/**
+ * For displaying follow-ups in a list/table
+ */
+export interface FollowUpListItem {
+  id: string;
+  document_title: string;
+  document_id: string;
+  notes: string;
+  assigned_to_name: string | null;
+  created_by_name: string | null;
+  due_date: string | null;
+  status: FollowUpStatus;
+  priority: FollowUpPriority;
+  created_at: string;
+  is_filed_away: boolean;        // ✅ Derived from due_date being null OR status = 'filed_away'
+}
+
+/**
+ * For the "My Follow-Ups" dashboard view
+ */
+export interface MyFollowUpSummary {
+  pending: number;               // Follow-ups with due_date in future
+  overdue: number;               // Follow-ups with due_date past
+  completed: number;             // Completed follow-ups (including filed away)
+  filed_away: number;            // Follow-ups marked as filed away
+  total: number;
+}
+
+/**
+ * For the "File Away" action
+ */
+export interface FileAwayInput {
+  document_id: string;
+  mark_id?: string;
+  notes: string;                 // What was done
+  completion_notes?: string;
 }

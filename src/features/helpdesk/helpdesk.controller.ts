@@ -41,6 +41,18 @@ import {
 } from './helpdesk.validator';
 import type { ReportModule, DSAReportFilters, RequestType, RemarkType, GeneralRequestCategory, UpdateStatusInput } from './helpdesk.types';
 import { generateDSAReportExcel } from './helpdesk-report.excel';
+import { getRealtimeService } from '../../middleware/realtime.middleware';
+
+// ─── Helper: Safe realtime emit ──────────────────────────────────────────────
+
+const safeRealtimeBroadcast = (req: Request, event: string, data: any) => {
+    const realtime = getRealtimeService(req);
+    if (realtime) {
+        realtime.broadcast(event, data);
+    } else {
+        console.warn(`⚠️ Realtime service not available, skipping broadcast for event: ${event}`);
+    }
+};
 
 export const helpDeskController = {
 
@@ -152,6 +164,10 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
         const request = await HelpDeskService.createGeneralRequest(result.data.body, req.user!.id);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'general_request_created', request);
+        
         return sendSuccess(res, request, 'General request created', 201);
     }),
 
@@ -175,6 +191,10 @@ export const helpDeskController = {
             paramsResult.data.params.id,
             bodyResult.data.body
         );
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'general_request_updated', request);
+        
         return sendSuccess(res, request, 'General request updated');
     }),
 
@@ -210,6 +230,14 @@ export const helpDeskController = {
             paramsResult.data.params.id,
             updateInput
         );
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'general_request_status_updated', {
+            id: request.id,
+            status: request.status,
+            updated_at: new Date().toISOString()
+        });
+        
         return sendSuccess(res, request, 'General request status updated');
     }),
 
@@ -223,6 +251,10 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deleteGeneralRequest(result.data.params.id);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'general_request_deleted', { id: result.data.params.id });
+        
         return sendSuccess(res, null, 'General request deleted');
     }),
 
@@ -330,6 +362,10 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
         const request = await HelpDeskService.createSecurityRequest(result.data.body, req.user!.id);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'security_request_created', request);
+        
         return sendSuccess(res, request, 'Security request created', 201);
     }),
 
@@ -350,6 +386,10 @@ export const helpDeskController = {
             paramsResult.data.params.id,
             bodyResult.data.body
         );
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'security_request_updated', request);
+        
         return sendSuccess(res, request, 'Security request updated');
     }),
 
@@ -370,6 +410,14 @@ export const helpDeskController = {
             paramsResult.data.params.id,
             { status, notes }
         );
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'security_request_status_updated', {
+            id: request.id,
+            status: request.status,
+            updated_at: new Date().toISOString()
+        });
+        
         return sendSuccess(res, request, 'Security request status updated');
     }),
 
@@ -383,6 +431,10 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deleteSecurityRequest(result.data.params.id);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'security_request_deleted', { id: result.data.params.id });
+        
         return sendSuccess(res, null, 'Security request deleted');
     }),
 
@@ -424,6 +476,10 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
         const utility = await HelpDeskService.createUtility(result.data.body, req.user!.id);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'utility_created', utility);
+        
         return sendSuccess(res, utility, 'Judge utility record created', 201);
     }),
 
@@ -440,6 +496,10 @@ export const helpDeskController = {
             paramsResult.data.params.id,
             bodyResult.data.body
         );
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'utility_item_added', utility);
+        
         return sendSuccess(res, utility, 'Utility item added', 201);
     }),
 
@@ -457,6 +517,10 @@ export const helpDeskController = {
             paramsResult.data.params.itemId,
             bodyResult.data.body
         );
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'utility_item_updated', utility);
+        
         return sendSuccess(res, utility, 'Utility item updated');
     }),
 
@@ -466,6 +530,13 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deleteUtilityItem(result.data.params.id, result.data.params.itemId);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'utility_item_deleted', { 
+            utilityId: result.data.params.id, 
+            itemId: result.data.params.itemId 
+        });
+        
         return sendSuccess(res, null, 'Utility item deleted');
     }),
 
@@ -475,6 +546,10 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deleteUtility(result.data.params.id);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'utility_deleted', { id: result.data.params.id });
+        
         return sendSuccess(res, null, 'Judge utility record deleted');
     }),
 
@@ -507,6 +582,10 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
         const membership = await HelpDeskService.createClubMembership(result.data.body, req.user!.id);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'club_membership_created', membership);
+        
         return sendSuccess(res, membership, 'Club membership created', 201);
     }),
 
@@ -523,6 +602,10 @@ export const helpDeskController = {
             paramsResult.data.params.id,
             { status }
         );
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'club_membership_updated', membership);
+        
         return sendSuccess(res, membership, 'Club membership status updated');
     }),
 
@@ -532,6 +615,10 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deleteClubMembership(result.data.params.id);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'club_membership_deleted', { id: result.data.params.id });
+        
         return sendSuccess(res, null, 'Club membership deleted');
     }),
 
@@ -564,6 +651,10 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
         const circuit = await HelpDeskService.createCircuit(result.data.body, req.user!.id);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'circuit_created', circuit);
+        
         return sendSuccess(res, circuit, 'Circuit created', 201);
     }),
 
@@ -580,6 +671,10 @@ export const helpDeskController = {
             paramsResult.data.params.id,
             { status }
         );
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'circuit_updated', circuit);
+        
         return sendSuccess(res, circuit, 'Circuit status updated');
     }),
 
@@ -596,6 +691,10 @@ export const helpDeskController = {
             paramsResult.data.params.id,
             result.data.body.dsa_details
         );
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'circuit_dsa_updated', circuit);
+        
         return sendSuccess(res, circuit, 'Circuit DSA details updated');
     }),
 
@@ -605,6 +704,10 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deleteCircuit(result.data.params.id);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'circuit_deleted', { id: result.data.params.id });
+        
         return sendSuccess(res, null, 'Circuit deleted');
     }),
 
@@ -637,6 +740,10 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
         const bench = await HelpDeskService.createSpecialBench(result.data.body, req.user!.id);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'bench_created', bench);
+        
         return sendSuccess(res, bench, 'Special bench created', 201);
     }),
 
@@ -653,6 +760,10 @@ export const helpDeskController = {
             paramsResult.data.params.id,
             bodyResult.data.body
         );
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'bench_updated', bench);
+        
         return sendSuccess(res, bench, 'Special bench updated');
     }),
 
@@ -669,6 +780,10 @@ export const helpDeskController = {
             paramsResult.data.params.id,
             { status }
         );
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'bench_status_updated', bench);
+        
         return sendSuccess(res, bench, 'Bench status updated');
     }),
 
@@ -678,6 +793,10 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deleteBench(result.data.params.id);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'bench_deleted', { id: result.data.params.id });
+        
         return sendSuccess(res, null, 'Special bench deleted');
     }),
 
@@ -710,6 +829,10 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
         const partHeard = await HelpDeskService.createPartHeard(result.data.body, req.user!.id);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'part_heard_created', partHeard);
+        
         return sendSuccess(res, partHeard, 'Part-heard created', 201);
     }),
 
@@ -726,6 +849,10 @@ export const helpDeskController = {
             paramsResult.data.params.id,
             bodyResult.data.body
         );
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'part_heard_updated', partHeard);
+        
         return sendSuccess(res, partHeard, 'Part-heard updated');
     }),
 
@@ -742,6 +869,10 @@ export const helpDeskController = {
             paramsResult.data.params.id,
             { status }
         );
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'part_heard_status_updated', partHeard);
+        
         return sendSuccess(res, partHeard, 'Part-heard status updated');
     }),
 
@@ -751,6 +882,10 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deletePartHeard(result.data.params.id);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'part_heard_deleted', { id: result.data.params.id });
+        
         return sendSuccess(res, null, 'Part-heard deleted');
     }),
 
@@ -783,6 +918,10 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
         const week = await HelpDeskService.createServiceWeek(result.data.body, req.user!.id);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'service_week_created', week);
+        
         return sendSuccess(res, week, 'Service week created', 201);
     }),
 
@@ -799,6 +938,10 @@ export const helpDeskController = {
             paramsResult.data.params.id,
             { status }
         );
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'service_week_updated', week);
+        
         return sendSuccess(res, week, 'Service week status updated');
     }),
 
@@ -808,6 +951,10 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deleteServiceWeek(result.data.params.id);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'service_week_deleted', { id: result.data.params.id });
+        
         return sendSuccess(res, null, 'Service week deleted');
     }),
 
@@ -840,6 +987,10 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
         const claim = await HelpDeskService.createMedicalClaim(result.data.body, req.user!.id);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'medical_claim_created', claim);
+        
         return sendSuccess(res, claim, 'Medical claim created', 201);
     }),
 
@@ -856,6 +1007,10 @@ export const helpDeskController = {
             paramsResult.data.params.id,
             { status, remarks }
         );
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'medical_claim_updated', claim);
+        
         return sendSuccess(res, claim, 'Medical claim status updated');
     }),
 
@@ -865,6 +1020,10 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deleteMedicalClaim(result.data.params.id);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'medical_claim_deleted', { id: result.data.params.id });
+        
         return sendSuccess(res, null, 'Medical claim deleted');
     }),
 
@@ -897,6 +1056,10 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
         const visa = await HelpDeskService.createVisaRequest(result.data.body, req.user!.id);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'visa_request_created', visa);
+        
         return sendSuccess(res, visa, 'Visa request created', 201);
     }),
 
@@ -913,6 +1076,10 @@ export const helpDeskController = {
             paramsResult.data.params.id,
             { status, notes }
         );
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'visa_request_updated', visa);
+        
         return sendSuccess(res, visa, 'Visa status updated');
     }),
 
@@ -922,6 +1089,10 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deleteVisaRequest(result.data.params.id);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'visa_request_deleted', { id: result.data.params.id });
+        
         return sendSuccess(res, null, 'Visa request deleted');
     }),
 
@@ -995,6 +1166,10 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
         const event = await HelpDeskService.createProtocolEvent(result.data.body, req.user!.id);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'protocol_event_created', event);
+        
         return sendSuccess(res, event, 'Protocol event created', 201);
     }),
 
@@ -1011,6 +1186,10 @@ export const helpDeskController = {
             paramsResult.data.params.id,
             { status, notes }
         );
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'protocol_event_updated', event);
+        
         return sendSuccess(res, event, 'Protocol status updated');
     }),
 
@@ -1020,6 +1199,10 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deleteProtocolEvent(result.data.params.id);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'protocol_event_deleted', { id: result.data.params.id });
+        
         return sendSuccess(res, null, 'Protocol event deleted');
     }),
 
@@ -1052,6 +1235,10 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
         const payment = await HelpDeskService.createOtherPayment(result.data.body, req.user!.id);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'other_payment_created', payment);
+        
         return sendSuccess(res, payment, 'Other payment created', 201);
     }),
 
@@ -1068,6 +1255,10 @@ export const helpDeskController = {
             paramsResult.data.params.id,
             { status }
         );
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'other_payment_updated', payment);
+        
         return sendSuccess(res, payment, 'Other payment status updated');
     }),
 
@@ -1084,6 +1275,10 @@ export const helpDeskController = {
             paramsResult.data.params.id,
             result.data.body.dsa_details
         );
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'other_payment_dsa_updated', payment);
+        
         return sendSuccess(res, payment, 'Other payment DSA details updated');
     }),
 
@@ -1093,6 +1288,10 @@ export const helpDeskController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deleteOtherPayment(result.data.params.id);
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'other_payment_deleted', { id: result.data.params.id });
+        
         return sendSuccess(res, null, 'Other payment deleted');
     }),
 

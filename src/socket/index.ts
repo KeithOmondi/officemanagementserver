@@ -1,3 +1,5 @@
+// src/socket.ts
+
 import { Server as SocketServer, Socket } from 'socket.io';
 import { Server } from 'http';
 import { pool } from '../config/db';
@@ -29,6 +31,72 @@ interface TypingData {
   is_typing: boolean;
 }
 
+// ─── Real-time Event Emitters ──────────────────────────────────────────────
+
+/**
+ * Emit document update events
+ */
+export function emitDocumentUpdate(io: SocketServer, document: any, userId?: string) {
+  if (userId) {
+    io.to(`user:${userId}`).emit('document_updated', document);
+  }
+  // Also emit to document room
+  if (document.id) {
+    io.to(`document:${document.id}`).emit('document_updated', document);
+  }
+  // Broadcast to all
+  io.emit('document_updated', document);
+}
+
+export function emitDocumentCreated(io: SocketServer, document: any) {
+  io.emit('document_created', document);
+}
+
+export function emitDocumentDeleted(io: SocketServer, documentId: string) {
+  io.emit('document_deleted', documentId);
+}
+
+export function emitMarkUpdate(io: SocketServer, markData: any, userId: string) {
+  io.to(`user:${userId}`).emit('mark_updated', markData);
+  // Also emit to document room
+  if (markData.document_id) {
+    io.to(`document:${markData.document_id}`).emit('mark_updated', markData);
+  }
+}
+
+/**
+ * Emit Aide request events
+ */
+export function emitAideUpdate(io: SocketServer, aide: any) {
+  io.emit('aide_updated', aide);
+}
+
+export function emitAideCreated(io: SocketServer, aide: any) {
+  io.emit('aide_created', aide);
+}
+
+export function emitAideDeleted(io: SocketServer, aideId: string) {
+  io.emit('aide_deleted', aideId);
+}
+
+/**
+ * Emit Notification events
+ */
+export function emitNotification(io: SocketServer, notification: any, userId: string) {
+  io.to(`user:${userId}`).emit('notification', notification);
+}
+
+export function emitBroadcastNotification(io: SocketServer, notification: any) {
+  io.emit('broadcast_notification', notification);
+}
+
+/**
+ * Emit User status events
+ */
+export function emitUserStatusUpdate(io: SocketServer, userId: string, status: 'online' | 'offline' | 'away') {
+  io.emit('user_status', { userId, status });
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async function saveMessage(data: SendMessageData, userId: string) {
@@ -51,7 +119,6 @@ async function saveMessage(data: SendMessageData, userId: string) {
 
   const messageId = rows[0].id;
 
-  // Get full message with sender info
   const { rows: messageRows } = await pool.query(
     `SELECT m.id, m.sender_id, s.full_name AS sender_name, s.email AS sender_email,
             m.group_id, mg.name AS group_name,
@@ -69,9 +136,7 @@ async function saveMessage(data: SendMessageData, userId: string) {
 
   const message = messageRows[0];
 
-  // Create message status entries
   if (data.group_id) {
-    // Group message - status for all members
     const { rows: members } = await pool.query(
       `SELECT user_id FROM group_members 
        WHERE group_id = $1 AND is_active = true`,
@@ -87,7 +152,6 @@ async function saveMessage(data: SendMessageData, userId: string) {
       );
     }
   } else if (data.recipient_id) {
-    // Direct message - status for recipient
     await pool.query(
       `INSERT INTO message_status (message_id, user_id, delivered_at)
        VALUES ($1, $2, NOW())
@@ -124,7 +188,6 @@ async function markMessageAsRead(messageId: string, userId: string) {
     [messageId, userId]
   );
 
-  // Check if all recipients have read the message
   const { rows } = await pool.query(
     `SELECT COUNT(*) as total, 
             SUM(CASE WHEN is_read THEN 1 ELSE 0 END) as read_count
@@ -196,7 +259,7 @@ export function setupWebSocket(server: Server) {
     // Join user's personal room for direct messages
     socket.join(`user:${user.id}`);
 
-    // ✅ Fix: Batch join rooms instantly to resolve asynchronous closure allocation leaks
+    // Join group rooms
     try {
       const { rows } = await pool.query(
         `SELECT group_id FROM group_members 
@@ -222,7 +285,6 @@ export function setupWebSocket(server: Server) {
 
         const message = await saveMessage(data, user.id);
 
-        // Emit to recipients
         if (message.group_id) {
           io.to(`group:${message.group_id}`).emit('new_message', message);
         } else if (message.recipient_id) {
@@ -292,19 +354,38 @@ export function setupWebSocket(server: Server) {
       }
     });
 
-    // ── Disconnect ──────────────────────────────────────────────────────────
+    // ── Join Document Room ──────────────────────────────────────────────────
+    socket.on('join_document_room', (documentId: string) => {
+      socket.join(`document:${documentId}`);
+      console.log(`📄 ${user.full_name} joined document room: ${documentId}`);
+    });
+
+    socket.on('leave_document_room', (documentId: string) => {
+      socket.leave(`document:${documentId}`);
+      console.log(`📄 ${user.full_name} left document room: ${documentId}`);
+    });
+
+    // ── Join Aide Room ──────────────────────────────────────────────────────
+    socket.on('join_aide_room', (aideId: string) => {
+      socket.join(`aide:${aideId}`);
+      console.log(`🛡️ ${user.full_name} joined aide room: ${aideId}`);
+    });
+
+    socket.on('leave_aide_room', (aideId: string) => {
+      socket.leave(`aide:${aideId}`);
+      console.log(`🛡️ ${user.full_name} left aide room: ${aideId}`);
+    });
+
     // ── Disconnect ──────────────────────────────────────────────────────────
     socket.on('disconnect', (reason) => {
       console.log(`🔌 User disconnected: ${user.full_name} (${user.id}) | Reason: ${reason}`);
       
-      // ✅ Clean up active rooms safely using public API
       for (const room of socket.rooms) {
         if (room !== socket.id) {
           socket.leave(room);
         }
       }
       
-      // ✅ Force-remove event tracking maps to eliminate memory leaks
       socket.removeAllListeners();
     });
 
@@ -317,3 +398,5 @@ export function setupWebSocket(server: Server) {
 
   return io;
 }
+
+export default setupWebSocket;

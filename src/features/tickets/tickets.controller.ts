@@ -16,6 +16,27 @@ import {
   ticketIdSchema,
   ticketCommentIdSchema,
 } from './tickets.validator';
+import { getRealtimeService } from '../../middleware/realtime.middleware';
+
+// ─── Helper: Safe realtime emit ──────────────────────────────────────────────
+
+const safeRealtimeEmit = (req: Request, event: string, data: any) => {
+  const realtime = getRealtimeService(req);
+  if (realtime) {
+    realtime.broadcast(event, data);
+  } else {
+    console.warn(`⚠️ Realtime service not available, skipping emit for event: ${event}`);
+  }
+};
+
+const safeRealtimeEmitToRoom = (req: Request, room: string, event: string, data: any) => {
+  const realtime = getRealtimeService(req);
+  if (realtime) {
+    realtime.emitToRoom(room, event, data);
+  } else {
+    console.warn(`⚠️ Realtime service not available, skipping emit to room ${room} for event: ${event}`);
+  }
+};
 
 export const ticketController = {
 
@@ -27,6 +48,10 @@ export const ticketController = {
       throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
     }
     const ticket = await TicketService.createTicket(result.data.body, req.user!.id);
+    
+    // ── Emit real-time event ──────────────────────────────────────────────────
+    safeRealtimeEmit(req, 'ticket_created', ticket);
+    
     return sendSuccess(res, ticket, 'Ticket created successfully', 201);
   }),
 
@@ -69,6 +94,10 @@ export const ticketController = {
       bodyResult.data.body,
       req.user!.id
     );
+    
+    // ── Emit real-time event ──────────────────────────────────────────────────
+    safeRealtimeEmit(req, 'ticket_updated', ticket);
+    
     return sendSuccess(res, ticket, 'Ticket updated successfully');
   }),
 
@@ -80,6 +109,15 @@ export const ticketController = {
       throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
     }
     const ticket = await TicketService.submitForApproval(result.data.params.id, req.user!.id);
+    
+    // ── Emit real-time event ──────────────────────────────────────────────────
+    safeRealtimeEmit(req, 'ticket_submitted', {
+      id: ticket.id,
+      title: ticket.title,
+      status: ticket.status,
+      reference_no: ticket.reference_no,
+    });
+    
     return sendSuccess(res, ticket, 'Ticket submitted for approval');
   }),
 
@@ -97,6 +135,17 @@ export const ticketController = {
       bodyResult.data.body,
       req.user!.id
     );
+    
+    // ── Emit real-time event ──────────────────────────────────────────────────
+    safeRealtimeEmit(req, 'ticket_approved', {
+      id: ticket.id,
+      title: ticket.title,
+      status: ticket.status,
+      reference_no: ticket.reference_no,
+      approved_by: req.user!.full_name,
+      approved_at: new Date().toISOString(),
+    });
+    
     return sendSuccess(res, ticket, 'Ticket approved successfully');
   }),
 
@@ -114,6 +163,17 @@ export const ticketController = {
       bodyResult.data.body,
       req.user!.id
     );
+    
+    // ── Emit real-time event ──────────────────────────────────────────────────
+    safeRealtimeEmit(req, 'ticket_rejected', {
+      id: ticket.id,
+      title: ticket.title,
+      status: ticket.status,
+      reference_no: ticket.reference_no,
+      rejected_by: req.user!.full_name,
+      reason: bodyResult.data.body.reason,
+    });
+    
     return sendSuccess(res, ticket, 'Ticket rejected');
   }),
 
@@ -131,6 +191,17 @@ export const ticketController = {
       bodyResult.data.body,
       req.user!.id
     );
+    
+    // ── Emit real-time event ──────────────────────────────────────────────────
+    safeRealtimeEmit(req, 'ticket_returned', {
+      id: ticket.id,
+      title: ticket.title,
+      status: ticket.status,
+      reference_no: ticket.reference_no,
+      returned_by: req.user!.full_name,
+      reason: bodyResult.data.body.reason,
+    });
+    
     return sendSuccess(res, ticket, 'Ticket returned successfully');
   }),
 
@@ -148,6 +219,17 @@ export const ticketController = {
       bodyResult.data.body,
       req.user!.id
     );
+    
+    // ── Emit real-time event ──────────────────────────────────────────────────
+    safeRealtimeEmit(req, 'ticket_booked', {
+      id: ticket.id,
+      title: ticket.title,
+      status: ticket.status,
+      reference_no: ticket.reference_no,
+      booking_reference: bodyResult.data.body.booking_reference,
+      booked_by: req.user!.full_name,
+    });
+    
     return sendSuccess(res, ticket, 'Ticket booked successfully');
   }),
 
@@ -157,6 +239,16 @@ export const ticketController = {
       throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
     }
     const ticket = await TicketService.cancelTicket(result.data.params.id, req.user!.id);
+    
+    // ── Emit real-time event ──────────────────────────────────────────────────
+    safeRealtimeEmit(req, 'ticket_cancelled', {
+      id: ticket.id,
+      title: ticket.title,
+      status: ticket.status,
+      reference_no: ticket.reference_no,
+      cancelled_by: req.user!.full_name,
+    });
+    
     return sendSuccess(res, ticket, 'Ticket cancelled');
   }),
 
@@ -166,6 +258,16 @@ export const ticketController = {
       throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
     }
     const ticket = await TicketService.completeTicket(result.data.params.id, req.user!.id);
+    
+    // ── Emit real-time event ──────────────────────────────────────────────────
+    safeRealtimeEmit(req, 'ticket_completed', {
+      id: ticket.id,
+      title: ticket.title,
+      status: ticket.status,
+      reference_no: ticket.reference_no,
+      completed_by: req.user!.full_name,
+    });
+    
     return sendSuccess(res, ticket, 'Ticket completed');
   }),
 
@@ -185,6 +287,15 @@ export const ticketController = {
       bodyResult.data.body,
       req.user!.id
     );
+    
+    // ── Emit real-time event ──────────────────────────────────────────────────
+    safeRealtimeEmitToRoom(req, `ticket:${paramsResult.data.params.id}`, 'ticket_comment_added', {
+      ticket_id: paramsResult.data.params.id,
+      comment: comment,
+      added_by: req.user!.full_name,
+      added_at: new Date().toISOString(),
+    });
+    
     return sendSuccess(res, comment, 'Comment added successfully', 201);
   }),
 
@@ -198,6 +309,14 @@ export const ticketController = {
       result.data.params.commentId,
       req.user!.id
     );
+    
+    // ── Emit real-time event ──────────────────────────────────────────────────
+    safeRealtimeEmitToRoom(req, `ticket:${result.data.params.id}`, 'ticket_comment_deleted', {
+      ticket_id: result.data.params.id,
+      comment_id: result.data.params.commentId,
+      deleted_by: req.user!.full_name,
+    });
+    
     return sendSuccess(res, null, 'Comment deleted successfully');
   }),
 
@@ -209,6 +328,10 @@ export const ticketController = {
       throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
     }
     await TicketService.softDelete(result.data.params.id);
+    
+    // ── Emit real-time event ──────────────────────────────────────────────────
+    safeRealtimeEmit(req, 'ticket_deleted', { id: result.data.params.id });
+    
     return sendSuccess(res, null, 'Ticket deleted successfully');
   }),
 };

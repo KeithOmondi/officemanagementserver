@@ -18,8 +18,8 @@ router.post('/', requireRole('dept_head', 'staff'), ticketController.create);
 router.put('/:id', requireRole('dept_head', 'staff'), ticketController.update);
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
-router.post('/:id/submit', ticketController.submitForApproval);
-router.post('/:id/approve', requireRole('super_admin',), ticketController.approve);
+router.post('/:id/submit', requireRole('dept_head', 'staff'), ticketController.submitForApproval);
+router.post('/:id/approve', requireRole('super_admin', 'dept_head'), ticketController.approve);
 router.post('/:id/reject', requireRole('super_admin'), ticketController.reject);
 router.post('/:id/return', requireRole('super_admin', 'dept_head'), ticketController.return);
 router.post('/:id/book', requireRole('super_admin', 'dept_head'), ticketController.book);

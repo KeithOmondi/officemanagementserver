@@ -10,8 +10,6 @@ import type {
   TicketApprovalStep,
   TicketComment,
   TicketStatus,
-  TicketTripType,
-  FlightTimePreference,
 } from './tickets.types';
 import type {
   CreateTicketInput,
@@ -132,7 +130,7 @@ export class TicketService {
       throw new AppError(404, 'User not found');
     }
     const user = userResult.rows[0];
-    const isDeptHead = user.role === 'dept_head';
+    const isDeptHead = user.role === 'dept_head' || user.role === 'staff';
     const isSuperAdmin = user.role === 'super_admin';
 
     let finalDepartmentId: string | null = null;
@@ -145,7 +143,7 @@ export class TicketService {
       }
       if (proposedDepartmentId && proposedDepartmentId !== finalDepartmentId) {
         throw new AppError(403, 'You cannot create tickets for another department');
-      }
+      } 
     } else if (isSuperAdmin) {
       finalDepartmentId = proposedDepartmentId ?? null;
     } else {

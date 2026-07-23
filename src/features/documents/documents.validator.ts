@@ -62,6 +62,7 @@ export const followUpStatusEnum = z.enum([
   'in_progress',
   'completed',
   'cancelled',
+  'filed_away',     // ✅ New: filed away with no future date
 ]);
 
 export const followUpPriorityEnum = z.enum([
@@ -339,7 +340,7 @@ export const updateMarkSchema = z.object({
 });
 
 // ════════════════════════════════════════════════════════════════════════
-//  Follow-up Schemas
+//  FOLLOW-UP SCHEMAS (UPDATED - SIMPLIFIED)
 // ════════════════════════════════════════════════════════════════════════
 
 // ─── Date transformer helper ────────────────────────────────────────────────
@@ -350,8 +351,12 @@ export const updateMarkSchema = z.object({
  * - ISO datetime strings: "2026-07-23T00:00:00.000Z"
  * - Date-only strings: "2026-07-23"
  * - Date objects
+ * - null (for filed away items)
  */
-const transformDate = (val: unknown): string => {
+const transformDate = (val: unknown): string | null => {
+  if (val === null || val === undefined) {
+    return null;
+  }
   if (val instanceof Date) {
     return val.toISOString();
   }
@@ -374,37 +379,75 @@ const transformDate = (val: unknown): string => {
   return val as string;
 };
 
-// ─── Date validator helper ──────────────────────────────────────────────────
-
 /**
- * Zod schema that accepts both date-only and datetime strings,
- * and transforms them to ISO datetime format.
+ * Zod schema that accepts:
+ * - Date strings (YYYY-MM-DD or ISO)
+ * - Date objects
+ * - null (for filed away)
+ * And transforms them to ISO datetime format or null.
  */
-const dateSchema = z
+const optionalDateSchema = z
   .union([
-    z.string().datetime({ message: 'Invalid due date format' }),
-    z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Invalid date format (expected YYYY-MM-DD)'),
-    z.date(),
+    z.string().datetime({ message: 'Invalid due date format' }).optional(),
+    z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Invalid date format (expected YYYY-MM-DD)').optional(),
+    z.date().optional(),
+    z.null(),
   ])
   .transform(transformDate);
 
-// ─── Create Follow-Up Schema ───────────────────────────────────────────────
+// ─── Create Follow-Up Schema (Simplified) ──────────────────────────────────
 
+/**
+ * Simplified follow-up creation:
+ * - notes: Required - what was done or needs to be done (replaces title + description)
+ * - due_date: Optional - if not provided, follow-up is "filed away"
+ * - mark_id: Optional - may not always be linked to a mark
+ * - title: Removed - auto-generated from document title
+ */
 export const createFollowUpSchema = z.object({
   body: z
     .object({
       document_id: z.string().uuid('Document ID must be a valid UUID'),
-      mark_id: z.string().uuid('Mark ID must be a valid UUID'),
-      title: z.string().min(1, 'Title is required').max(255).trim(),
-      description: z.string().max(2000).trim().optional(),
+      mark_id: z.string().uuid('Mark ID must be a valid UUID').optional().nullable(),
+      notes: z.string().min(1, 'Notes are required').max(2000).trim(),
       assigned_to: z.string().uuid('Must be a valid user ID'),
-      due_date: dateSchema,
+      due_date: optionalDateSchema.optional().nullable(),
       priority: followUpPriorityEnum.default('normal'),
+    })
+    .strict()
+    .refine(
+      (data) => {
+        // If due_date is provided, it must be a valid date string
+        if (data.due_date === null || data.due_date === undefined) {
+          return true;
+        }
+        const date = new Date(data.due_date);
+        return !isNaN(date.getTime());
+      },
+      {
+        message: 'Invalid due date format',
+        path: ['due_date'],
+      }
+    ),
+});
+
+// ─── File Away Schema (New) ────────────────────────────────────────────────
+
+/**
+ * Quick action to file away a follow-up with no future date
+ */
+export const fileAwayFollowUpSchema = z.object({
+  body: z
+    .object({
+      document_id: z.string().uuid('Document ID must be a valid UUID'),
+      mark_id: z.string().uuid('Mark ID must be a valid UUID').optional().nullable(),
+      notes: z.string().min(1, 'Notes are required').max(2000).trim(),
+      completion_notes: z.string().max(2000).trim().optional(),
     })
     .strict(),
 });
 
-// ─── Update Follow-Up Schema ───────────────────────────────────────────────
+// ─── Update Follow-Up Schema (Simplified) ──────────────────────────────────
 
 export const updateFollowUpSchema = z.object({
   params: z.object({
@@ -412,10 +455,9 @@ export const updateFollowUpSchema = z.object({
   }),
   body: z
     .object({
-      title: z.string().min(1).max(255).trim().optional(),
-      description: z.string().max(2000).trim().optional(),
+      notes: z.string().max(2000).trim().optional(),
       assigned_to: z.string().uuid('Must be a valid user ID').optional(),
-      due_date: dateSchema.optional(),
+      due_date: optionalDateSchema.optional().nullable(),
       priority: followUpPriorityEnum.optional(),
       status: followUpStatusEnum.optional(),
       completion_notes: z.string().max(2000).trim().optional(),
@@ -460,7 +502,7 @@ export const addFollowUpCommentSchema = z.object({
     .strict(),
 });
 
-// ─── Follow-Up Filters Schema ──────────────────────────────────────────────
+// ─── Follow-Up Filters Schema (Updated) ────────────────────────────────────
 
 export const followUpFiltersSchema = z.object({
   query: z.object({
@@ -468,9 +510,18 @@ export const followUpFiltersSchema = z.object({
     assigned_to: z.string().uuid('User ID must be a valid UUID').optional(),
     status: followUpStatusEnum.optional(),
     priority: followUpPriorityEnum.optional(),
-    due_from: dateSchema.optional(),
-    due_to: dateSchema.optional(),
+    due_from: optionalDateSchema.optional(),
+    due_to: optionalDateSchema.optional(),
     search: z.string().trim().max(100).optional(),
+    // ✅ New filters
+    active_only: z
+      .enum(['true', 'false'])
+      .transform((v) => v === 'true')
+      .optional(),
+    filed_only: z
+      .enum(['true', 'false'])
+      .transform((v) => v === 'true')
+      .optional(),
     page: z
       .string()
       .regex(/^\d+$/)
@@ -483,7 +534,7 @@ export const followUpFiltersSchema = z.object({
       .transform(Number)
       .pipe(z.number().int().min(1).max(100))
       .optional(),
-    sort_by: z.enum(['created_at', 'due_date', 'priority', 'status', 'title']).default('due_date'),
+    sort_by: z.enum(['created_at', 'due_date', 'priority', 'status', 'notes']).default('due_date'),
     sort_order: z.enum(['ASC', 'DESC']).default('ASC'),
   }),
 });
@@ -601,9 +652,10 @@ export type RedirectToFolderInput = z.infer<typeof redirectToFolderSchema>['body
 export type RemoveFromFolderInput = z.infer<typeof removeFromFolderSchema>['body'];
 export type GetFolderDocumentsQuery = z.infer<typeof getFolderDocumentsSchema>['query'];
 
-// ── Follow-up types ────────────────────────────────────────────────────────
+// ── Follow-up types (Updated) ─────────────────────────────────────────────
 
 export type CreateFollowUpInput = z.infer<typeof createFollowUpSchema>['body'];
+export type FileAwayFollowUpInput = z.infer<typeof fileAwayFollowUpSchema>['body'];
 export type UpdateFollowUpInput = z.infer<typeof updateFollowUpSchema>['body'];
 export type CompleteFollowUpInput = z.infer<typeof completeFollowUpSchema>['body'];
 export type CancelFollowUpInput = z.infer<typeof cancelFollowUpSchema>['body'];

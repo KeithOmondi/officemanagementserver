@@ -87,7 +87,55 @@ export const createComposedDocumentSchema = z.object({
     .strict(),
 });
 
-// ── Create upload document ─────────────────────────────────────────────────
+// ─── Create upload document ─────────────────────────────────────────────────
+
+// ✅ Add request details schema
+export const documentRequestDetailsSchema = z
+  .object({
+    request_type: z.enum(['driver', 'bodyguard', 'firearm', 'current_station', 'force_number', 'residence_security', 'sentry']).nullable().optional(),
+    driver_name: z.string().nullable().optional(),
+    driver_license: z.string().nullable().optional(),
+    driver_vehicle: z.string().nullable().optional(),
+    driver_contact: z.string().nullable().optional(),
+    bodyguard_name: z.string().nullable().optional(),
+    bodyguard_badge: z.string().nullable().optional(),
+    bodyguard_unit: z.string().nullable().optional(),
+    bodyguard_contact: z.string().nullable().optional(),
+    firearm_type: z.string().nullable().optional(),
+    firearm_serial: z.string().nullable().optional(),
+    firearm_caliber: z.string().nullable().optional(),
+    firearm_owner: z.string().nullable().optional(),
+    firearm_license: z.string().nullable().optional(),
+    current_station_name: z.string().nullable().optional(),
+    current_station_location: z.string().nullable().optional(),
+    current_station_contact: z.string().nullable().optional(),
+    current_station_head: z.string().nullable().optional(),
+    force_number_value: z.string().nullable().optional(),
+    force_number_rank: z.string().nullable().optional(),
+    force_number_unit: z.string().nullable().optional(),
+    force_number_issue_date: z.string().nullable().optional(),
+    residence_address: z.string().nullable().optional(),
+    residence_city: z.string().nullable().optional(),
+    residence_state: z.string().nullable().optional(),
+    security_personnel_count: z.number().nullable().optional(),
+    security_shift_hours: z.string().nullable().optional(),
+    security_equipment: z.string().nullable().optional(),
+    sentry_post_location: z.string().nullable().optional(),
+    sentry_instructions: z.string().nullable().optional(),
+    request_date: z.string().nullable().optional(),
+    request_reason: z.string().nullable().optional(),
+    request_duration: z.string().nullable().optional(),
+    request_start_date: z.string().nullable().optional(),
+    request_end_date: z.string().nullable().optional(),
+    requesting_officer: z.string().nullable().optional(),
+    requesting_officer_rank: z.string().nullable().optional(),
+    approving_officer: z.string().nullable().optional(),
+    approving_officer_rank: z.string().nullable().optional(),
+    approval_status: z.enum(['pending', 'approved', 'rejected']).nullable().optional(),
+    approval_date: z.string().nullable().optional(),
+    remarks: z.string().nullable().optional(),
+  })
+  .strict();
 
 export const createUploadDocumentSchema = z.object({
   body: z
@@ -102,6 +150,8 @@ export const createUploadDocumentSchema = z.object({
       assigned_to: z.string().uuid().optional(),
       department_id: z.string().uuid().optional(),
       is_draft: z.coerce.boolean().default(false),
+      // ✅ Add request_details field
+      request_details: documentRequestDetailsSchema.optional(),
     })
     .strict()
     .refine(
@@ -113,7 +163,7 @@ export const createUploadDocumentSchema = z.object({
     ),
 });
 
-// ── Update ──────────────────────────────────────────────────────────────────
+// ─── Update ──────────────────────────────────────────────────────────────────
 
 export const updateDocumentSchema = z.object({
   body: z
@@ -140,6 +190,8 @@ export const updateDocumentSchema = z.object({
       signature_position_y: z.number().nullable().optional(),
       signature_position_width: z.number().nullable().optional(),
       signature_position_height: z.number().nullable().optional(),
+      // ✅ Add request_details to update as well
+      request_details: documentRequestDetailsSchema.nullable().optional(),
     })
     .strict()
     .refine((b) => Object.keys(b).length > 0, {
@@ -147,7 +199,7 @@ export const updateDocumentSchema = z.object({
     }),
 });
 
-// ── Mark to Department ─────────────────────────────────────────────────────
+// ─── Mark to Department ─────────────────────────────────────────────────────
 
 export const markDocumentSchema = z.object({
   body: z
@@ -164,7 +216,7 @@ export const acknowledgeMarkSchema = z.object({
   body: z.object({}).strict(),
 });
 
-// ── Filters ─────────────────────────────────────────────────────────────────
+// ─── Filters ─────────────────────────────────────────────────────────────────
 
 export const documentFiltersSchema = z.object({
   query: z.object({
@@ -204,7 +256,7 @@ export const documentFiltersSchema = z.object({
   }),
 });
 
-// ── ID params ──────────────────────────────────────────────────────────────
+// ─── ID params ──────────────────────────────────────────────────────────────
 
 export const documentIdSchema = z.object({
   params: z.object({
@@ -219,7 +271,7 @@ export const annotationIdSchema = z.object({
   }),
 });
 
-// ── Follow-up ID params ────────────────────────────────────────────────────
+// ─── Follow-up ID params ────────────────────────────────────────────────────
 
 export const followUpIdSchema = z.object({
   params: z.object({
@@ -234,7 +286,7 @@ export const documentFollowUpIdSchema = z.object({
   }),
 });
 
-// ── Annotation ─────────────────────────────────────────────────────────────
+// ─── Annotation ─────────────────────────────────────────────────────────────
 
 export const createAnnotationSchema = z.object({
   body: z
@@ -246,7 +298,7 @@ export const createAnnotationSchema = z.object({
     .strict(),
 });
 
-// ── Response (threaded reply to a return/action request) ───────────────────
+// ─── Response (threaded reply to a return/action request) ───────────────────
 
 export const respondToDocumentSchema = z.object({
   body: z
@@ -256,7 +308,7 @@ export const respondToDocumentSchema = z.object({
     .strict(),
 });
 
-// ── Return document for action ─────────────────────────────────────────────
+// ─── Return document for action ─────────────────────────────────────────────
 
 export const returnDocumentSchema = z.object({
   body: z
@@ -267,7 +319,7 @@ export const returnDocumentSchema = z.object({
     .strict(),
 });
 
-// ── Finalize draft ─────────────────────────────────────────────────────────
+// ─── Finalize draft ─────────────────────────────────────────────────────────
 
 export const finalizeDraftSchema = z.object({
   body: z
@@ -281,7 +333,7 @@ export const finalizeDraftSchema = z.object({
     }),
 });
 
-// ── Send to User ────────────────────────────────────────────────────────────
+// ─── Send to User ────────────────────────────────────────────────────────────
 
 export const sendToUserSchema = z.object({
   body: z
@@ -615,7 +667,7 @@ export const getFolderDocumentsSchema = z.object({
   }),
 });
 
-// ── Inferred types ─────────────────────────────────────────────────────────
+// ─── Inferred types ─────────────────────────────────────────────────────────
 
 export type CreateComposedDocumentInput = z.infer<
   typeof createComposedDocumentSchema

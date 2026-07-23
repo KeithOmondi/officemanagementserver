@@ -17,6 +17,12 @@ import type {
   FollowUpWithComments,
   FollowUpPaginationResponse,
   FollowUpReminder,
+  DocumentRequestDetails,
+  RoutePriority,
+  DocumentStatus,
+  DocumentType,
+  DocumentCategory,
+  RefType,
 } from './documents.types';
 import type {
   CreateComposedDocumentInput,
@@ -66,6 +72,7 @@ const DOC_SELECT = `
   d.signature_position_y,
   d.signature_position_width,
   d.signature_position_height,
+  d.request_details,
   (SELECT COUNT(*) FROM document_responses r WHERE r.document_id = d.id) AS response_count
 `;
 
@@ -174,6 +181,81 @@ const FOLLOW_UP_COMMENT_JOIN = `
 const ALLOWED_SORT = new Set(['created_at', 'updated_at', 'title', 'status']);
 const ALLOWED_FOLLOW_UP_SORT = new Set(['created_at', 'due_date', 'priority', 'status', 'notes']);
 
+// ─── Helper to map DB row to Document ─────────────────────────────────────────
+
+function mapRowToDocument(row: any): Document {
+  return {
+    id: row.id,
+    title: row.title,
+    type: row.type as DocumentType,
+    category: row.category as DocumentCategory | null,
+    status: row.status as DocumentStatus,
+    reference_no: row.reference_no,
+    ref_type: row.ref_type as RefType | null,
+    ref_other_description: row.ref_other_description,
+    body: row.body,
+    file_url: row.file_url,
+    file_public_id: row.file_public_id,
+    file_size_bytes: row.file_size_bytes,
+    mime_type: row.mime_type,
+    original_name: row.original_name,
+    priority: row.priority || 'normal' as RoutePriority,
+    assigned_to: row.assigned_to,
+    assigned_to_name: row.assigned_to_name,
+    created_by: row.created_by,
+    created_by_name: row.created_by_name,
+    department_id: row.department_id,
+    department_name: row.department_name,
+    folder_id: row.folder_id,
+    folder_name: row.folder_name,
+    is_signed: row.is_signed,
+    signed_by: row.signed_by,
+    signed_by_name: row.signed_by_name,
+    signed_at: row.signed_at,
+    released_at: row.released_at,
+    released_by: row.released_by,
+    released_by_name: row.released_by_name,
+    is_sent: row.is_sent,
+    sent_at: row.sent_at,
+    is_draft: row.is_draft,
+    is_active: row.is_active,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    active_mark: row.mark_id ? {
+      id: row.mark_id,
+      document_id: row.mark_document_id,
+      marked_by: row.mark_marked_by,
+      marked_by_name: row.mark_marked_by_name,
+      marked_to_dept: row.mark_marked_to_dept,
+      marked_to_dept_name: row.mark_marked_to_dept_name,
+      assigned_to: row.mark_assigned_to,
+      assigned_to_name: row.mark_assigned_to_name,
+      instructions: row.mark_instructions,
+      bring_up_date: row.mark_bring_up_date,
+      priority: row.mark_priority,
+      marked_at: row.mark_marked_at,
+      acknowledged_at: row.mark_acknowledged_at,
+      completed_at: row.mark_completed_at,
+      is_active: row.mark_is_active,
+    } : null,
+    response_count: parseInt(row.response_count ?? '0', 10),
+    to_recipient: row.to_recipient || null,
+    from_sender: row.from_sender || null,
+    document_date: row.document_date || null,
+    subject: row.subject || null,
+    cc: row.cc || null,
+    enclosures: row.enclosures || null,
+    signature_name: row.signature_name || null,
+    signature_title: row.signature_title || null,
+    signature_position_x: row.signature_position_x ?? null,
+    signature_position_y: row.signature_position_y ?? null,
+    signature_position_width: row.signature_position_width ?? null,
+    signature_position_height: row.signature_position_height ?? null,
+    request_details: row.request_details as DocumentRequestDetails | null,
+    follow_ups: [],
+  };
+}
+
 // ─── Service ───────────────────────────────────────────────────────────────────
 
 export class DocumentService {
@@ -219,15 +301,15 @@ export class DocumentService {
     }
 
     const uploaded = await uploadToCloudinary(file, 'registrar/documents');
-    const status = input.is_draft ? 'draft' : 'uploaded';
+    const status: DocumentStatus = input.is_draft ? 'draft' : 'uploaded';
 
     try {
       const { rows } = await pool.query(
         `INSERT INTO documents
            (title, type, category, reference_no, ref_type, ref_other_description,
             file_url, file_public_id, file_size_bytes, mime_type, original_name,
-            assigned_to, department_id, created_by, status, is_draft, priority)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+            assigned_to, department_id, created_by, status, is_draft, priority, request_details)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
          RETURNING id`,
         [
           input.title.trim(), input.type, input.category ?? null,
@@ -235,7 +317,8 @@ export class DocumentService {
           input.ref_type, input.ref_other_description?.trim() ?? null,
           uploaded.secure_url, uploaded.public_id, file.size, file.mimetype, file.originalname,
           input.assigned_to ?? null, input.department_id ?? null,
-          createdBy, status, input.is_draft, input.priority,
+          createdBy, status, input.is_draft, input.priority || 'normal',
+          input.request_details || null,
         ]
       );
 
@@ -344,76 +427,7 @@ export class DocumentService {
       ),
     ]);
 
-    const documents = dataResult.rows.map((row) => {
-      const doc: Document = {
-        id: row.id,
-        title: row.title,
-        type: row.type,
-        category: row.category,
-        status: row.status,
-        reference_no: row.reference_no,
-        ref_type: row.ref_type,
-        ref_other_description: row.ref_other_description,
-        body: row.body,
-        file_url: row.file_url,
-        file_public_id: row.file_public_id,
-        file_size_bytes: row.file_size_bytes,
-        mime_type: row.mime_type,
-        original_name: row.original_name,
-        assigned_to: row.assigned_to,
-        assigned_to_name: row.assigned_to_name,
-        created_by: row.created_by,
-        created_by_name: row.created_by_name,
-        department_id: row.department_id,
-        department_name: row.department_name,
-        folder_id: row.folder_id,
-        folder_name: row.folder_name,
-        is_signed: row.is_signed,
-        signed_by: row.signed_by,
-        signed_by_name: row.signed_by_name,
-        signed_at: row.signed_at,
-        released_at: row.released_at,
-        released_by: row.released_by,
-        released_by_name: row.released_by_name,
-        is_sent: row.is_sent,
-        sent_at: row.sent_at,
-        is_draft: row.is_draft,
-        is_active: row.is_active,
-        created_at: row.created_at,
-        updated_at: row.updated_at,
-        active_mark: row.mark_id ? {
-          id: row.mark_id,
-          document_id: row.mark_document_id,
-          marked_by: row.mark_marked_by,
-          marked_by_name: row.mark_marked_by_name,
-          marked_to_dept: row.mark_marked_to_dept,
-          marked_to_dept_name: row.mark_marked_to_dept_name,
-          assigned_to: row.mark_assigned_to,
-          assigned_to_name: row.mark_assigned_to_name,
-          instructions: row.mark_instructions,
-          bring_up_date: row.mark_bring_up_date,
-          priority: row.mark_priority,
-          marked_at: row.mark_marked_at,
-          acknowledged_at: row.mark_acknowledged_at,
-          completed_at: row.mark_completed_at,
-          is_active: row.mark_is_active,
-        } : null,
-        response_count: parseInt(row.response_count ?? '0', 10),
-        to_recipient: row.to_recipient || null,
-        from_sender: row.from_sender || null,
-        document_date: row.document_date || null,
-        subject: row.subject || null,
-        cc: row.cc || null,
-        enclosures: row.enclosures || null,
-        signature_name: row.signature_name || null,
-        signature_title: row.signature_title || null,
-        signature_position_x: row.signature_position_x ?? null,
-        signature_position_y: row.signature_position_y ?? null,
-        signature_position_width: row.signature_position_width ?? null,
-        signature_position_height: row.signature_position_height ?? null,
-      };
-      return doc;
-    });
+    const documents = dataResult.rows.map(mapRowToDocument);
 
     const total = parseInt(countResult.rows[0]?.total ?? '0', 10);
     return {
@@ -432,13 +446,8 @@ export class DocumentService {
       `SELECT ${DOC_SELECT} ${DOC_JOIN} WHERE d.id = $1 AND d.is_active = true`,
       [id]
     );
-    if (rows[0]) {
-      rows[0].signature_position_x = rows[0].signature_position_x ?? null;
-      rows[0].signature_position_y = rows[0].signature_position_y ?? null;
-      rows[0].signature_position_width = rows[0].signature_position_width ?? null;
-      rows[0].signature_position_height = rows[0].signature_position_height ?? null;
-    }
-    return rows[0] ?? null;
+    if (!rows[0]) return null;
+    return mapRowToDocument(rows[0]);
   }
 
   static async findByIdWithAnnotations(id: string): Promise<DocumentWithAnnotations | null> {
@@ -482,8 +491,10 @@ export class DocumentService {
 
     if (!docResult.rows[0]) return null;
 
+    const doc = mapRowToDocument(docResult.rows[0]);
+    
     return {
-      ...docResult.rows[0],
+      ...doc,
       annotations: annotResult.rows,
       active_mark: markResult.rows[0] ?? null,
       mark_history: historyResult.rows,
@@ -618,7 +629,7 @@ export class DocumentService {
     if (!userRows.length) throw new AppError(403, 'User not found');
     const role = userRows[0].role;
 
-    let newStatus: string;
+    let newStatus: DocumentStatus;
     if (role === 'super_admin') {
       newStatus = 'dept_assigned';
     } else if (role === 'dept_head') {
@@ -790,7 +801,7 @@ export class DocumentService {
        ORDER BY d.updated_at DESC`,
       [userId]
     );
-    return rows;
+    return rows.map(mapRowToDocument);
   }
 
   // ── Annotations ─────────────────────────────────────────────────────────────
@@ -1269,7 +1280,7 @@ export class DocumentService {
        ORDER BY d.released_at DESC NULLS LAST, d.created_at DESC`,
       []
     );
-    return rows;
+    return rows.map(mapRowToDocument);
   }
 
   // ─── Is Visible to Admin ────────────────────────────────────────────────────
@@ -1454,7 +1465,7 @@ export class DocumentService {
        ORDER BY d.created_at DESC`,
       [userId]
     );
-    return rows;
+    return rows.map(mapRowToDocument);
   }
 
   // ── Create Notification (helper) ────────────────────────────────────────────
@@ -1950,7 +1961,7 @@ export class DocumentService {
 
     const total = parseInt(countResult.rows[0]?.total ?? '0', 10);
     return {
-      data: dataResult.rows,
+      data: dataResult.rows.map(mapRowToDocument),
       total,
       page,
       limit,
@@ -2053,10 +2064,8 @@ export class DocumentService {
   }
 
   // ════════════════════════════════════════════════════════════════════════════
-  //  FOLLOW-UP OPERATIONS (UPDATED - SIMPLIFIED)
+  //  FOLLOW-UP OPERATIONS
   // ════════════════════════════════════════════════════════════════════════════
-
-  // ── Create Follow-Up (Simplified) ──────────────────────────────────────────
 
   static async createFollowUp(
     input: CreateFollowUpInput,
@@ -2064,13 +2073,11 @@ export class DocumentService {
   ): Promise<FollowUp> {
     console.log('[FollowUp] Creating new follow-up');
 
-    // Validate document exists
     const doc = await this.findById(input.document_id);
     if (!doc) {
       throw new AppError(404, 'Document not found');
     }
 
-    // Validate assigned user exists
     const { rows: userRows } = await pool.query(
       `SELECT id, full_name FROM users WHERE id = $1 AND is_active = true`,
       [input.assigned_to]
@@ -2079,7 +2086,6 @@ export class DocumentService {
       throw new AppError(400, 'Assigned user not found or inactive');
     }
 
-    // Determine status: if due_date is provided, set to 'pending', else 'filed_away'
     const status = input.due_date ? 'pending' : 'filed_away';
 
     const client = await pool.connect();
@@ -2118,7 +2124,6 @@ export class DocumentService {
 
       await client.query('COMMIT');
 
-      // Create notification for assigned user
       await this.createFollowUpNotification(
         input.assigned_to,
         createdBy,
@@ -2139,15 +2144,12 @@ export class DocumentService {
     }
   }
 
-  // ── File Away Follow-Up (New) ──────────────────────────────────────────────
-
   static async fileAwayFollowUp(
     input: FileAwayFollowUpInput,
     userId: string
   ): Promise<FollowUp> {
     console.log('[FollowUp] Filing away follow-up');
 
-    // Validate document exists
     const doc = await this.findById(input.document_id);
     if (!doc) {
       throw new AppError(404, 'Document not found');
@@ -2195,8 +2197,6 @@ export class DocumentService {
       client.release();
     }
   }
-
-  // ── Get Follow-Ups by Filters (Updated) ──────────────────────────────────
 
   static async getFollowUps(
     filters: FollowUpFilters
@@ -2295,8 +2295,6 @@ export class DocumentService {
     };
   }
 
-  // ── Get Follow-Ups by Document ────────────────────────────────────────────
-
   static async getFollowUpsByDocument(
     documentId: string,
     filters?: Omit<FollowUpFilters, 'document_id'>
@@ -2308,8 +2306,6 @@ export class DocumentService {
       document_id: documentId,
     });
   }
-
-  // ── Get Follow-Ups by User ────────────────────────────────────────────────
 
   static async getFollowUpsByUser(
     userId: string,
@@ -2323,8 +2319,6 @@ export class DocumentService {
     });
   }
 
-  // ── Get Follow-Up by ID ───────────────────────────────────────────────────
-
   static async getFollowUpById(followUpId: string): Promise<FollowUp | null> {
     const { rows } = await pool.query(
       `SELECT ${FOLLOW_UP_SELECT} ${FOLLOW_UP_JOIN}
@@ -2333,8 +2327,6 @@ export class DocumentService {
     );
     return rows[0] || null;
   }
-
-  // ── Get Follow-Up with Comments ───────────────────────────────────────────
 
   static async getFollowUpWithComments(followUpId: string): Promise<FollowUpWithComments | null> {
     const followUp = await this.getFollowUpById(followUpId);
@@ -2353,13 +2345,9 @@ export class DocumentService {
     };
   }
 
-  // ── Get Follow-Up Thread ─────────────────────────────────────────────────
-
   static async getFollowUpThread(followUpId: string): Promise<FollowUpWithComments | null> {
     return this.getFollowUpWithComments(followUpId);
   }
-
-  // ── Update Follow-Up (Simplified) ──────────────────────────────────────────
 
   static async updateFollowUp(
     followUpId: string,
@@ -2452,8 +2440,6 @@ export class DocumentService {
     return (await this.getFollowUpById(followUpId))!;
   }
 
-  // ── Complete Follow-Up ────────────────────────────────────────────────────
-
   static async completeFollowUp(
     followUpId: string,
     userId: string,
@@ -2514,8 +2500,6 @@ export class DocumentService {
     console.log(`[FollowUp] Follow-up ${followUpId} completed successfully`);
     return (await this.getFollowUpById(followUpId))!;
   }
-
-  // ── Cancel Follow-Up ──────────────────────────────────────────────────────
 
   static async cancelFollowUp(
     followUpId: string,
@@ -2581,8 +2565,6 @@ export class DocumentService {
     return (await this.getFollowUpById(followUpId))!;
   }
 
-  // ── Add Follow-Up Comment ────────────────────────────────────────────────
-
   static async addFollowUpComment(
     followUpId: string,
     input: AddFollowUpCommentInput,
@@ -2634,8 +2616,6 @@ export class DocumentService {
     return commentRows[0];
   }
 
-  // ── Get Follow-Up Comments ───────────────────────────────────────────────
-
   static async getFollowUpComments(followUpId: string): Promise<FollowUpComment[]> {
     const { rows } = await pool.query(
       `SELECT ${FOLLOW_UP_COMMENT_SELECT} ${FOLLOW_UP_COMMENT_JOIN}
@@ -2645,8 +2625,6 @@ export class DocumentService {
     );
     return rows;
   }
-
-  // ── Follow-Up Notification Helper ────────────────────────────────────────
 
   private static async createFollowUpNotification(
     userId: string,
@@ -2692,8 +2670,6 @@ export class DocumentService {
       console.error(`[FollowUp] Failed to create notification for user ${userId}:`, error);
     }
   }
-
-  // ── Send Follow-Up Reminders ─────────────────────────────────────────────
 
   static async sendFollowUpReminders(io?: any): Promise<{ dueToday: number; overdue: number }> {
     console.log('[FollowUp] Sending follow-up reminders');
@@ -2774,8 +2750,6 @@ export class DocumentService {
     console.log(`[FollowUp] Sent ${dueTodayCount} due today reminders and ${overdueCount} overdue reminders`);
     return { dueToday: dueTodayCount, overdue: overdueCount };
   }
-
-  // ── Get Follow-Up Summary ────────────────────────────────────────────────
 
   static async getFollowUpSummary(userId: string): Promise<{ 
     pending: number; 

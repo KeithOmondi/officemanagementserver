@@ -8,7 +8,7 @@ import app from './app';
 import { connectDB } from './config/db';
 import { env } from './config/env';
 import { setupWebSocket } from './socket';
-import { scheduleBringUpReminders } from './jobs/bringUpReminders.job';
+// REMOVED: import { scheduleBringUpReminders } from './jobs/bringUpReminders.job';
 import { scheduleMonthlyReportGeneration } from './cron/monthly-report.cron';
 import RealtimeService from './services/realtime.service';
 
@@ -40,7 +40,7 @@ const startServer = async () => {
     console.log('✅ Realtime service initialized');
 
     // ── Schedule Background Jobs ─────────────────────────────────────────────
-    scheduleBringUpReminders(io);
+    // REMOVED: scheduleBringUpReminders(io);
     scheduleMonthlyReportGeneration();
 
     return { server, io, realtimeService };

@@ -482,12 +482,13 @@ export const documentViewStatusSchema = z.object({
 });
 
 // ============================================================
-// Protocol Support
+// Protocol Support - UPDATED with venue/location
 // ============================================================
 
 export const createProtocolEventSchema = z.object({
     body: z.object({
         activity: z.string().min(1).max(200),
+        venue: z.string().max(255).optional(),     // NEW: Venue/Location of the protocol event
         period_from: dateStringSchema.optional(),
         period_to: dateStringSchema.optional(),
         officers_assigned: z.string().optional(),
@@ -596,7 +597,7 @@ export type CreateVisaRequestInput = z.infer<typeof createVisaRequestSchema>['bo
 export type MarkDocumentViewedInput = z.infer<typeof markDocumentViewedSchema>['params'];
 export type DocumentViewStatusInput = z.infer<typeof documentViewStatusSchema>['params'];
 
-// Protocol Event Types
+// Protocol Event Types - UPDATED
 export type CreateProtocolEventInput = z.infer<typeof createProtocolEventSchema>['body'];
 
 // Filter Types

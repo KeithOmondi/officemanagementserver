@@ -648,3 +648,233 @@ export const sendGeneralRequestRejected = async ({
 
   return await sendMail({ to, subject, html });
 };
+
+
+// src/utils/sendMail.ts - Add these new functions
+
+/**
+ * Sends a notification to Super Admin when helpdesk team sends a request for approval
+ */
+interface SuperAdminApprovalNotificationOptions {
+  to: string;                        // Super Admin email
+  superAdminName: string;
+  requestType: string;               // e.g., "Protocol Event", "Circuit", "Bench"
+  requestTitle: string;
+  requestId: string;
+  submittedBy: string;
+  submittedByDepartment: string;
+  submittedAt: Date;
+  details: string;
+  priority: 'low' | 'normal' | 'urgent';
+  additionalInfo?: Record<string, any>;
+}
+
+export const sendSuperAdminApprovalNotification = async ({
+  to,
+  superAdminName,
+  requestType,
+  requestTitle,
+  requestId,
+  submittedBy,
+  submittedByDepartment,
+  submittedAt,
+  details,
+  priority = 'normal',
+  additionalInfo,
+}: SuperAdminApprovalNotificationOptions) => {
+  const subject = `[Action Required] ${requestType} Approval Request - ${requestTitle}`;
+
+  const priorityColors = {
+    urgent: { bg: '#FEE2E2', border: '#DC2626', text: '#991B1B', label: 'URGENT' },
+    normal: { bg: '#FEF3C7', border: '#F59E0B', text: '#92400E', label: 'NORMAL' },
+    low: { bg: '#E5E7EB', border: '#6B7280', text: '#374151', label: 'LOW' },
+  };
+
+  const priorityStyle = priorityColors[priority] || priorityColors.normal;
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${requestType} Approval Request</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f0f2f5;font-family:'Segoe UI',Arial,sans-serif;">
+
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f0f2f5;padding:40px 16px;">
+    <tr>
+      <td align="center">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;">
+
+          <!-- ── Header ── -->
+          <tr>
+            <td style="background-color:#1E4620;border-radius:12px 12px 0 0;padding:32px 40px 24px;" align="center">
+              <h1 style="margin:0;font-size:20px;font-weight:700;color:#ffffff;letter-spacing:0.5px;">
+                📋 Approval Required
+              </h1>
+              <p style="margin:4px 0 0;font-size:13px;color:rgba(255,255,255,0.7);">
+                ${requestType} submitted for your review
+              </p>
+            </td>
+          </tr>
+
+          <!-- ── Body ── -->
+          <tr>
+            <td style="background-color:#ffffff;padding:36px 40px 32px;">
+
+              <!-- Priority Badge -->
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:24px;">
+                <tr>
+                  <td align="center">
+                    <span style="display:inline-block;padding:4px 16px;background-color:${priorityStyle.bg};border-radius:20px;border:1px solid ${priorityStyle.border};font-size:11px;font-weight:700;color:${priorityStyle.text};letter-spacing:1px;text-transform:uppercase;">
+                      ⚡ ${priorityStyle.label} Priority
+                    </span>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin:0 0 4px;font-size:14px;color:#374151;line-height:1.6;">
+                Dear <strong>${superAdminName}</strong>,
+              </p>
+              <p style="margin:0 0 24px;font-size:14px;color:#374151;line-height:1.6;">
+                A ${requestType.toLowerCase()} has been submitted by the Help Desk team and is awaiting your approval.
+                Please review the details below and take appropriate action.
+              </p>
+
+              <!-- Request Details -->
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f8fafc;border-radius:8px;border:1px solid #e2e8f0;margin-bottom:24px;">
+                <tr>
+                  <td style="padding:16px 20px;">
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td style="padding:4px 0;font-size:13px;color:#475569;">
+                          <strong style="color:#1E293B;">Request Type:</strong>
+                        </td>
+                        <td style="padding:4px 0;font-size:13px;color:#1E293B;font-weight:500;">
+                          ${requestType}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding:4px 0;font-size:13px;color:#475569;">
+                          <strong style="color:#1E293B;">Title / Activity:</strong>
+                        </td>
+                        <td style="padding:4px 0;font-size:13px;color:#1E293B;font-weight:500;">
+                          ${requestTitle}
+                        </td>
+                      </tr>
+                      ${additionalInfo?.venue ? `
+                      <tr>
+                        <td style="padding:4px 0;font-size:13px;color:#475569;">
+                          <strong style="color:#1E293B;">Venue:</strong>
+                        </td>
+                        <td style="padding:4px 0;font-size:13px;color:#1E293B;">
+                          ${additionalInfo.venue}
+                        </td>
+                      </tr>` : ''}
+                      ${additionalInfo?.period ? `
+                      <tr>
+                        <td style="padding:4px 0;font-size:13px;color:#475569;">
+                          <strong style="color:#1E293B;">Period:</strong>
+                        </td>
+                        <td style="padding:4px 0;font-size:13px;color:#1E293B;">
+                          ${additionalInfo.period}
+                        </td>
+                      </tr>` : ''}
+                      <tr>
+                        <td style="padding:4px 0;font-size:13px;color:#475569;">
+                          <strong style="color:#1E293B;">Submitted By:</strong>
+                        </td>
+                        <td style="padding:4px 0;font-size:13px;color:#1E293B;">
+                          ${submittedBy} (${submittedByDepartment})
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding:4px 0;font-size:13px;color:#475569;">
+                          <strong style="color:#1E293B;">Date Submitted:</strong>
+                        </td>
+                        <td style="padding:4px 0;font-size:13px;color:#1E293B;">
+                          ${submittedAt.toLocaleString('en-KE', { 
+                            day: '2-digit', 
+                            month: 'short', 
+                            year: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Details -->
+              <div style="background:#f9fafb;border-radius:8px;padding:16px 20px;margin-bottom:24px;">
+                <p style="margin:0 0 8px;font-size:13px;font-weight:600;color:#1E293B;">
+                  Details:
+                </p>
+                <p style="margin:0;font-size:13px;color:#475569;line-height:1.6;white-space:pre-wrap;">
+                  ${details}
+                </p>
+              </div>
+
+              <!-- DSA Summary -->
+              ${additionalInfo?.totalDsa ? `
+              <div style="background:#F0FDF4;border:1px solid #86EFAC;border-radius:8px;padding:12px 16px;margin-bottom:24px;">
+                <p style="margin:0;font-size:13px;color:#166534;text-align:center;">
+                  <strong>Total DSA:</strong> KES ${additionalInfo.totalDsa.toLocaleString()} 
+                  ${additionalInfo?.memberCount ? `• ${additionalInfo.memberCount} member(s) assigned` : ''}
+                </p>
+              </div>` : ''}
+
+              <!-- Action Buttons -->
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:20px;">
+                <tr>
+                  <td align="center">
+                    <a href="${process.env.FRONTEND_URL}/helpdesk/protocol/${requestId}" 
+                       style="display:inline-block;padding:12px 40px;background-color:#1E4620;color:#ffffff;font-size:14px;font-weight:600;text-decoration:none;border-radius:8px;margin-right:8px;">
+                      Review & Approve
+                    </a>
+                  </td>
+                </tr>
+              </table>
+
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#FFFBEB;border:1px solid #FCD34D;border-radius:8px;padding:14px 16px;margin-bottom:20px;">
+                <tr>
+                  <td>
+                    <p style="margin:0;font-size:12px;color:#92400E;line-height:1.5;">
+                      <strong>📌 Required Action:</strong> Please review the request details, verify the information, 
+                      and either approve or reject the request. You may also request additional information if needed.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin:16px 0 0;font-size:12px;color:#9CA3AF;text-align:center;line-height:1.5;">
+                This request will remain pending until you take action. Please respond at your earliest convenience.
+              </p>
+            </td>
+          </tr>
+
+          <!-- ── Footer ── -->
+          <tr>
+            <td style="background-color:#1a2e1b;border-radius:0 0 12px 12px;padding:20px 40px;" align="center">
+              <p style="margin:0 0 4px;font-size:11px;color:rgba(255,255,255,0.5);letter-spacing:0.5px;">
+                Office of the Registrar — High Court of Kenya
+              </p>
+              <div style="width:32px;height:1px;background:rgba(255,255,255,0.15);margin:8px auto;"></div>
+              <p style="margin:0;font-size:10px;color:rgba(255,255,255,0.3);">
+                This is an automated notification. Please do not reply directly to this email.
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>`;
+
+  return await sendMail({ to, subject, html });
+};

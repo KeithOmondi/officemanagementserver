@@ -5,7 +5,7 @@
 import { pool } from '../../config/db';
 import type { PoolClient } from 'pg';
 import { AppError } from '../../utils/response';
-import { sendGeneralRequestAcknowledgement } from '../../utils/sendMail';
+import { sendGeneralRequestAcknowledgement, sendSuperAdminApprovalNotification } from '../../utils/sendMail';
 import type {
     JudgeUtility,
     UtilityItem,
@@ -119,8 +119,10 @@ const VISA_DOCUMENT_SELECT = `
     id, visa_request_id, document_name, document_url, viewed_at, view_count, created_at
 `;
 
+// ─── UPDATED: Added venue to PROTOCOL_SELECT ─────────────────────────────────
+
 const PROTOCOL_SELECT = `
-    id, s_no, activity, period_from, period_to, officers_assigned, remarks,
+    id, s_no, event_name as activity, venue, period_from, period_to, officers_assigned, remarks,
     dsa_required, total_dsa, status, notes,
     created_by, created_at, updated_at
 `;
@@ -321,6 +323,86 @@ export class HelpDeskService {
             if (!firearm || firearm.trim() === '') {
                 throw new AppError(400, 'firearm_type is required when an officer is assigned to a Firearm request');
             }
+        }
+    }
+
+    // ─── Super Admin Notification Helper ─────────────────────────────────────
+
+    /**
+     * Send notification to Super Admin when a protocol event is created
+     */
+    private static async sendProtocolEventSuperAdminNotification(
+        event: ProtocolEvent,
+        submittedBy: string,
+        superAdminEmails: string[]
+    ): Promise<void> {
+        if (!superAdminEmails || superAdminEmails.length === 0) {
+            console.log('[NOTIFICATION] No super admin emails configured');
+            return;
+        }
+
+        try {
+            const submittedAt = new Date();
+            
+            // Calculate total DSA
+            const totalDsa = event.dsa_details?.reduce((sum, d) => sum + (d.dsa_per_day * d.days), 0) || 0;
+            const memberCount = event.dsa_details?.length || 0;
+            
+            // Determine priority based on DSA amount or other criteria
+            let priority: 'low' | 'normal' | 'urgent' = 'normal';
+            if (totalDsa > 500000) priority = 'urgent';
+            else if (totalDsa > 200000) priority = 'normal';
+            else priority = 'low';
+            
+            // Build period string
+            let period = '';
+            if (event.period_from && event.period_to) {
+                period = `${new Date(event.period_from).toLocaleDateString('en-KE')} - ${new Date(event.period_to).toLocaleDateString('en-KE')}`;
+            } else if (event.period_from) {
+                period = `From ${new Date(event.period_from).toLocaleDateString('en-KE')}`;
+            } else if (event.period_to) {
+                period = `Until ${new Date(event.period_to).toLocaleDateString('en-KE')}`;
+            } else {
+                period = 'Not specified';
+            }
+            
+            // Build details text
+            const details = `
+Activity: ${event.activity}
+${event.venue ? `Venue: ${event.venue}` : ''}
+Period: ${period}
+${event.remarks ? `Remarks: ${event.remarks}` : ''}
+${event.notes ? `Additional Notes: ${event.notes}` : ''}
+${event.officers_assigned ? `Officers Assigned: ${event.officers_assigned}` : ''}
+DSA Required: ${event.dsa_required ? 'Yes' : 'No'}
+${event.dsa_required ? `Total DSA: KES ${totalDsa.toLocaleString()}` : ''}
+${event.dsa_required ? `Members: ${memberCount}` : ''}
+`;
+
+            for (const email of superAdminEmails) {
+                await sendSuperAdminApprovalNotification({
+                    to: email.trim(),
+                    superAdminName: 'Super Admin',
+                    requestType: 'Protocol Event',
+                    requestTitle: event.activity,
+                    requestId: event.id,
+                    submittedBy: submittedBy || 'Help Desk Team',
+                    submittedByDepartment: 'Help Desk Team',
+                    submittedAt,
+                    details,
+                    priority,
+                    additionalInfo: {
+                        venue: event.venue,
+                        period,
+                        totalDsa,
+                        memberCount,
+                    },
+                });
+            }
+            console.log(`[EMAIL] Super admin notification sent for protocol event: ${event.id}`);
+        } catch (error) {
+            console.error('[EMAIL ERROR] Failed to send super admin notification:', error);
+            // Don't throw - we don't want to fail the request if email fails
         }
     }
 
@@ -2619,7 +2701,7 @@ export class HelpDeskService {
     }
 
     // ============================================================
-    // PROTOCOL SUPPORT
+    // PROTOCOL SUPPORT - UPDATED with venue and super admin notification
     // ============================================================
 
     static async findAllProtocolEvents(filters: HelpDeskFilters = {}): Promise<ProtocolEvent[]> {
@@ -2628,7 +2710,7 @@ export class HelpDeskService {
         let paramCount = 1;
 
         if (filters.search) {
-            query += ` AND activity ILIKE $${paramCount}`;
+            query += ` AND (activity ILIKE $${paramCount} OR venue ILIKE $${paramCount})`;
             params.push(`%${filters.search}%`);
             paramCount++;
         }
@@ -2686,7 +2768,8 @@ export class HelpDeskService {
 
     static async createProtocolEvent(
         input: CreateProtocolEventInput,
-        userId: string
+        userId: string,
+        superAdminEmails: string[] = []
     ): Promise<ProtocolEvent> {
         const client = await pool.connect();
         
@@ -2695,15 +2778,17 @@ export class HelpDeskService {
 
             const s_no = await generateSerialNumber(client, 'protocol_events');
 
+            // Insert with venue field
             const { rows } = await client.query(
                 `INSERT INTO protocol_events (
-                    s_no, activity, period_from, period_to, officers_assigned, remarks,
+                    s_no, event_name, venue, period_from, period_to, officers_assigned, remarks,
                     dsa_required, notes, created_by
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 RETURNING id`,
                 [
                     s_no,
                     input.activity.trim(),
+                    input.venue || null,           // NEW: venue
                     input.period_from || null,
                     input.period_to || null,
                     input.officers_assigned || null,
@@ -2729,8 +2814,14 @@ export class HelpDeskService {
 
             await client.query('COMMIT');
 
+            // Get the created event
             const event = await this.findProtocolEventById(eventId);
             if (!event) throw new AppError(500, 'Failed to create protocol event');
+
+            // ─── Send Super Admin Notification ──────────────────────────────────
+            const submittedBy = 'Help Desk Team'; // You can pass this from the controller
+            await this.sendProtocolEventSuperAdminNotification(event, submittedBy, superAdminEmails);
+
             return event;
             
         } catch (error) {

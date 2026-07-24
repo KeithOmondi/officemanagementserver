@@ -42,6 +42,7 @@ import {
 import type { ReportModule, DSAReportFilters, RequestType, RemarkType, GeneralRequestCategory, UpdateStatusInput } from './helpdesk.types';
 import { generateDSAReportExcel } from './helpdesk-report.excel';
 import { getRealtimeService } from '../../middleware/realtime.middleware';
+import { env } from '../../config/env';
 
 // ─── Helper: Safe realtime emit ──────────────────────────────────────────────
 
@@ -1137,7 +1138,9 @@ export const helpDeskController = {
         return sendSuccess(res, status, 'Document view status retrieved');
     }),
 
-    // ─── Protocol Support ────────────────────────────────────────────────────
+    // ============================================================
+    // PROTOCOL SUPPORT - UPDATED with venue and super admin notification
+    // ============================================================
 
     getAllProtocolEvents: asyncHandler(async (req: Request, res: Response) => {
         const result = helpDeskFiltersSchema.safeParse({ query: req.query });
@@ -1165,7 +1168,16 @@ export const helpDeskController = {
         if (!result.success) {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
-        const event = await HelpDeskService.createProtocolEvent(result.data.body, req.user!.id);
+        
+        // Get super admin emails from environment
+        const superAdminEmails = env.SUPER_ADMIN_EMAILS?.split(',').map(e => e.trim()) || [];
+        
+        // Create the protocol event with super admin notification
+        const event = await HelpDeskService.createProtocolEvent(
+            result.data.body,
+            req.user!.id,
+            superAdminEmails
+        );
         
         // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'protocol_event_created', event);

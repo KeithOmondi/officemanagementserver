@@ -41,6 +41,9 @@ const envSchema = z.object({
   INFOBIP_BASE_URL:   z.string().url({ message: 'INFOBIP_BASE_URL must be a valid URL (e.g. https://api.infobip.com)' }),
   INFOBIP_API_KEY:    z.string().min(1, { message: 'INFOBIP_API_KEY is required' }),
   INFOBIP_SENDER_ID:  z.string().min(1, { message: 'INFOBIP_SENDER_ID is required (e.g. MyApp)' }),
+
+  // ─── Super Admin Notifications ─────────────────────────────────────────────
+  SUPER_ADMIN_EMAILS: z.string().optional().default(''),
 });
 
 const parseEnv = () => {

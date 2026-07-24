@@ -550,12 +550,13 @@ export interface CreateVisaRequestInput {
 }
 
 // ============================================================
-// Protocol Support
+// Protocol Support - UPDATED with venue/location
 // ============================================================
 
 export interface ProtocolEvent extends BaseEntity, BaseDSAAware {
   s_no: number | null;
-  activity: string;
+  activity: string;                    // Main activity/event name
+  venue: string | null;               // NEW: Venue/Location of the protocol event
   period_from: string | null;
   period_to: string | null;
   officers_assigned: string | null;
@@ -567,6 +568,7 @@ export interface ProtocolEvent extends BaseEntity, BaseDSAAware {
 
 export interface CreateProtocolEventInput {
   activity: string;
+  venue?: string;                     // NEW: Venue/Location
   period_from?: string;
   period_to?: string;
   officers_assigned?: string;
@@ -706,6 +708,16 @@ export function isSecurityRequest(obj: unknown): obj is SecurityRequest {
     obj !== null &&
     'request_type' in obj &&
     'judge_name' in obj
+  );
+}
+
+export function isProtocolEvent(obj: unknown): obj is ProtocolEvent {
+  return (
+    typeof obj === 'object' &&
+    obj !== null &&
+    'activity' in obj &&
+    'venue' in obj &&
+    'dsa_required' in obj
   );
 }
 

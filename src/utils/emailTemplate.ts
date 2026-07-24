@@ -144,7 +144,7 @@ export const emailTemplates = {
               <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:20px;">
                 <tr>
                   <td align="center">
-                    <a href="${process.env.FRONTEND_URL}/documents/${data.documentId}" 
+                    <a href="${process.env.CLIENT_URL}/documents/${data.documentId}" 
                        style="display:inline-block;padding:12px 40px;background-color:#1E4620;color:#ffffff;font-size:14px;font-weight:600;text-decoration:none;border-radius:8px;letter-spacing:0.5px;">
                       View Document & Take Action
                     </a>
@@ -283,7 +283,7 @@ export const emailTemplates = {
               <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:20px;">
                 <tr>
                   <td align="center">
-                    <a href="${process.env.FRONTEND_URL}/documents/${data.documentId}" 
+                    <a href="${process.env.CLIENT_URL}/documents/${data.documentId}" 
                        style="display:inline-block;padding:12px 40px;background-color:#1E4620;color:#ffffff;font-size:14px;font-weight:600;text-decoration:none;border-radius:8px;">
                       Open Document
                     </a>
@@ -413,7 +413,7 @@ export const emailTemplates = {
               <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:20px;">
                 <tr>
                   <td align="center">
-                    <a href="${process.env.FRONTEND_URL}/documents/${data.documentId}" 
+                    <a href="${process.env.CLIENT_URL}/documents/${data.documentId}" 
                        style="display:inline-block;padding:12px 40px;background-color:#1E4620;color:#ffffff;font-size:14px;font-weight:600;text-decoration:none;border-radius:8px;">
                       Review & Sign Document
                     </a>
@@ -518,7 +518,7 @@ export const emailTemplates = {
               <table width="100%" cellpadding="0" cellspacing="0" border="0">
                 <tr>
                   <td align="center">
-                    <a href="${process.env.FRONTEND_URL}/documents/${data.documentId}" 
+                    <a href="${process.env.CLIENT_URL}/documents/${data.documentId}" 
                        style="display:inline-block;padding:12px 40px;background-color:#1E4620;color:#ffffff;font-size:14px;font-weight:600;text-decoration:none;border-radius:8px;">
                       View Document
                     </a>

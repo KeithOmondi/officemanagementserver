@@ -100,7 +100,6 @@ const MEDICAL_CLAIM_SELECT = `
     created_by, created_at, updated_at
 `;
 
-// ─── UPDATED: Added rank, reporting_date ────────────────────────────────────
 const GENERAL_REQUEST_SELECT = `
     id, s_no, ticket_number, judge_name, request, request_type, category,
     date_received, officer_assigned, status, remarks, remark_type,
@@ -145,15 +144,62 @@ const OTHER_PAYMENT_SELECT = `
     created_by, created_at, updated_at
 `;
 
+// ─── DSA Detail Table Configuration ──────────────────────────────────────────
+
+type DSATableConfig = {
+    table: string;
+    foreignKey: string;
+    parentType: string;
+};
+
+const DSA_TABLE_CONFIG: Record<string, DSATableConfig> = {
+    circuit: { table: 'circuit_dsa_details', foreignKey: 'circuit_id', parentType: 'circuit' },
+    bench: { table: 'special_bench_dsa_details', foreignKey: 'bench_id', parentType: 'special_bench' },
+    partHeard: { table: 'part_heard_dsa_details', foreignKey: 'part_heard_id', parentType: 'part_heard' },
+    serviceWeek: { table: 'service_week_dsa_details', foreignKey: 'service_week_id', parentType: 'service_week' },
+    otherPayment: { table: 'other_payment_dsa_details', foreignKey: 'other_payment_id', parentType: 'other_payment' },
+    protocol: { table: 'protocol_dsa_details', foreignKey: 'protocol_event_id', parentType: 'protocol' },
+};
+
 const REPORT_MODULE_CONFIG: Record<
     ReportModule,
-    { parentTable: string; dsaTable: string; fk: string; activityCol: string }
+    { parentTable: string; dsaTable: string; fk: string; activityCol: string; parentType: string }
 > = {
-    circuit: { parentTable: 'circuits', dsaTable: 'circuit_dsa_details', fk: 'circuit_id', activityCol: 'name' },
-    special_bench: { parentTable: 'special_benches', dsaTable: 'special_bench_dsa_details', fk: 'bench_id', activityCol: 'name' },
-    part_heard: { parentTable: 'part_heards', dsaTable: 'part_heard_dsa_details', fk: 'part_heard_id', activityCol: 'case_reference' },
-    service_week: { parentTable: 'service_weeks', dsaTable: 'service_week_dsa_details', fk: 'service_week_id', activityCol: 'name' },
-    other_payment: { parentTable: 'other_payments', dsaTable: 'other_payment_dsa_details', fk: 'other_payment_id', activityCol: 'name' },
+    circuit: { 
+        parentTable: 'circuits', 
+        dsaTable: 'circuit_dsa_details', 
+        fk: 'circuit_id', 
+        activityCol: 'name',
+        parentType: 'circuit'
+    },
+    special_bench: { 
+        parentTable: 'special_benches', 
+        dsaTable: 'special_bench_dsa_details', 
+        fk: 'bench_id', 
+        activityCol: 'name',
+        parentType: 'special_bench'
+    },
+    part_heard: { 
+        parentTable: 'part_heards', 
+        dsaTable: 'part_heard_dsa_details', 
+        fk: 'part_heard_id', 
+        activityCol: 'case_reference',
+        parentType: 'part_heard'
+    },
+    service_week: { 
+        parentTable: 'service_weeks', 
+        dsaTable: 'service_week_dsa_details', 
+        fk: 'service_week_id', 
+        activityCol: 'name',
+        parentType: 'service_week'
+    },
+    other_payment: { 
+        parentTable: 'other_payments', 
+        dsaTable: 'other_payment_dsa_details', 
+        fk: 'other_payment_id', 
+        activityCol: 'name',
+        parentType: 'other_payment'
+    },
 };
 
 // ─── Helper Functions ─────────────────────────────────────────────────────────
@@ -225,15 +271,38 @@ export class HelpDeskService {
 
     // ─── Helper: Get DSA Details ─────────────────────────────────────────────
 
-    private static async getDSADetails(table: string, foreignKey: string, id: string): Promise<any[]> {
+    /**
+     * Get DSA details for a specific parent entity.
+     * Filters by both the foreign key and parent_type to ensure data integrity.
+     */
+    private static async getDSADetails(
+        table: string, 
+        foreignKey: string, 
+        parentId: string, 
+        parentType: string
+    ): Promise<any[]> {
         const { rows } = await pool.query(
             `SELECT ${DSA_DETAIL_SELECT} 
              FROM ${table} 
-             WHERE ${foreignKey} = $1 AND is_active = true
+             WHERE ${foreignKey} = $1 AND is_active = true AND parent_type = $2
              ORDER BY created_at ASC`,
-            [id]
+            [parentId, parentType]
         );
         return rows;
+    }
+
+    /**
+     * Get DSA details using the configuration for a specific entity type.
+     */
+    private static async getDSADetailsByType(
+        entityType: keyof typeof DSA_TABLE_CONFIG,
+        parentId: string
+    ): Promise<any[]> {
+        const config = DSA_TABLE_CONFIG[entityType];
+        if (!config) {
+            throw new AppError(400, `Unknown entity type: ${entityType}`);
+        }
+        return this.getDSADetails(config.table, config.foreignKey, parentId, config.parentType);
     }
 
     // ─── NEW: Firearm validation helper ──────────────────────────────────────
@@ -355,12 +424,6 @@ export class HelpDeskService {
 
     // ─── UPDATED: Added rank, reporting_date, and Firearm validation ──────
 
-    /**
-     * Creates a general request.
-     *
-     * Business rule: For 'Firearm' requests, `firearm_type` is optional initially,
-     * but becomes **required** when `officer_assigned` is provided.
-     */
     static async createGeneralRequest(
         input: CreateGeneralRequestInput,
         userId: string
@@ -457,14 +520,6 @@ export class HelpDeskService {
         }
     }
 
-    // ─── UPDATED: Added rank, reporting_date, and Firearm validation ──────
-
-    /**
-     * Updates a general request.
-     *
-     * Business rule: For 'Firearm' requests, if `officer_assigned` is set,
-     * `firearm_type` must also be provided.
-     */
     static async updateGeneralRequest(
         id: string,
         input: UpdateGeneralRequestInput
@@ -524,8 +579,6 @@ export class HelpDeskService {
         if (!updated) throw new AppError(500, 'Failed to update general request');
         return updated;
     }
-
-    // ─── Status update ───────────────────────────────────────────────────────
 
     static async updateGeneralRequestStatus(
         id: string,
@@ -682,7 +735,6 @@ export class HelpDeskService {
                     request: request.request,
                 });
             } else {
-                // For resolved/rejected, import the specific functions
                 const { sendGeneralRequestResolved, sendGeneralRequestRejected } = require('../../utils/sendMail');
                 
                 if (type === 'resolved') {
@@ -1312,12 +1364,18 @@ export class HelpDeskService {
     // DSA HELPER: UPSERT DSA DETAILS
     // ============================================================
 
+    /**
+     * Upsert DSA details for a parent entity.
+     * Soft deletes existing records and inserts new ones.
+     * Also stores parent_type to ensure data integrity.
+     */
     private static async upsertDSADetails(
         client: any,
         table: string,
         foreignKey: string,
         parentId: string,
-        details: DSADetailInput[]
+        details: DSADetailInput[],
+        parentType: string
     ): Promise<void> {
         // Soft delete existing
         await client.query(
@@ -1332,8 +1390,9 @@ export class HelpDeskService {
                     `INSERT INTO ${table} (
                         ${foreignKey}, judge_name, pj_number, designation, dsa_per_day, days, total, notes,
                         date_of_request, date_of_ticket_facilitation, date_of_conference_facilitation,
-                        travel_date, travel_back, requisition_number, requisition_initiation_date, payment_status
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+                        travel_date, travel_back, requisition_number, requisition_initiation_date, payment_status,
+                        parent_type
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
                     [
                         parentId,
                         detail.judge_name.trim(),
@@ -1351,10 +1410,34 @@ export class HelpDeskService {
                         detail.requisition_number || null,
                         detail.requisition_initiation_date || null,
                         detail.payment_status || 'Pending',
+                        parentType,
                     ]
                 );
             }
         }
+    }
+
+    /**
+     * Upsert DSA details using the configuration for a specific entity type.
+     */
+    private static async upsertDSADetailsByType(
+        client: any,
+        entityType: keyof typeof DSA_TABLE_CONFIG,
+        parentId: string,
+        details: DSADetailInput[]
+    ): Promise<void> {
+        const config = DSA_TABLE_CONFIG[entityType];
+        if (!config) {
+            throw new AppError(400, `Unknown entity type: ${entityType}`);
+        }
+        return this.upsertDSADetails(
+            client,
+            config.table,
+            config.foreignKey,
+            parentId,
+            details,
+            config.parentType
+        );
     }
 
     // ============================================================
@@ -1391,7 +1474,12 @@ export class HelpDeskService {
         const { rows } = await pool.query(query, params);
 
         for (const circuit of rows) {
-            circuit.dsa_details = await this.getDSADetails('circuit_dsa_details', 'circuit_id', circuit.id);
+            circuit.dsa_details = await this.getDSADetails(
+                'circuit_dsa_details', 
+                'circuit_id', 
+                circuit.id,
+                'circuit'
+            );
             if (circuit.dsa_details.length > 0) {
                 circuit.total_dsa = circuit.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
             } else {
@@ -1411,7 +1499,12 @@ export class HelpDeskService {
         if (rows.length === 0) return null;
 
         const circuit = rows[0];
-        circuit.dsa_details = await this.getDSADetails('circuit_dsa_details', 'circuit_id', id);
+        circuit.dsa_details = await this.getDSADetails(
+            'circuit_dsa_details', 
+            'circuit_id', 
+            id,
+            'circuit'
+        );
         circuit.total_dsa = circuit.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
 
         return circuit;
@@ -1448,7 +1541,8 @@ export class HelpDeskService {
                     'circuit_dsa_details',
                     'circuit_id',
                     circuitId,
-                    input.dsa_details
+                    input.dsa_details,
+                    'circuit'
                 );
             }
 
@@ -1504,7 +1598,8 @@ export class HelpDeskService {
                 'circuit_dsa_details',
                 'circuit_id',
                 circuitId,
-                dsaDetails
+                dsaDetails,
+                'circuit'
             );
 
             await client.query('COMMIT');
@@ -1585,7 +1680,12 @@ export class HelpDeskService {
         const { rows } = await pool.query(query, params);
 
         for (const bench of rows) {
-            bench.dsa_details = await this.getDSADetails('special_bench_dsa_details', 'bench_id', bench.id);
+            bench.dsa_details = await this.getDSADetails(
+                'special_bench_dsa_details', 
+                'bench_id', 
+                bench.id,
+                'special_bench'
+            );
             bench.total_dsa = bench.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
         }
 
@@ -1601,7 +1701,12 @@ export class HelpDeskService {
         if (rows.length === 0) return null;
 
         const bench = rows[0];
-        bench.dsa_details = await this.getDSADetails('special_bench_dsa_details', 'bench_id', id);
+        bench.dsa_details = await this.getDSADetails(
+            'special_bench_dsa_details', 
+            'bench_id', 
+            id,
+            'special_bench'
+        );
         bench.total_dsa = bench.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
 
         return bench;
@@ -1638,7 +1743,8 @@ export class HelpDeskService {
                     'special_bench_dsa_details',
                     'bench_id',
                     benchId,
-                    input.dsa_details
+                    input.dsa_details,
+                    'special_bench'
                 );
             }
 
@@ -1705,7 +1811,8 @@ export class HelpDeskService {
                     'special_bench_dsa_details',
                     'bench_id',
                     id,
-                    input.dsa_details
+                    input.dsa_details,
+                    'special_bench'
                 );
             }
 
@@ -1806,7 +1913,12 @@ export class HelpDeskService {
         const { rows } = await pool.query(query, params);
 
         for (const ph of rows) {
-            ph.dsa_details = await this.getDSADetails('part_heard_dsa_details', 'part_heard_id', ph.id);
+            ph.dsa_details = await this.getDSADetails(
+                'part_heard_dsa_details', 
+                'part_heard_id', 
+                ph.id,
+                'part_heard'
+            );
             ph.total_dsa = ph.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
         }
 
@@ -1822,7 +1934,12 @@ export class HelpDeskService {
         if (rows.length === 0) return null;
 
         const ph = rows[0];
-        ph.dsa_details = await this.getDSADetails('part_heard_dsa_details', 'part_heard_id', id);
+        ph.dsa_details = await this.getDSADetails(
+            'part_heard_dsa_details', 
+            'part_heard_id', 
+            id,
+            'part_heard'
+        );
         ph.total_dsa = ph.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
 
         return ph;
@@ -1859,7 +1976,8 @@ export class HelpDeskService {
                     'part_heard_dsa_details',
                     'part_heard_id',
                     phId,
-                    input.dsa_details
+                    input.dsa_details,
+                    'part_heard'
                 );
             }
 
@@ -1926,7 +2044,8 @@ export class HelpDeskService {
                     'part_heard_dsa_details',
                     'part_heard_id',
                     id,
-                    input.dsa_details
+                    input.dsa_details,
+                    'part_heard'
                 );
             }
 
@@ -2027,7 +2146,12 @@ export class HelpDeskService {
         const { rows } = await pool.query(query, params);
 
         for (const week of rows) {
-            week.dsa_details = await this.getDSADetails('service_week_dsa_details', 'service_week_id', week.id);
+            week.dsa_details = await this.getDSADetails(
+                'service_week_dsa_details', 
+                'service_week_id', 
+                week.id,
+                'service_week'
+            );
             week.total_dsa = week.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
         }
 
@@ -2043,7 +2167,12 @@ export class HelpDeskService {
         if (rows.length === 0) return null;
 
         const week = rows[0];
-        week.dsa_details = await this.getDSADetails('service_week_dsa_details', 'service_week_id', id);
+        week.dsa_details = await this.getDSADetails(
+            'service_week_dsa_details', 
+            'service_week_id', 
+            id,
+            'service_week'
+        );
         week.total_dsa = week.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
 
         return week;
@@ -2081,7 +2210,8 @@ export class HelpDeskService {
                     'service_week_dsa_details',
                     'service_week_id',
                     weekId,
-                    input.dsa_details
+                    input.dsa_details,
+                    'service_week'
                 );
             }
 
@@ -2419,7 +2549,6 @@ export class HelpDeskService {
         try {
             await client.query('BEGIN');
 
-            // Update the document view count
             const { rows } = await client.query(
                 `UPDATE visa_documents 
                  SET view_count = COALESCE(view_count, 0) + 1,
@@ -2433,7 +2562,6 @@ export class HelpDeskService {
                 throw new AppError(404, 'Document not found');
             }
 
-            // Log the view in the document_views table
             await client.query(
                 `INSERT INTO document_views (
                     document_id, document_type, viewer_id, viewer_name, 
@@ -2524,7 +2652,12 @@ export class HelpDeskService {
         const { rows } = await pool.query(query, params);
 
         for (const event of rows) {
-            event.dsa_details = await this.getDSADetails('protocol_dsa_details', 'protocol_event_id', event.id);
+            event.dsa_details = await this.getDSADetails(
+                'protocol_dsa_details', 
+                'protocol_event_id', 
+                event.id,
+                'protocol'
+            );
             event.total_dsa = event.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
         }
 
@@ -2540,7 +2673,12 @@ export class HelpDeskService {
         if (rows.length === 0) return null;
 
         const event = rows[0];
-        event.dsa_details = await this.getDSADetails('protocol_dsa_details', 'protocol_event_id', id);
+        event.dsa_details = await this.getDSADetails(
+            'protocol_dsa_details', 
+            'protocol_event_id', 
+            id,
+            'protocol'
+        );
         event.total_dsa = event.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
 
         return event;
@@ -2584,7 +2722,8 @@ export class HelpDeskService {
                     'protocol_dsa_details',
                     'protocol_event_id',
                     eventId,
-                    input.dsa_details
+                    input.dsa_details,
+                    'protocol'
                 );
             }
 
@@ -2686,7 +2825,12 @@ export class HelpDeskService {
         const { rows } = await pool.query(query, params);
 
         for (const payment of rows) {
-            payment.dsa_details = await this.getDSADetails('other_payment_dsa_details', 'other_payment_id', payment.id);
+            payment.dsa_details = await this.getDSADetails(
+                'other_payment_dsa_details', 
+                'other_payment_id', 
+                payment.id,
+                'other_payment'
+            );
             if (payment.dsa_details.length > 0) {
                 payment.total_dsa = payment.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
             } else {
@@ -2706,7 +2850,12 @@ export class HelpDeskService {
         if (rows.length === 0) return null;
 
         const payment = rows[0];
-        payment.dsa_details = await this.getDSADetails('other_payment_dsa_details', 'other_payment_id', id);
+        payment.dsa_details = await this.getDSADetails(
+            'other_payment_dsa_details', 
+            'other_payment_id', 
+            id,
+            'other_payment'
+        );
         payment.total_dsa = payment.dsa_details.reduce((sum: number, detail: any) => sum + Number(detail.total), 0);
 
         return payment;
@@ -2743,7 +2892,8 @@ export class HelpDeskService {
                     'other_payment_dsa_details',
                     'other_payment_id',
                     paymentId,
-                    input.dsa_details
+                    input.dsa_details,
+                    'other_payment'
                 );
             }
 
@@ -2799,7 +2949,8 @@ export class HelpDeskService {
                 'other_payment_dsa_details',
                 'other_payment_id',
                 paymentId,
-                dsaDetails
+                dsaDetails,
+                'other_payment'
             );
 
             await client.query('COMMIT');
@@ -2858,7 +3009,7 @@ export class HelpDeskService {
         const allRows: DSAReportRow[] = [];
 
         for (const moduleKey of modules) {
-            const { parentTable, dsaTable, fk, activityCol } = REPORT_MODULE_CONFIG[moduleKey];
+            const { parentTable, dsaTable, fk, activityCol, parentType } = REPORT_MODULE_CONFIG[moduleKey];
 
             let query = `
                 SELECT
@@ -2874,10 +3025,10 @@ export class HelpDeskService {
                     d.requisition_number, d.requisition_initiation_date, d.payment_status
                 FROM ${dsaTable} d
                 JOIN ${parentTable} p ON p.id = d.${fk}
-                WHERE d.is_active = true AND p.is_active = true
+                WHERE d.is_active = true AND p.is_active = true AND d.parent_type = $1
             `;
-            const params: unknown[] = [];
-            let paramCount = 1;
+            const params: unknown[] = [parentType];
+            let paramCount = 2;
 
             if (filters.judge_name) {
                 query += ` AND d.judge_name ILIKE $${paramCount}`;

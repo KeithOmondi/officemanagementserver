@@ -114,7 +114,7 @@ export interface DocumentMark {
   assigned_to: string | null;
   assigned_to_name: string | null;
   instructions: string | null;
-  bring_up_date: string | null;
+  // REMOVED: bring_up_date: string | null; // Moved to Document level
   priority: RoutePriority;
   marked_at: Date;
   acknowledged_at: Date | null;
@@ -186,6 +186,43 @@ export type DocumentFlowAction =
   | 'follow_up_comment_added'
   | 'follow_up_filed_away';
 
+// ─── Bring Up Types ────────────────────────────────────────────────────────────
+
+export interface BringUpHistoryEntry {
+  id: string;
+  document_id: string;
+  bring_up_date: string;              // The date that was set
+  set_by: string;                     // Super Admin who set it
+  set_by_name: string;
+  set_at: string;                     // When it was set
+  completed_at: string | null;        // When it was completed (if ever)
+  completed_by: string | null;        // Who completed it
+  completed_by_name: string | null;
+  notes: string | null;               // Notes at time of setting
+  completion_notes: string | null;    // Notes when completed
+  is_active: boolean;                 // True if this is the current bring up
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BringUpSummary {
+  total_pending: number;              // All active bring ups not yet completed
+  total_overdue: number;              // Bring ups past their date
+  total_completed: number;            // Completed bring ups
+  due_today: number;                  // Due today
+  due_this_week: number;              // Due this week
+  by_department: {                    // Breakdown by department
+    department_id: string;
+    department_name: string;
+    pending: number;
+    overdue: number;
+  }[];
+  my_pending: number;                 // For current user
+  my_overdue: number;                 // For current user
+}
+
+export type BringUpStatus = 'pending' | 'completed' | 'overdue' | 'all';
+
 // ─── Document Interface ──────────────────────────────────────────────────────
 
 export interface Document {
@@ -241,6 +278,18 @@ export interface Document {
   signature_position_height: number | null;
   request_details: DocumentRequestDetails | null;
   follow_ups?: FollowUp[];
+  
+  // ─── Bring Up Fields ──────────────────────────────────────────────────────
+  bring_up_date: string | null;              // When document must be dealt with
+  bring_up_set_by: string | null;            // Super Admin who set it
+  bring_up_set_by_name: string | null;
+  bring_up_set_at: string | null;            // When it was set
+  bring_up_completed_at: string | null;      // When it was actually brought up
+  bring_up_completed_by: string | null;      // Who completed it
+  bring_up_completed_by_name: string | null;
+  bring_up_notes: string | null;             // Super Admin's notes
+  bring_up_history: BringUpHistoryEntry[] | null; // History of all bring up dates
+  bring_up_status: BringUpStatus | null;     // Computed field
 }
 
 export interface DocumentWithAnnotations extends Document {
@@ -272,10 +321,48 @@ export interface DocumentFilters {
   visible_in_summary?: boolean;
   page?: number;
   limit?: number;
-  sort_by?: 'created_at' | 'updated_at' | 'title' | 'status';
+  sort_by?: 'created_at' | 'updated_at' | 'title' | 'status' | 'bring_up_date';
   sort_order?: 'ASC' | 'DESC';
-  has_bring_up_date?: boolean;
   request_type?: RequestType;
+  
+  // ─── Bring Up Filters ─────────────────────────────────────────────────────
+  has_bring_up_date?: boolean;           // Documents with a bring up date set
+  bring_up_status?: BringUpStatus | 'all';
+  bring_up_date_from?: string;           // Filter by bring up date range
+  bring_up_date_to?: string;
+  bring_up_due_today?: boolean;          // Quick filter for today's bring ups
+  bring_up_due_this_week?: boolean;      // Quick filter for this week
+  assigned_for_bring_up?: string;        // User ID who needs to bring up
+}
+
+// ─── Bring Up Input Types ────────────────────────────────────────────────────
+
+export interface SetBringUpInput {
+  bring_up_date: Date | string;          // When document must be dealt with
+  notes?: string;                        // Optional notes from Super Admin
+  assign_to?: string;                    // Optional: specific user to handle bring up
+}
+
+export interface UpdateBringUpInput {
+  bring_up_date: Date | string;          // New date (auto saves previous as history)
+  notes?: string;                        // Notes about why date changed
+}
+
+export interface CompleteBringUpInput {
+  notes?: string;                        // Notes about what happened
+}
+
+export interface BringUpFilters {
+  status?: BringUpStatus | 'all';
+  date_from?: Date | string;
+  date_to?: Date | string;
+  due_today?: boolean;
+  due_this_week?: boolean;
+  assigned_to?: string;
+  page?: number;
+  limit?: number;
+  sort_by?: 'bring_up_date' | 'created_at' | 'title';
+  sort_order?: 'ASC' | 'DESC';
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -459,6 +546,10 @@ export interface DocumentListItem {
   department_name: string | null;
   response_count: number;
   active_mark: DocumentMark | null;
+  // NEW: Bring up fields for list view
+  bring_up_date: string | null;
+  bring_up_status: BringUpStatus | null;
+  bring_up_set_by_name: string | null;
 }
 
 export interface FollowUpListItem {

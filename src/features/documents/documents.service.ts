@@ -23,6 +23,9 @@ import type {
   DocumentType,
   DocumentCategory,
   RefType,
+  BringUpHistoryEntry,
+  BringUpSummary,
+  BringUpStatus,
 } from './documents.types';
 import type {
   CreateComposedDocumentInput,
@@ -42,6 +45,10 @@ import type {
   AddFollowUpCommentInput,
   FollowUpFilters,
   FileAwayFollowUpInput,
+  SetBringUpInput,
+  UpdateBringUpInput,
+  CompleteBringUpInput,
+  BringUpFilters,
 } from './documents.validator';
 import axios from 'axios';
 import { generateOTP } from '../../utils/SendOTP';
@@ -73,6 +80,15 @@ const DOC_SELECT = `
   d.signature_position_width,
   d.signature_position_height,
   d.request_details,
+  -- Bring Up fields
+  d.bring_up_date,
+  d.bring_up_set_by,
+  d.bring_up_set_by_name,
+  d.bring_up_set_at,
+  d.bring_up_completed_at,
+  d.bring_up_completed_by,
+  d.bring_up_completed_by_name,
+  d.bring_up_notes,
   (SELECT COUNT(*) FROM document_responses r WHERE r.document_id = d.id) AS response_count
 `;
 
@@ -102,7 +118,7 @@ const MARK_SELECT = `
   m.assigned_to AS mark_assigned_to,
   mu.full_name AS mark_assigned_to_name,
   m.instructions AS mark_instructions,
-  m.bring_up_date AS mark_bring_up_date,
+  -- REMOVED: m.bring_up_date AS mark_bring_up_date,
   m.priority AS mark_priority,
   m.marked_at AS mark_marked_at,
   m.acknowledged_at AS mark_acknowledged_at,
@@ -123,7 +139,7 @@ const MARK_SELECT_DETAIL = `
   m.marked_to_dept, md.name       AS marked_to_dept_name,
   m.assigned_to,    mu.full_name  AS assigned_to_name,
   m.instructions,
-  m.bring_up_date,
+  -- REMOVED: m.bring_up_date,
   m.priority,
   m.marked_at, m.acknowledged_at, m.completed_at,
   m.is_active
@@ -146,6 +162,20 @@ const RESPONSE_SELECT = `
 const RESPONSE_JOIN = `
   FROM document_responses r
   JOIN users ru ON ru.id = r.responded_by
+`;
+
+// ── Bring Up SELECT fragments ────────────────────────────────────────────────
+
+const BRING_UP_HISTORY_SELECT = `
+  bh.id, bh.document_id, bh.bring_up_date,
+  bh.set_by, bh.set_by_name, bh.set_at,
+  bh.completed_at, bh.completed_by, bh.completed_by_name,
+  bh.notes, bh.completion_notes, bh.is_active,
+  bh.created_at, bh.updated_at
+`;
+
+const BRING_UP_HISTORY_JOIN = `
+  FROM bring_up_history bh
 `;
 
 // ── Follow-up SELECT fragments ───────────────────────────────────────────────
@@ -178,12 +208,20 @@ const FOLLOW_UP_COMMENT_JOIN = `
   LEFT JOIN users u ON u.id = fc.user_id
 `;
 
-const ALLOWED_SORT = new Set(['created_at', 'updated_at', 'title', 'status']);
+const ALLOWED_SORT = new Set(['created_at', 'updated_at', 'title', 'status', 'bring_up_date']);
 const ALLOWED_FOLLOW_UP_SORT = new Set(['created_at', 'due_date', 'priority', 'status', 'notes']);
 
 // ─── Helper to map DB row to Document ─────────────────────────────────────────
 
 function mapRowToDocument(row: any): Document {
+  const bringUpStatus = row.bring_up_date 
+    ? row.bring_up_completed_at 
+      ? 'completed' 
+      : new Date(row.bring_up_date) < new Date() 
+        ? 'overdue' 
+        : 'pending'
+    : null;
+
   return {
     id: row.id,
     title: row.title,
@@ -231,7 +269,7 @@ function mapRowToDocument(row: any): Document {
       assigned_to: row.mark_assigned_to,
       assigned_to_name: row.mark_assigned_to_name,
       instructions: row.mark_instructions,
-      bring_up_date: row.mark_bring_up_date,
+      // REMOVED: bring_up_date: row.mark_bring_up_date,
       priority: row.mark_priority,
       marked_at: row.mark_marked_at,
       acknowledged_at: row.mark_acknowledged_at,
@@ -253,6 +291,17 @@ function mapRowToDocument(row: any): Document {
     signature_position_height: row.signature_position_height ?? null,
     request_details: row.request_details as DocumentRequestDetails | null,
     follow_ups: [],
+    // Bring Up fields
+    bring_up_date: row.bring_up_date || null,
+    bring_up_set_by: row.bring_up_set_by || null,
+    bring_up_set_by_name: row.bring_up_set_by_name || null,
+    bring_up_set_at: row.bring_up_set_at || null,
+    bring_up_completed_at: row.bring_up_completed_at || null,
+    bring_up_completed_by: row.bring_up_completed_by || null,
+    bring_up_completed_by_name: row.bring_up_completed_by_name || null,
+    bring_up_notes: row.bring_up_notes || null,
+    bring_up_history: null,
+    bring_up_status: bringUpStatus as BringUpStatus | null,
   };
 }
 
@@ -348,7 +397,7 @@ export class DocumentService {
 
   // ── Find all ─────────────────────────────────────────────────────────────────
 
- // ── Find all ─────────────────────────────────────────────────────────────────
+  // ── Find all ─────────────────────────────────────────────────────────────────
 
 static async findAll(
   filters: DocumentFilters,
@@ -359,6 +408,12 @@ static async findAll(
     search, type, category, status, assigned_to,
     department_id, folder_id, for_my_action,
     has_bring_up_date,
+    bring_up_status,
+    bring_up_date_from,
+    bring_up_date_to,
+    bring_up_due_today,
+    bring_up_due_this_week,
+    assigned_for_bring_up,
     page = 1, limit = 20,
     sort_by = 'created_at', sort_order = 'DESC',
   } = filters;
@@ -408,14 +463,68 @@ static async findAll(
     p++;
   }
 
+  // ─── Bring Up Filters ─────────────────────────────────────────────────────
+
   if (has_bring_up_date) {
-    conditions.push(`m.bring_up_date IS NOT NULL`);
+    conditions.push(`d.bring_up_date IS NOT NULL`);
+  }
+
+  // Only apply status filter if a specific status is provided (not 'all' or undefined)
+  if (bring_up_status && bring_up_status !== 'all') {
+    const now = new Date().toISOString();
+    if (bring_up_status === 'pending') {
+      conditions.push(`d.bring_up_date IS NOT NULL AND d.bring_up_completed_at IS NULL AND d.bring_up_date >= $${p}`);
+      values.push(now);
+      p++;
+    } else if (bring_up_status === 'overdue') {
+      conditions.push(`d.bring_up_date IS NOT NULL AND d.bring_up_completed_at IS NULL AND d.bring_up_date < $${p}`);
+      values.push(now);
+      p++;
+    } else if (bring_up_status === 'completed') {
+      conditions.push(`d.bring_up_completed_at IS NOT NULL`);
+    }
+  }
+
+  if (bring_up_date_from) {
+    conditions.push(`d.bring_up_date >= $${p}`);
+    values.push(bring_up_date_from);
+    p++;
+  }
+
+  if (bring_up_date_to) {
+    conditions.push(`d.bring_up_date <= $${p}`);
+    values.push(bring_up_date_to);
+    p++;
+  }
+
+  if (bring_up_due_today) {
+    const today = new Date().toISOString().split('T')[0];
+    conditions.push(`DATE(d.bring_up_date) = $${p}`);
+    values.push(today);
+    p++;
+  }
+
+  if (bring_up_due_this_week) {
+    const now = new Date();
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() - now.getDay());
+    const endOfWeek = new Date(now);
+    endOfWeek.setDate(now.getDate() + (6 - now.getDay()));
+    conditions.push(`DATE(d.bring_up_date) BETWEEN $${p} AND $${p + 1}`);
+    values.push(startOfWeek.toISOString().split('T')[0], endOfWeek.toISOString().split('T')[0]);
+    p += 2;
+  }
+
+  if (assigned_for_bring_up) {
+    conditions.push(`d.assigned_to = $${p}`);
+    values.push(assigned_for_bring_up);
+    p++;
   }
 
   const where = `WHERE ${conditions.join(' AND ')}`;
 
   const [countResult, dataResult] = await Promise.all([
-    pool.query(`SELECT COUNT(*) AS total ${DOC_JOIN} ${MARK_JOIN} ${where}`, values),
+    pool.query(`SELECT COUNT(*) AS total ${DOC_JOIN} ${where}`, values),
     pool.query(
       `SELECT 
         ${DOC_SELECT},
@@ -429,7 +538,7 @@ static async findAll(
     ),
   ]);
 
-  // ─── FIX: Fetch follow-ups for all documents ──────────────────────────────
+  // ─── Fetch follow-ups for all documents ──────────────────────────────────
   const documentIds = dataResult.rows.map(row => row.id);
   let followUpsMap: Record<string, FollowUp[]> = {};
 
@@ -441,7 +550,6 @@ static async findAll(
       [documentIds]
     );
     
-    // Group follow-ups by document_id
     followUpsMap = followUpRows.reduce((acc, row) => {
       const docId = row.document_id;
       if (!acc[docId]) acc[docId] = [];
@@ -450,10 +558,30 @@ static async findAll(
     }, {} as Record<string, FollowUp[]>);
   }
 
-  // ─── Map rows to documents and attach follow-ups ──────────────────────────
+  // ─── Fetch bring up history for all documents ────────────────────────────
+  let bringUpHistoryMap: Record<string, BringUpHistoryEntry[]> = {};
+
+  if (documentIds.length > 0) {
+    const { rows: historyRows } = await pool.query(
+      `SELECT ${BRING_UP_HISTORY_SELECT} ${BRING_UP_HISTORY_JOIN}
+       WHERE bh.document_id = ANY($1)
+       ORDER BY bh.set_at DESC`,
+      [documentIds]
+    );
+    
+    bringUpHistoryMap = historyRows.reduce((acc, row) => {
+      const docId = row.document_id;
+      if (!acc[docId]) acc[docId] = [];
+      acc[docId].push(row);
+      return acc;
+    }, {} as Record<string, BringUpHistoryEntry[]>);
+  }
+
+  // ─── Map rows to documents and attach follow-ups & history ──────────────
   const documents = dataResult.rows.map(row => {
     const doc = mapRowToDocument(row);
     doc.follow_ups = followUpsMap[doc.id] || [];
+    doc.bring_up_history = bringUpHistoryMap[doc.id] || null;
     return doc;
   });
 
@@ -475,7 +603,18 @@ static async findAll(
       [id]
     );
     if (!rows[0]) return null;
-    return mapRowToDocument(rows[0]);
+    const doc = mapRowToDocument(rows[0]);
+    
+    // Fetch bring up history
+    const { rows: historyRows } = await pool.query(
+      `SELECT ${BRING_UP_HISTORY_SELECT} ${BRING_UP_HISTORY_JOIN}
+       WHERE bh.document_id = $1
+       ORDER BY bh.set_at DESC`,
+      [id]
+    );
+    doc.bring_up_history = historyRows.length > 0 ? historyRows : null;
+    
+    return doc;
   }
 
   static async findByIdWithAnnotations(id: string): Promise<DocumentWithAnnotations | null> {
@@ -520,6 +659,15 @@ static async findAll(
     if (!docResult.rows[0]) return null;
 
     const doc = mapRowToDocument(docResult.rows[0]);
+    
+    // Fetch bring up history
+    const { rows: historyRows } = await pool.query(
+      `SELECT ${BRING_UP_HISTORY_SELECT} ${BRING_UP_HISTORY_JOIN}
+       WHERE bh.document_id = $1
+       ORDER BY bh.set_at DESC`,
+      [id]
+    );
+    doc.bring_up_history = historyRows.length > 0 ? historyRows : null;
     
     return {
       ...doc,
@@ -677,15 +825,14 @@ static async findAll(
 
       await client.query(
         `INSERT INTO document_marks
-           (document_id, marked_by, marked_to_dept, assigned_to, instructions, priority, bring_up_date)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+           (document_id, marked_by, marked_to_dept, assigned_to, instructions, priority)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
         [
           documentId, markedBy,
           input.department_id,
           input.assigned_to ?? null,
           input.instructions ?? null,
           input.priority,
-          null,
         ]
       );
 
@@ -1826,7 +1973,7 @@ static async findAll(
   }
 
   // ════════════════════════════════════════════════════════════════════════════
-  //  Update Mark (instructions & bring_up_date)
+  //  Update Mark (instructions only - bring_up_date removed)
   // ════════════════════════════════════════════════════════════════════════════
 
   static async updateMark(markId: string, input: UpdateMarkInput): Promise<DocumentMark> {
@@ -1837,10 +1984,6 @@ static async findAll(
     if (input.instructions !== undefined) {
       updates.push(`instructions = $${p++}`);
       values.push(input.instructions.trim() || null);
-    }
-    if (input.bring_up_date !== undefined) {
-      updates.push(`bring_up_date = $${p++}`);
-      values.push(input.bring_up_date);
     }
 
     if (!updates.length) {
@@ -1860,6 +2003,663 @@ static async findAll(
     );
     if (!rows.length) throw new AppError(404, 'Mark not found');
     return rows[0];
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  //  BRING UP OPERATIONS
+  // ════════════════════════════════════════════════════════════════════════════
+
+  static async setBringUp(
+    documentId: string,
+    input: SetBringUpInput,
+    userId: string
+  ): Promise<Document> {
+    console.log(`[BringUp] Setting bring up date for document ${documentId}`);
+
+    const doc = await this.findById(documentId);
+    if (!doc) {
+      throw new AppError(404, 'Document not found');
+    }
+
+    // If document already has a bring up date and it's not completed
+    if (doc.bring_up_date && !doc.bring_up_completed_at) {
+      // Auto complete the previous bring up (it was not completed on time)
+      await this.completePreviousBringUp(documentId, userId);
+    }
+
+    // Get user name for set_by_name
+    const { rows: userRows } = await pool.query(
+      `SELECT full_name FROM users WHERE id = $1 AND is_active = true`,
+      [userId]
+    );
+    const userName = userRows[0]?.full_name || userId;
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Update document with bring up fields
+      await client.query(
+        `UPDATE documents
+         SET bring_up_date = $1,
+             bring_up_set_by = $2,
+             bring_up_set_by_name = $3,
+             bring_up_set_at = NOW(),
+             bring_up_completed_at = NULL,
+             bring_up_completed_by = NULL,
+             bring_up_completed_by_name = NULL,
+             bring_up_notes = $4,
+             updated_at = NOW()
+         WHERE id = $5`,
+        [
+          input.bring_up_date,
+          userId,
+          userName,
+          input.notes || null,
+          documentId
+        ]
+      );
+
+      // Create history entry
+      await client.query(
+        `INSERT INTO bring_up_history
+           (document_id, bring_up_date, set_by, set_by_name, set_at, notes, is_active)
+         VALUES ($1, $2, $3, $4, NOW(), $5, true)`,
+        [
+          documentId,
+          input.bring_up_date,
+          userId,
+          userName,
+          input.notes || null
+        ]
+      );
+
+      // Update document status if needed
+      if (doc.status === 'completed' || doc.status === 'filed') {
+        await client.query(
+          `UPDATE documents SET status = 'pending_review' WHERE id = $1`,
+          [documentId]
+        );
+      }
+
+      await this.logFlow(
+        client,
+        documentId,
+        'bring_up_set',
+        userId,
+        input.assign_to || doc.assigned_to,
+        `Bring up date set to ${input.bring_up_date}${input.notes ? ` - ${input.notes}` : ''}`
+      );
+
+      await client.query('COMMIT');
+
+      // Notify assigned user if specified
+      if (input.assign_to) {
+        await this.createNotification(
+          input.assign_to,
+          `Bring Up Date Set: ${doc.title}`,
+          `A bring up date has been set for "${doc.title}" on ${new Date(input.bring_up_date).toLocaleDateString()}.${input.notes ? `\n\nNotes: ${input.notes}` : ''}`,
+          'bring_up',
+          documentId
+        );
+      }
+
+      console.log(`[BringUp] Bring up date set successfully for document ${documentId}`);
+      return (await this.findById(documentId))!;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      console.error('[BringUp] Error setting bring up date:', err);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  static async updateBringUp(
+    documentId: string,
+    input: UpdateBringUpInput,
+    userId: string
+  ): Promise<Document> {
+    console.log(`[BringUp] Updating bring up date for document ${documentId}`);
+
+    const doc = await this.findById(documentId);
+    if (!doc) {
+      throw new AppError(404, 'Document not found');
+    }
+
+    if (!doc.bring_up_date) {
+      throw new AppError(400, 'No bring up date set for this document');
+    }
+
+    // Get user name
+    const { rows: userRows } = await pool.query(
+      `SELECT full_name FROM users WHERE id = $1 AND is_active = true`,
+      [userId]
+    );
+    const userName = userRows[0]?.full_name || userId;
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Deactivate current history entry
+      await client.query(
+        `UPDATE bring_up_history SET is_active = false WHERE document_id = $1 AND is_active = true`,
+        [documentId]
+      );
+
+      // Update document with new bring up date
+      await client.query(
+        `UPDATE documents
+         SET bring_up_date = $1,
+             bring_up_set_by = $2,
+             bring_up_set_by_name = $3,
+             bring_up_set_at = NOW(),
+             bring_up_completed_at = NULL,
+             bring_up_completed_by = NULL,
+             bring_up_completed_by_name = NULL,
+             bring_up_notes = $4,
+             updated_at = NOW()
+         WHERE id = $5`,
+        [
+          input.bring_up_date,
+          userId,
+          userName,
+          input.notes || doc.bring_up_notes,
+          documentId
+        ]
+      );
+
+      // Create new history entry
+      await client.query(
+        `INSERT INTO bring_up_history
+           (document_id, bring_up_date, set_by, set_by_name, set_at, notes, is_active)
+         VALUES ($1, $2, $3, $4, NOW(), $5, true)`,
+        [
+          documentId,
+          input.bring_up_date,
+          userId,
+          userName,
+          input.notes || doc.bring_up_notes
+        ]
+      );
+
+      await this.logFlow(
+        client,
+        documentId,
+        'bring_up_updated',
+        userId,
+        doc.assigned_to,
+        `Bring up date updated to ${input.bring_up_date}${input.notes ? ` - ${input.notes}` : ''}`
+      );
+
+      await client.query('COMMIT');
+
+      // Notify assigned user
+      if (doc.assigned_to) {
+        await this.createNotification(
+          doc.assigned_to,
+          `Bring Up Date Updated: ${doc.title}`,
+          `The bring up date for "${doc.title}" has been changed to ${new Date(input.bring_up_date).toLocaleDateString()}.${input.notes ? `\n\nNotes: ${input.notes}` : ''}`,
+          'bring_up',
+          documentId
+        );
+      }
+
+      console.log(`[BringUp] Bring up date updated successfully for document ${documentId}`);
+      return (await this.findById(documentId))!;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      console.error('[BringUp] Error updating bring up date:', err);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  static async completeBringUp(
+    documentId: string,
+    userId: string,
+    notes?: string
+  ): Promise<Document> {
+    console.log(`[BringUp] Completing bring up for document ${documentId}`);
+
+    const doc = await this.findById(documentId);
+    if (!doc) {
+      throw new AppError(404, 'Document not found');
+    }
+
+    if (!doc.bring_up_date) {
+      throw new AppError(400, 'No bring up date set for this document');
+    }
+
+    if (doc.bring_up_completed_at) {
+      throw new AppError(409, 'Bring up already completed');
+    }
+
+    // Get user name
+    const { rows: userRows } = await pool.query(
+      `SELECT full_name FROM users WHERE id = $1 AND is_active = true`,
+      [userId]
+    );
+    const userName = userRows[0]?.full_name || userId;
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Update document
+      await client.query(
+        `UPDATE documents
+         SET bring_up_completed_at = NOW(),
+             bring_up_completed_by = $1,
+             bring_up_completed_by_name = $2,
+             bring_up_notes = COALESCE($3, bring_up_notes),
+             updated_at = NOW()
+         WHERE id = $4`,
+        [userId, userName, notes, documentId]
+      );
+
+      // Update history entry
+      await client.query(
+        `UPDATE bring_up_history
+         SET completed_at = NOW(),
+             completed_by = $1,
+             completed_by_name = $2,
+             completion_notes = $3,
+             is_active = false
+         WHERE document_id = $4 AND is_active = true`,
+        [userId, userName, notes, documentId]
+      );
+
+      await this.logFlow(
+        client,
+        documentId,
+        'bring_up_completed',
+        userId,
+        doc.created_by,
+        `Bring up completed${notes ? ` - ${notes}` : ''}`
+      );
+
+      await client.query('COMMIT');
+
+      // Notify creator
+      if (doc.created_by) {
+        await this.createNotification(
+          doc.created_by,
+          `Bring Up Completed: ${doc.title}`,
+          `The bring up for "${doc.title}" has been completed by ${userName}.${notes ? `\n\nNotes: ${notes}` : ''}`,
+          'bring_up',
+          documentId
+        );
+      }
+
+      console.log(`[BringUp] Bring up completed successfully for document ${documentId}`);
+      return (await this.findById(documentId))!;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      console.error('[BringUp] Error completing bring up:', err);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  private static async completePreviousBringUp(documentId: string, userId: string): Promise<void> {
+    console.log(`[BringUp] Auto-completing previous bring up for document ${documentId}`);
+
+    // Get user name
+    const { rows: userRows } = await pool.query(
+      `SELECT full_name FROM users WHERE id = $1 AND is_active = true`,
+      [userId]
+    );
+    const userName = userRows[0]?.full_name || userId;
+
+    await pool.query(
+      `UPDATE documents
+       SET bring_up_completed_at = NOW(),
+           bring_up_completed_by = $1,
+           bring_up_completed_by_name = $2,
+           bring_up_notes = CONCAT(COALESCE(bring_up_notes, ''), ' [Auto-completed due to new bring up date set]'),
+           updated_at = NOW()
+       WHERE id = $3
+         AND bring_up_completed_at IS NULL`,
+      [userId, userName, documentId]
+    );
+
+    await pool.query(
+      `UPDATE bring_up_history
+       SET completed_at = NOW(),
+           completed_by = $1,
+           completed_by_name = $2,
+           completion_notes = 'Auto-completed - new bring up date set',
+           is_active = false
+       WHERE document_id = $3 AND is_active = true`,
+      [userId, userName, documentId]
+    );
+  }
+
+  static async getBringUps(
+  filters: BringUpFilters,
+  userId?: string
+): Promise<DocumentPaginationResponse> {
+  const {
+    status,
+    date_from,
+    date_to,
+    due_today,
+    due_this_week,
+    assigned_to,
+    page = 1,
+    limit = 20,
+    sort_by = 'bring_up_date',
+    sort_order = 'ASC',
+  } = filters;
+
+  const sortCol = sort_by === 'bring_up_date' ? 'd.bring_up_date' : `d.${sort_by}`;
+  const sortDir = sort_order === 'ASC' ? 'ASC' : 'DESC';
+  const offset = (page - 1) * limit;
+
+  const conditions: string[] = ['d.is_active = true', 'd.bring_up_date IS NOT NULL'];
+  const values: unknown[] = [];
+  let p = 1;
+
+  const now = new Date().toISOString();
+
+  // Only apply status filter if a specific status is provided (not 'all' or undefined)
+  if (status && status !== 'all') {
+    if (status === 'pending') {
+      conditions.push(`d.bring_up_completed_at IS NULL AND d.bring_up_date >= $${p}`);
+      values.push(now);
+      p++;
+    } else if (status === 'overdue') {
+      conditions.push(`d.bring_up_completed_at IS NULL AND d.bring_up_date < $${p}`);
+      values.push(now);
+      p++;
+    } else if (status === 'completed') {
+      conditions.push(`d.bring_up_completed_at IS NOT NULL`);
+    }
+  }
+
+  if (date_from) {
+    conditions.push(`d.bring_up_date >= $${p}`);
+    values.push(date_from);
+    p++;
+  }
+
+  if (date_to) {
+    conditions.push(`d.bring_up_date <= $${p}`);
+    values.push(date_to);
+    p++;
+  }
+
+  if (due_today) {
+    const today = new Date().toISOString().split('T')[0];
+    conditions.push(`DATE(d.bring_up_date) = $${p}`);
+    values.push(today);
+    p++;
+  }
+
+  if (due_this_week) {
+    const nowDate = new Date();
+    const startOfWeek = new Date(nowDate);
+    startOfWeek.setDate(nowDate.getDate() - nowDate.getDay());
+    const endOfWeek = new Date(nowDate);
+    endOfWeek.setDate(nowDate.getDate() + (6 - nowDate.getDay()));
+    conditions.push(`DATE(d.bring_up_date) BETWEEN $${p} AND $${p + 1}`);
+    values.push(startOfWeek.toISOString().split('T')[0], endOfWeek.toISOString().split('T')[0]);
+    p += 2;
+  }
+
+  if (assigned_to) {
+    conditions.push(`d.assigned_to = $${p}`);
+    values.push(assigned_to);
+    p++;
+  }
+
+  if (userId) {
+    conditions.push(`(d.assigned_to = $${p} OR d.created_by = $${p + 1})`);
+    values.push(userId, userId);
+    p += 2;
+  }
+
+  const where = `WHERE ${conditions.join(' AND ')}`;
+
+  const [countResult, dataResult] = await Promise.all([
+    pool.query(
+      `SELECT COUNT(*) AS total ${DOC_JOIN} ${where}`,
+      values
+    ),
+    pool.query(
+      `SELECT ${DOC_SELECT} ${DOC_JOIN}
+       ${where}
+       ORDER BY ${sortCol} ${sortDir}
+       LIMIT $${p} OFFSET $${p + 1}`,
+      [...values, limit, offset]
+    ),
+  ]);
+
+  // ─── Fetch bring up history for all documents ────────────────────────────
+  const documentIds = dataResult.rows.map(row => row.id);
+  let bringUpHistoryMap: Record<string, BringUpHistoryEntry[]> = {};
+
+  if (documentIds.length > 0) {
+    const { rows: historyRows } = await pool.query(
+      `SELECT ${BRING_UP_HISTORY_SELECT} ${BRING_UP_HISTORY_JOIN}
+       WHERE bh.document_id = ANY($1)
+       ORDER BY bh.set_at DESC`,
+      [documentIds]
+    );
+    
+    bringUpHistoryMap = historyRows.reduce((acc, row) => {
+      const docId = row.document_id;
+      if (!acc[docId]) acc[docId] = [];
+      acc[docId].push(row);
+      return acc;
+    }, {} as Record<string, BringUpHistoryEntry[]>);
+  }
+
+  const documents = dataResult.rows.map(row => {
+    const doc = mapRowToDocument(row);
+    doc.bring_up_history = bringUpHistoryMap[doc.id] || null;
+    return doc;
+  });
+
+  const total = parseInt(countResult.rows[0]?.total ?? '0', 10);
+  return {
+    data: documents,
+    total,
+    page,
+    limit,
+    totalPages: Math.ceil(total / limit),
+  };
+}
+
+  static async getBringUpSummary(userId?: string): Promise<BringUpSummary> {
+    const now = new Date().toISOString();
+    const today = new Date().toISOString().split('T')[0];
+    const nowDate = new Date();
+    const startOfWeek = new Date(nowDate);
+    startOfWeek.setDate(nowDate.getDate() - nowDate.getDay());
+    const endOfWeek = new Date(nowDate);
+    endOfWeek.setDate(nowDate.getDate() + (6 - nowDate.getDay()));
+    const startOfWeekStr = startOfWeek.toISOString().split('T')[0];
+    const endOfWeekStr = endOfWeek.toISOString().split('T')[0];
+
+    const conditions: string[] = ['d.is_active = true', 'd.bring_up_date IS NOT NULL'];
+    const values: unknown[] = [];
+    let p = 1;
+
+    if (userId) {
+      conditions.push(`(d.assigned_to = $${p} OR d.created_by = $${p + 1})`);
+      values.push(userId, userId);
+      p += 2;
+    }
+
+    const where = `WHERE ${conditions.join(' AND ')}`;
+
+    const { rows } = await pool.query(
+      `SELECT 
+         COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NULL AND d.bring_up_date >= $1) AS total_pending,
+         COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NULL AND d.bring_up_date < $1) AS total_overdue,
+         COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NOT NULL) AS total_completed,
+         COUNT(*) FILTER (WHERE DATE(d.bring_up_date) = $2) AS due_today,
+         COUNT(*) FILTER (WHERE DATE(d.bring_up_date) BETWEEN $3 AND $4) AS due_this_week,
+         COUNT(*) FILTER (WHERE d.assigned_to IS NOT NULL AND d.bring_up_completed_at IS NULL AND d.bring_up_date >= $1) AS my_pending,
+         COUNT(*) FILTER (WHERE d.assigned_to IS NOT NULL AND d.bring_up_completed_at IS NULL AND d.bring_up_date < $1) AS my_overdue
+       FROM documents d
+       ${where}`,
+      [now, today, startOfWeekStr, endOfWeekStr, ...values]
+    );
+
+    // Get department breakdown
+    const { rows: deptRows } = await pool.query(
+      `SELECT 
+         d.department_id,
+         dep.name AS department_name,
+         COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NULL AND d.bring_up_date >= $1) AS pending,
+         COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NULL AND d.bring_up_date < $1) AS overdue
+       FROM documents d
+       LEFT JOIN departments dep ON dep.id = d.department_id
+       WHERE d.is_active = true AND d.bring_up_date IS NOT NULL
+       GROUP BY d.department_id, dep.name
+       ORDER BY pending DESC`,
+      [now]
+    );
+
+    const row = rows[0] || {};
+    return {
+      total_pending: parseInt(row.total_pending || '0', 10),
+      total_overdue: parseInt(row.total_overdue || '0', 10),
+      total_completed: parseInt(row.total_completed || '0', 10),
+      due_today: parseInt(row.due_today || '0', 10),
+      due_this_week: parseInt(row.due_this_week || '0', 10),
+      by_department: deptRows.map(r => ({
+        department_id: r.department_id || 'unassigned',
+        department_name: r.department_name || 'Unassigned',
+        pending: parseInt(r.pending || '0', 10),
+        overdue: parseInt(r.overdue || '0', 10),
+      })),
+      my_pending: parseInt(row.my_pending || '0', 10),
+      my_overdue: parseInt(row.my_overdue || '0', 10),
+    };
+  }
+
+  static async getBringUpHistory(documentId: string): Promise<BringUpHistoryEntry[]> {
+    const { rows } = await pool.query(
+      `SELECT ${BRING_UP_HISTORY_SELECT} ${BRING_UP_HISTORY_JOIN}
+       WHERE bh.document_id = $1
+       ORDER BY bh.set_at DESC`,
+      [documentId]
+    );
+    return rows;
+  }
+
+  static async sendBringUpReminders(io?: any): Promise<{ dueToday: number; overdue: number }> {
+    console.log('[BringUp] Sending bring up reminders');
+
+    const now = new Date().toISOString();
+    const today = new Date().toISOString().split('T')[0];
+
+    const dueTodayResult = await pool.query(
+      `SELECT 
+         d.id AS document_id,
+         d.title AS document_title,
+         d.bring_up_date,
+         d.bring_up_notes,
+         d.assigned_to,
+         d.assigned_to_name,
+         d.created_by,
+         d.created_by_name
+       FROM documents d
+       WHERE d.is_active = true
+         AND d.bring_up_date IS NOT NULL
+         AND d.bring_up_completed_at IS NULL
+         AND DATE(d.bring_up_date) = $1`,
+      [today]
+    );
+
+    const overdueResult = await pool.query(
+      `SELECT 
+         d.id AS document_id,
+         d.title AS document_title,
+         d.bring_up_date,
+         d.bring_up_notes,
+         d.assigned_to,
+         d.assigned_to_name,
+         d.created_by,
+         d.created_by_name
+       FROM documents d
+       WHERE d.is_active = true
+         AND d.bring_up_date IS NOT NULL
+         AND d.bring_up_completed_at IS NULL
+         AND d.bring_up_date < $1`,
+      [now]
+    );
+
+    let dueTodayCount = 0;
+    for (const doc of dueTodayResult.rows) {
+      const recipientId = doc.assigned_to || doc.created_by;
+      if (!recipientId) continue;
+
+      try {
+        await NotificationsService.createNotification(
+          {
+            user_id: recipientId,
+            type_name: 'bring_up_reminder',
+            title: `🔔 Bring Up Due Today: ${doc.document_title}`,
+            message: `Document "${doc.document_title}" is due for bring up today (${new Date(doc.bring_up_date).toLocaleDateString()}).${doc.bring_up_notes ? `\n\nNotes: ${doc.bring_up_notes}` : ''}`,
+            icon: 'Clock',
+            color: '#dc2626',
+            link: `/documents/${doc.document_id}`,
+            priority: 'urgent',
+            metadata: {
+              document_id: doc.document_id,
+              type: 'bring_up_due_today',
+            },
+            send_email: true,
+          },
+          io
+        );
+        dueTodayCount++;
+      } catch (error) {
+        console.error(`[BringUp] Failed to send due today reminder for document ${doc.document_id}:`, error);
+      }
+    }
+
+    let overdueCount = 0;
+    for (const doc of overdueResult.rows) {
+      const recipientId = doc.assigned_to || doc.created_by;
+      if (!recipientId) continue;
+
+      try {
+        await NotificationsService.createNotification(
+          {
+            user_id: recipientId,
+            type_name: 'bring_up_reminder',
+            title: `⚠️ Bring Up Overdue: ${doc.document_title}`,
+            message: `Document "${doc.document_title}" was due for bring up on ${new Date(doc.bring_up_date).toLocaleDateString()} and is now overdue.${doc.bring_up_notes ? `\n\nNotes: ${doc.bring_up_notes}` : ''}`,
+            icon: 'AlertTriangle',
+            color: '#b91c1c',
+            link: `/documents/${doc.document_id}`,
+            priority: 'urgent',
+            metadata: {
+              document_id: doc.document_id,
+              type: 'bring_up_overdue',
+              due_date: doc.bring_up_date,
+            },
+            send_email: true,
+          },
+          io
+        );
+        overdueCount++;
+      } catch (error) {
+        console.error(`[BringUp] Failed to send overdue reminder for document ${doc.document_id}:`, error);
+      }
+    }
+
+    console.log(`[BringUp] Sent ${dueTodayCount} due today reminders and ${overdueCount} overdue reminders`);
+    return { dueToday: dueTodayCount, overdue: overdueCount };
   }
 
   // ════════════════════════════════════════════════════════════════════════════
@@ -1995,100 +2795,6 @@ static async findAll(
       limit,
       totalPages: Math.ceil(total / limit),
     };
-  }
-
-  // ── Bring-Up Date Reminders ──────────────────────────────────────────────
-
-  static async sendBringUpDateReminders(io?: any): Promise<{ dueToday: number; dueTomorrow: number }> {
-    const [dueTodayResult, dueTomorrowResult] = await Promise.all([
-      pool.query(
-        `SELECT
-           m.id AS mark_id, m.document_id, m.assigned_to, m.marked_by,
-           m.bring_up_date, m.instructions,
-           d.title AS document_title, d.reference_no
-         FROM document_marks m
-         JOIN documents d ON d.id = m.document_id
-         WHERE m.is_active = true
-           AND m.completed_at IS NULL
-           AND m.bring_up_due_reminder_sent_at IS NULL
-           AND m.bring_up_date = CURRENT_DATE`
-      ),
-      pool.query(
-        `SELECT
-           m.id AS mark_id, m.document_id, m.assigned_to, m.marked_by,
-           m.bring_up_date, m.instructions,
-           d.title AS document_title, d.reference_no
-         FROM document_marks m
-         JOIN documents d ON d.id = m.document_id
-         WHERE m.is_active = true
-           AND m.completed_at IS NULL
-           AND m.bring_up_reminder_sent_at IS NULL
-           AND m.bring_up_date = (CURRENT_DATE + INTERVAL '1 day')::date`
-      ),
-    ]);
-
-    const dueToday = await this.dispatchBringUpNotifications(
-      dueTodayResult.rows, 'due_today', 'bring_up_due_reminder_sent_at', io
-    );
-    const dueTomorrow = await this.dispatchBringUpNotifications(
-      dueTomorrowResult.rows, 'due_tomorrow', 'bring_up_reminder_sent_at', io
-    );
-
-    return { dueToday, dueTomorrow };
-  }
-
-  // ── Bring-Up Notification Dispatch (helper) ───────────────────────────────
-
-  private static async dispatchBringUpNotifications(
-    rows: any[],
-    kind: 'due_today' | 'due_tomorrow',
-    sentColumn: 'bring_up_reminder_sent_at' | 'bring_up_due_reminder_sent_at',
-    io?: any
-  ): Promise<number> {
-    if (!rows.length) return 0;
-
-    for (const row of rows) {
-      const recipientId = row.assigned_to ?? row.marked_by;
-      if (!recipientId) continue;
-
-      const dueDate = new Date(row.bring_up_date).toLocaleDateString('en-KE', {
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric',
-      });
-
-      const titlePrefix = kind === 'due_today' ? 'Bring-up due today' : 'Bring-up reminder';
-      const messageSuffix = kind === 'due_today'
-        ? `is due for bring-up today (${dueDate}).`
-        : `is due for bring-up tomorrow (${dueDate}).`;
-
-      try {
-        await NotificationsService.createNotification(
-          {
-            user_id: recipientId,
-            type_name: 'bring_up_reminder',
-            title: `${titlePrefix}: ${row.document_title}`,
-            message: `"${row.document_title}"${row.reference_no ? ` (${row.reference_no})` : ''} ${messageSuffix}${row.instructions ? `\n\nInstructions: ${row.instructions}` : ''}`,
-            icon: 'Clock',
-            color: kind === 'due_today' ? '#b91c1c' : '#c9a84c',
-            link: `/documents/${row.document_id}`,
-            priority: 'high',
-            metadata: { document_id: row.document_id, mark_id: row.mark_id, type: 'bring_up_reminder', kind },
-            send_email: true,
-          },
-          io
-        );
-
-        await pool.query(
-          `UPDATE document_marks SET ${sentColumn} = NOW() WHERE id = $1`,
-          [row.mark_id]
-        );
-      } catch (error) {
-        console.error(`[BringUpReminder:${kind}] Failed to notify user ${recipientId} for mark ${row.mark_id}:`, error);
-      }
-    }
-
-    return rows.length;
   }
 
   // ════════════════════════════════════════════════════════════════════════════

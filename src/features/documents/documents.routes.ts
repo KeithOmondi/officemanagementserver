@@ -75,6 +75,32 @@ router.get(
   documentController.getFollowUpSummary
 );
 
+// ── Bring Up routes (ALL static paths first) ────────────────────────────────
+
+/**
+ * @route   GET /api/documents/bring-ups
+ * @desc    Get all documents with bring up dates with filters
+ * @access  Super Admin only
+ * @query   status, date_from, date_to, due_today, due_this_week, assigned_to, etc.
+ */
+router.get(
+  '/bring-ups',
+  requireRole('super_admin'),
+  documentController.getBringUps
+);
+
+/**
+ * @route   GET /api/documents/bring-ups/summary
+ * @desc    Get bring up summary for dashboard
+ * @access  Super Admin only
+ * @returns { total_pending, total_overdue, total_completed, due_today, due_this_week, by_department, my_pending, my_overdue }
+ */
+router.get(
+  '/bring-ups/summary',
+  requireRole('super_admin'),
+  documentController.getBringUpSummary
+);
+
 // ── Other static routes ──────────────────────────────────────────────────────
 
 /**
@@ -215,6 +241,55 @@ router.get(
   '/follow-ups/:followUpId/comments',
   requireRole('super_admin', 'dept_head'),
   documentController.getFollowUpComments
+);
+
+// ── Bring Up routes with parameters ─────────────────────────────────────────
+
+/**
+ * @route   POST /api/documents/:id/bring-up
+ * @desc    Set a bring up date on a document (Super Admin only)
+ * @access  Super Admin only
+ * @body    { bring_up_date, notes?, assign_to? }
+ */
+router.post(
+  '/:id/bring-up',
+  requireRole('super_admin'),
+  documentController.setBringUp
+);
+
+/**
+ * @route   PUT /api/documents/:id/bring-up
+ * @desc    Update a bring up date on a document (Super Admin only)
+ * @access  Super Admin only
+ * @body    { bring_up_date, notes? }
+ */
+router.put(
+  '/:id/bring-up',
+  requireRole('super_admin'),
+  documentController.updateBringUp
+);
+
+/**
+ * @route   PATCH /api/documents/:id/bring-up/complete
+ * @desc    Mark a bring up as completed
+ * @access  Super Admin or assigned user
+ * @body    { notes? }
+ */
+router.patch(
+  '/:id/bring-up/complete',
+  requireRole('super_admin'),
+  documentController.completeBringUp
+);
+
+/**
+ * @route   GET /api/documents/:id/bring-up-history
+ * @desc    Get bring up history for a document
+ * @access  Super Admin only
+ */
+router.get(
+  '/:id/bring-up-history',
+  requireRole('super_admin'),
+  documentController.getBringUpHistory
 );
 
 // ── Other parameter routes (specific patterns) ─────────────────────────────
@@ -409,13 +484,13 @@ router.post('/:id/return', requireRole('super_admin'), documentController.return
  */
 router.post('/:id/respond', upload.single('file'), documentController.respond);
 
-// ── Update Mark ──────────────────────────────────────────────────────────────
+// ── Update Mark (instructions only - bring_up_date removed) ─────────────────
 
 /**
  * @route   PATCH /api/documents/marks/:markId
- * @desc    Update a document mark (instructions & bring_up_date)
+ * @desc    Update a document mark instructions only
  * @access  Super Admin only
- * @body    { instructions?, bring_up_date? }
+ * @body    { instructions? }
  */
 router.patch(
   '/marks/:markId',

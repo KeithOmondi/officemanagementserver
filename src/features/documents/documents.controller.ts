@@ -32,6 +32,11 @@ import {
   addFollowUpCommentSchema,
   followUpFiltersSchema,
   followUpIdSchema,
+  // ── Bring Up schemas ─────────────────────────────────────────────────
+  setBringUpSchema,
+  updateBringUpSchema,
+  completeBringUpSchema,
+  bringUpFiltersSchema,
 } from './documents.validator';
 import { getRealtimeService } from '../../middleware/realtime.middleware';
 
@@ -644,6 +649,156 @@ export const documentController = {
     safeDocumentUpdated(req, doc);
     
     return sendSuccess(res, doc, 'Document PDF regenerated successfully');
+  }),
+
+  // ════════════════════════════════════════════════════════════════════════════
+  //  BRING UP CONTROLLER METHODS
+  // ════════════════════════════════════════════════════════════════════════════
+
+  // ── Set Bring Up Date (Super Admin only) ────────────────────────────────────
+
+  setBringUp: asyncHandler(async (req: Request, res: Response) => {
+    if (req.user!.role !== 'super_admin') {
+      throw new AppError(403, 'Only Super Administrators can set bring up dates');
+    }
+
+    const paramsResult = documentIdSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) {
+      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid document ID');
+    }
+
+    const bodyResult = setBringUpSchema.safeParse({ body: req.body });
+    if (!bodyResult.success) {
+      throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid bring up data');
+    }
+
+    const doc = await DocumentService.setBringUp(
+      paramsResult.data.params.id,
+      bodyResult.data.body,
+      req.user!.id
+    );
+
+    safeDocumentUpdated(req, doc);
+
+    // Notify assigned user if specified
+    if (bodyResult.data.body.assign_to) {
+      safeEmitToUser(req, bodyResult.data.body.assign_to, 'bring_up_assigned', {
+        document_id: doc.id,
+        title: doc.title,
+        bring_up_date: doc.bring_up_date,
+        message: `Document "${doc.title}" has a bring up date set for ${new Date(doc.bring_up_date!).toLocaleDateString()}`
+      });
+    }
+
+    return sendSuccess(res, doc, 'Bring up date set successfully');
+  }),
+
+  // ── Update Bring Up Date (Super Admin only) ─────────────────────────────────
+
+  updateBringUp: asyncHandler(async (req: Request, res: Response) => {
+    if (req.user!.role !== 'super_admin') {
+      throw new AppError(403, 'Only Super Administrators can update bring up dates');
+    }
+
+    const paramsResult = documentIdSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) {
+      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid document ID');
+    }
+
+    const bodyResult = updateBringUpSchema.safeParse({ body: req.body });
+    if (!bodyResult.success) {
+      throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid bring up data');
+    }
+
+    const doc = await DocumentService.updateBringUp(
+      paramsResult.data.params.id,
+      bodyResult.data.body,
+      req.user!.id
+    );
+
+    safeDocumentUpdated(req, doc);
+
+    // Notify assigned user
+    if (doc.assigned_to) {
+      safeEmitToUser(req, doc.assigned_to, 'bring_up_updated', {
+        document_id: doc.id,
+        title: doc.title,
+        bring_up_date: doc.bring_up_date,
+        message: `Bring up date for "${doc.title}" has been changed to ${new Date(doc.bring_up_date!).toLocaleDateString()}`
+      });
+    }
+
+    return sendSuccess(res, doc, 'Bring up date updated successfully');
+  }),
+
+  // ── Complete Bring Up ────────────────────────────────────────────────────────
+
+  completeBringUp: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = documentIdSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) {
+      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid document ID');
+    }
+
+    const bodyResult = completeBringUpSchema.safeParse({ body: req.body });
+    if (!bodyResult.success) {
+      throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid completion data');
+    }
+
+    const doc = await DocumentService.completeBringUp(
+      paramsResult.data.params.id,
+      req.user!.id,
+      bodyResult.data.body.notes
+    );
+
+    safeDocumentUpdated(req, doc);
+
+    // Notify creator
+    if (doc.created_by) {
+      safeEmitToUser(req, doc.created_by, 'bring_up_completed', {
+        document_id: doc.id,
+        title: doc.title,
+        completed_by: req.user!.full_name,
+        completed_at: new Date().toISOString(),
+        message: `Document "${doc.title}" has been brought up and completed by ${req.user!.full_name}`
+      });
+    }
+
+    return sendSuccess(res, doc, 'Bring up completed successfully');
+  }),
+
+  // ── Get Bring Ups ────────────────────────────────────────────────────────────
+
+  getBringUps: asyncHandler(async (req: Request, res: Response) => {
+    const parsed = bringUpFiltersSchema.safeParse({ query: req.query });
+    if (!parsed.success) {
+      throw new AppError(400, parsed.error.issues[0]?.message ?? 'Invalid filters');
+    }
+
+    const result = await DocumentService.getBringUps(
+      parsed.data.query,
+      req.user!.id
+    );
+
+    return sendSuccess(res, result, 'Bring ups retrieved successfully');
+  }),
+
+  // ── Get Bring Up Summary ─────────────────────────────────────────────────────
+
+  getBringUpSummary: asyncHandler(async (req: Request, res: Response) => {
+    const summary = await DocumentService.getBringUpSummary(req.user!.id);
+    return sendSuccess(res, summary, 'Bring up summary retrieved successfully');
+  }),
+
+  // ── Get Bring Up History ─────────────────────────────────────────────────────
+
+  getBringUpHistory: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = documentIdSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) {
+      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid document ID');
+    }
+
+    const history = await DocumentService.getBringUpHistory(paramsResult.data.params.id);
+    return sendSuccess(res, history, 'Bring up history retrieved successfully');
   }),
 
   // ════════════════════════════════════════════════════════════════════════════

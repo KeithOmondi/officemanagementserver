@@ -71,6 +71,15 @@ export const followUpPriorityEnum = z.enum([
   'urgent',
 ]);
 
+// ── Bring Up Enums ──────────────────────────────────────────────────────────
+
+export const bringUpStatusEnum = z.enum([
+  'pending',
+  'completed',
+  'overdue',
+  'all',
+]);
+
 // ── Create composed document ────────────────────────────────────────────────
 
 export const createComposedDocumentSchema = z.object({
@@ -235,10 +244,23 @@ export const documentFiltersSchema = z.object({
       .enum(['true', 'false'])
       .transform((v) => v === 'true')
       .optional(),
+    // ─── Bring Up Filters ─────────────────────────────────────────────────────
     has_bring_up_date: z
       .enum(['true', 'false'])
       .transform((v) => v === 'true')
       .optional(),
+    bring_up_status: bringUpStatusEnum.optional(),
+    bring_up_date_from: z.string().optional(),
+    bring_up_date_to: z.string().optional(),
+    bring_up_due_today: z
+      .enum(['true', 'false'])
+      .transform((v) => v === 'true')
+      .optional(),
+    bring_up_due_this_week: z
+      .enum(['true', 'false'])
+      .transform((v) => v === 'true')
+      .optional(),
+    assigned_for_bring_up: z.string().uuid().optional(),
     page: z
       .string()
       .regex(/^\d+$/)
@@ -251,7 +273,7 @@ export const documentFiltersSchema = z.object({
       .transform(Number)
       .pipe(z.number().int().min(1).max(100))
       .optional(),
-    sort_by: z.enum(['created_at', 'updated_at', 'title', 'status']).optional(),
+    sort_by: z.enum(['created_at', 'updated_at', 'title', 'status', 'bring_up_date']).optional(),
     sort_order: z.enum(['ASC', 'DESC']).optional(),
   }),
 });
@@ -373,7 +395,7 @@ export const composeLetterSchema = z.object({
 });
 
 // ════════════════════════════════════════════════════════════════════════
-//  Update Mark (instructions & bring_up_date)
+//  Update Mark (UPDATED - Removed bring_up_date)
 // ════════════════════════════════════════════════════════════════════════
 
 export const updateMarkSchema = z.object({
@@ -383,12 +405,137 @@ export const updateMarkSchema = z.object({
   body: z
     .object({
       instructions: z.string().max(2000).trim().optional(),
-      bring_up_date: z.string().nullable().optional(),
+      // REMOVED: bring_up_date: z.string().nullable().optional(),
     })
     .strict()
-    .refine((b) => b.instructions !== undefined || b.bring_up_date !== undefined, {
-      message: 'At least one field (instructions or bring_up_date) must be provided',
+    .refine((b) => b.instructions !== undefined, {
+      message: 'At least instructions must be provided',
     }),
+});
+
+// ════════════════════════════════════════════════════════════════════════
+//  BRING UP SCHEMAS (NEW)
+// ════════════════════════════════════════════════════════════════════════
+
+// ─── Date transformer helper ────────────────────────────────────────────────
+
+/**
+ * Transforms a date string to ISO datetime format.
+ * Accepts:
+ * - ISO datetime strings: "2026-07-23T00:00:00.000Z"
+ * - Date-only strings: "2026-07-23"
+ * - Date objects
+ * - null
+ */
+const transformBringUpDate = (val: unknown): string | null => {
+  if (val === null || val === undefined) {
+    return null;
+  }
+  if (val instanceof Date) {
+    return val.toISOString();
+  }
+  if (typeof val === 'string') {
+    // If it's a date-only string (YYYY-MM-DD), convert to ISO datetime
+    if (/^\d{4}-\d{2}-\d{2}$/.test(val)) {
+      return new Date(val + 'T00:00:00.000Z').toISOString();
+    }
+    // If it's already an ISO datetime, return as-is
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(val)) {
+      return val;
+    }
+    // If it's a date string like "2026-07-23T00:00:00", ensure it's valid
+    const parsed = new Date(val);
+    if (!isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+  }
+  // If it's not a string or Date, let Zod handle the error
+  return val as string;
+};
+
+/**
+ * Zod schema that accepts:
+ * - Date strings (YYYY-MM-DD or ISO)
+ * - Date objects
+ * - null
+ * And transforms them to ISO datetime format or null.
+ */
+const bringUpDateSchema = z
+  .union([
+    z.string().min(1, 'Bring up date is required'),
+    z.date(),
+    z.null(),
+  ])
+  .transform(transformBringUpDate);
+
+// ─── Set Bring Up Schema ─────────────────────────────────────────────────────
+
+export const setBringUpSchema = z.object({
+  body: z
+    .object({
+      bring_up_date: bringUpDateSchema.refine((val) => val !== null, {
+        message: 'Bring up date is required',
+      }),
+      notes: z.string().max(1000).trim().optional(),
+      assign_to: z.string().uuid('Must be a valid user ID').optional(),
+    })
+    .strict(),
+});
+
+// ─── Update Bring Up Schema ─────────────────────────────────────────────────
+
+export const updateBringUpSchema = z.object({
+  body: z
+    .object({
+      bring_up_date: bringUpDateSchema.refine((val) => val !== null, {
+        message: 'Bring up date is required',
+      }),
+      notes: z.string().max(1000).trim().optional(),
+    })
+    .strict(),
+});
+
+// ─── Complete Bring Up Schema ───────────────────────────────────────────────
+
+export const completeBringUpSchema = z.object({
+  body: z
+    .object({
+      notes: z.string().max(1000).trim().optional(),
+    })
+    .strict(),
+});
+
+// ─── Bring Up Filters Schema ────────────────────────────────────────────────
+
+export const bringUpFiltersSchema = z.object({
+  query: z.object({
+    status: bringUpStatusEnum.optional(),
+    date_from: z.string().optional(),
+    date_to: z.string().optional(),
+    due_today: z
+      .enum(['true', 'false'])
+      .transform((v) => v === 'true')
+      .optional(),
+    due_this_week: z
+      .enum(['true', 'false'])
+      .transform((v) => v === 'true')
+      .optional(),
+    assigned_to: z.string().uuid().optional(),
+    page: z
+      .string()
+      .regex(/^\d+$/)
+      .transform(Number)
+      .pipe(z.number().int().min(1))
+      .optional(),
+    limit: z
+      .string()
+      .regex(/^\d+$/)
+      .transform(Number)
+      .pipe(z.number().int().min(1).max(100))
+      .optional(),
+    sort_by: z.enum(['bring_up_date', 'created_at', 'title']).default('bring_up_date'),
+    sort_order: z.enum(['ASC', 'DESC']).default('ASC'),
+  }),
 });
 
 // ════════════════════════════════════════════════════════════════════════
@@ -697,6 +844,13 @@ export type ComposeMemoInput = z.infer<typeof composeMemoSchema>['body'];
 export type ComposeLetterInput = z.infer<typeof composeLetterSchema>['body'];
 
 export type UpdateMarkInput = z.infer<typeof updateMarkSchema>['body'];
+
+// ── Bring Up types ──────────────────────────────────────────────────────────
+
+export type SetBringUpInput = z.infer<typeof setBringUpSchema>['body'];
+export type UpdateBringUpInput = z.infer<typeof updateBringUpSchema>['body'];
+export type CompleteBringUpInput = z.infer<typeof completeBringUpSchema>['body'];
+export type BringUpFilters = z.infer<typeof bringUpFiltersSchema>['query'];
 
 // ── Folder types ──────────────────────────────────────────────────────────
 

@@ -348,96 +348,124 @@ export class DocumentService {
 
   // ── Find all ─────────────────────────────────────────────────────────────────
 
-  static async findAll(
-    filters: DocumentFilters,
-    requestingUserId: string,
-    requestingUserRole?: string
-  ): Promise<DocumentPaginationResponse> {
-    const {
-      search, type, category, status, assigned_to,
-      department_id, folder_id, for_my_action,
-      has_bring_up_date,
-      page = 1, limit = 20,
-      sort_by = 'created_at', sort_order = 'DESC',
-    } = filters;
+ // ── Find all ─────────────────────────────────────────────────────────────────
 
-    const sortCol = ALLOWED_SORT.has(sort_by ?? '') ? `d.${sort_by}` : 'd.created_at';
-    const sortDir = sort_order === 'ASC' ? 'ASC' : 'DESC';
-    const offset = (page - 1) * limit;
+static async findAll(
+  filters: DocumentFilters,
+  requestingUserId: string,
+  requestingUserRole?: string
+): Promise<DocumentPaginationResponse> {
+  const {
+    search, type, category, status, assigned_to,
+    department_id, folder_id, for_my_action,
+    has_bring_up_date,
+    page = 1, limit = 20,
+    sort_by = 'created_at', sort_order = 'DESC',
+  } = filters;
 
-    const conditions: string[] = ['d.is_active = true'];
-    const values: unknown[] = [];
-    let p = 1;
+  const sortCol = ALLOWED_SORT.has(sort_by ?? '') ? `d.${sort_by}` : 'd.created_at';
+  const sortDir = sort_order === 'ASC' ? 'ASC' : 'DESC';
+  const offset = (page - 1) * limit;
 
-    if (requestingUserRole === 'super_admin') {
-      console.log('[FindAll] Super admin - showing all documents');
-    } else {
-      conditions.push(`(d.is_draft = false OR d.created_by = $${p})`);
-      values.push(requestingUserId);
-      p++;
-    }
+  const conditions: string[] = ['d.is_active = true'];
+  const values: unknown[] = [];
+  let p = 1;
 
-    if (folder_id) {
-      conditions.push(`d.folder_id = $${p}`);
-      values.push(folder_id);
-      p++;
-    }
-
-    if (search) {
-      conditions.push(`(d.title ILIKE $${p} OR d.reference_no ILIKE $${p} OR d.original_name ILIKE $${p})`);
-      values.push(`%${search}%`); p++;
-    }
-    if (type) { conditions.push(`d.type = $${p}`); values.push(type); p++; }
-    if (category) { conditions.push(`d.category = $${p}`); values.push(category); p++; }
-    if (status) { conditions.push(`d.status = $${p}`); values.push(status); p++; }
-    if (assigned_to) { conditions.push(`d.assigned_to = $${p}`); values.push(assigned_to); p++; }
-
-    if (for_my_action && department_id) {
-      conditions.push(`(d.department_id = $${p} OR d.assigned_to = $${p + 1})`);
-      values.push(department_id, requestingUserId);
-      p += 2;
-    } else if (for_my_action) {
-      conditions.push(`d.assigned_to = $${p}`);
-      values.push(requestingUserId);
-      p++;
-    } else if (department_id) {
-      conditions.push(`d.department_id = $${p}`);
-      values.push(department_id);
-      p++;
-    }
-
-    if (has_bring_up_date) {
-      conditions.push(`m.bring_up_date IS NOT NULL`);
-    }
-
-    const where = `WHERE ${conditions.join(' AND ')}`;
-
-    const [countResult, dataResult] = await Promise.all([
-      pool.query(`SELECT COUNT(*) AS total ${DOC_JOIN} ${MARK_JOIN} ${where}`, values),
-      pool.query(
-        `SELECT 
-          ${DOC_SELECT},
-          ${MARK_SELECT}
-         ${DOC_JOIN}
-         ${MARK_JOIN}
-         ${where}
-         ORDER BY ${sortCol} ${sortDir}
-         LIMIT $${p} OFFSET $${p + 1}`,
-        [...values, limit, offset]
-      ),
-    ]);
-
-    const documents = dataResult.rows.map(mapRowToDocument);
-
-    const total = parseInt(countResult.rows[0]?.total ?? '0', 10);
-    return {
-      data: documents,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
+  if (requestingUserRole === 'super_admin') {
+    console.log('[FindAll] Super admin - showing all documents');
+  } else {
+    conditions.push(`(d.is_draft = false OR d.created_by = $${p})`);
+    values.push(requestingUserId);
+    p++;
   }
+
+  if (folder_id) {
+    conditions.push(`d.folder_id = $${p}`);
+    values.push(folder_id);
+    p++;
+  }
+
+  if (search) {
+    conditions.push(`(d.title ILIKE $${p} OR d.reference_no ILIKE $${p} OR d.original_name ILIKE $${p})`);
+    values.push(`%${search}%`); p++;
+  }
+  if (type) { conditions.push(`d.type = $${p}`); values.push(type); p++; }
+  if (category) { conditions.push(`d.category = $${p}`); values.push(category); p++; }
+  if (status) { conditions.push(`d.status = $${p}`); values.push(status); p++; }
+  if (assigned_to) { conditions.push(`d.assigned_to = $${p}`); values.push(assigned_to); p++; }
+
+  if (for_my_action && department_id) {
+    conditions.push(`(d.department_id = $${p} OR d.assigned_to = $${p + 1})`);
+    values.push(department_id, requestingUserId);
+    p += 2;
+  } else if (for_my_action) {
+    conditions.push(`d.assigned_to = $${p}`);
+    values.push(requestingUserId);
+    p++;
+  } else if (department_id) {
+    conditions.push(`d.department_id = $${p}`);
+    values.push(department_id);
+    p++;
+  }
+
+  if (has_bring_up_date) {
+    conditions.push(`m.bring_up_date IS NOT NULL`);
+  }
+
+  const where = `WHERE ${conditions.join(' AND ')}`;
+
+  const [countResult, dataResult] = await Promise.all([
+    pool.query(`SELECT COUNT(*) AS total ${DOC_JOIN} ${MARK_JOIN} ${where}`, values),
+    pool.query(
+      `SELECT 
+        ${DOC_SELECT},
+        ${MARK_SELECT}
+       ${DOC_JOIN}
+       ${MARK_JOIN}
+       ${where}
+       ORDER BY ${sortCol} ${sortDir}
+       LIMIT $${p} OFFSET $${p + 1}`,
+      [...values, limit, offset]
+    ),
+  ]);
+
+  // ─── FIX: Fetch follow-ups for all documents ──────────────────────────────
+  const documentIds = dataResult.rows.map(row => row.id);
+  let followUpsMap: Record<string, FollowUp[]> = {};
+
+  if (documentIds.length > 0) {
+    const { rows: followUpRows } = await pool.query(
+      `SELECT ${FOLLOW_UP_SELECT} ${FOLLOW_UP_JOIN}
+       WHERE fu.document_id = ANY($1) AND fu.is_active = true
+       ORDER BY fu.created_at DESC`,
+      [documentIds]
+    );
+    
+    // Group follow-ups by document_id
+    followUpsMap = followUpRows.reduce((acc, row) => {
+      const docId = row.document_id;
+      if (!acc[docId]) acc[docId] = [];
+      acc[docId].push(row);
+      return acc;
+    }, {} as Record<string, FollowUp[]>);
+  }
+
+  // ─── Map rows to documents and attach follow-ups ──────────────────────────
+  const documents = dataResult.rows.map(row => {
+    const doc = mapRowToDocument(row);
+    doc.follow_ups = followUpsMap[doc.id] || [];
+    return doc;
+  });
+
+  const total = parseInt(countResult.rows[0]?.total ?? '0', 10);
+  return {
+    data: documents,
+    total,
+    page,
+    limit,
+    totalPages: Math.ceil(total / limit),
+  };
+}
 
   // ── Find single ─────────────────────────────────────────────────────────────
 

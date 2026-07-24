@@ -91,7 +91,10 @@ app.use('/api/v1/judges', judgesRoutes);
 app.use('/api/v1/orhc-folders', registryorhcRoutes);
 app.use('/api/v1/e-stamp', stampRoutes);
 app.use('/api/v1/reports', aiReportsRoutes);
-app.use('/api/v1/aide', aidesRoutes);
+// aidesRoutes defines its own '/aide/*' and '/sentry/*' sub-paths internally,
+// so it must be mounted at the '/api/v1' root — not '/api/v1/aide' — or
+// requests to /api/v1/aide and /api/v1/sentry will 404.
+app.use('/api/v1', aidesRoutes);
 
 // ── 404 ─────────────────────────────────────────────────────────────────────
 app.use((_req: Request, res: Response, _next: NextFunction) => {

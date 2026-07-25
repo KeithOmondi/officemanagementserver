@@ -37,6 +37,7 @@ import type {
   RespondToDocumentInput,
   ComposeMemoInput,
   ComposeLetterInput,
+  ComposeCertificateInput,
   UpdateMarkInput,
   CreateFollowUpInput,
   UpdateFollowUpInput,
@@ -56,6 +57,7 @@ import { sendMail } from '../../utils/sendMail';
 import { NotificationsService } from '../notifications/notifications.service';
 import { embedSignatureIntoHTML, embedSignatureIntoPDF } from '../../utils/embedSignature';
 import { generateDocumentFromTemplate } from '../../utils/documentGenerator';
+import { CertificateData, getCertificateHTML } from '../../features/template/CertificateTemplate';
 
 // ─── SELECT fragments ──────────────────────────────────────────────────────────
 
@@ -118,7 +120,6 @@ const MARK_SELECT = `
   m.assigned_to AS mark_assigned_to,
   mu.full_name AS mark_assigned_to_name,
   m.instructions AS mark_instructions,
-  -- REMOVED: m.bring_up_date AS mark_bring_up_date,
   m.priority AS mark_priority,
   m.marked_at AS mark_marked_at,
   m.acknowledged_at AS mark_acknowledged_at,
@@ -139,7 +140,6 @@ const MARK_SELECT_DETAIL = `
   m.marked_to_dept, md.name       AS marked_to_dept_name,
   m.assigned_to,    mu.full_name  AS assigned_to_name,
   m.instructions,
-  -- REMOVED: m.bring_up_date,
   m.priority,
   m.marked_at, m.acknowledged_at, m.completed_at,
   m.is_active
@@ -269,7 +269,6 @@ function mapRowToDocument(row: any): Document {
       assigned_to: row.mark_assigned_to,
       assigned_to_name: row.mark_assigned_to_name,
       instructions: row.mark_instructions,
-      // REMOVED: bring_up_date: row.mark_bring_up_date,
       priority: row.mark_priority,
       marked_at: row.mark_marked_at,
       acknowledged_at: row.mark_acknowledged_at,
@@ -397,203 +396,201 @@ export class DocumentService {
 
   // ── Find all ─────────────────────────────────────────────────────────────────
 
-  // ── Find all ─────────────────────────────────────────────────────────────────
+  static async findAll(
+    filters: DocumentFilters,
+    requestingUserId: string,
+    requestingUserRole?: string
+  ): Promise<DocumentPaginationResponse> {
+    const {
+      search, type, category, status, assigned_to,
+      department_id, folder_id, for_my_action,
+      has_bring_up_date,
+      bring_up_status,
+      bring_up_date_from,
+      bring_up_date_to,
+      bring_up_due_today,
+      bring_up_due_this_week,
+      assigned_for_bring_up,
+      page = 1, limit = 20,
+      sort_by = 'created_at', sort_order = 'DESC',
+    } = filters;
 
-static async findAll(
-  filters: DocumentFilters,
-  requestingUserId: string,
-  requestingUserRole?: string
-): Promise<DocumentPaginationResponse> {
-  const {
-    search, type, category, status, assigned_to,
-    department_id, folder_id, for_my_action,
-    has_bring_up_date,
-    bring_up_status,
-    bring_up_date_from,
-    bring_up_date_to,
-    bring_up_due_today,
-    bring_up_due_this_week,
-    assigned_for_bring_up,
-    page = 1, limit = 20,
-    sort_by = 'created_at', sort_order = 'DESC',
-  } = filters;
+    const sortCol = ALLOWED_SORT.has(sort_by ?? '') ? `d.${sort_by}` : 'd.created_at';
+    const sortDir = sort_order === 'ASC' ? 'ASC' : 'DESC';
+    const offset = (page - 1) * limit;
 
-  const sortCol = ALLOWED_SORT.has(sort_by ?? '') ? `d.${sort_by}` : 'd.created_at';
-  const sortDir = sort_order === 'ASC' ? 'ASC' : 'DESC';
-  const offset = (page - 1) * limit;
+    const conditions: string[] = ['d.is_active = true'];
+    const values: unknown[] = [];
+    let p = 1;
 
-  const conditions: string[] = ['d.is_active = true'];
-  const values: unknown[] = [];
-  let p = 1;
-
-  if (requestingUserRole === 'super_admin') {
-    console.log('[FindAll] Super admin - showing all documents');
-  } else {
-    conditions.push(`(d.is_draft = false OR d.created_by = $${p})`);
-    values.push(requestingUserId);
-    p++;
-  }
-
-  if (folder_id) {
-    conditions.push(`d.folder_id = $${p}`);
-    values.push(folder_id);
-    p++;
-  }
-
-  if (search) {
-    conditions.push(`(d.title ILIKE $${p} OR d.reference_no ILIKE $${p} OR d.original_name ILIKE $${p})`);
-    values.push(`%${search}%`); p++;
-  }
-  if (type) { conditions.push(`d.type = $${p}`); values.push(type); p++; }
-  if (category) { conditions.push(`d.category = $${p}`); values.push(category); p++; }
-  if (status) { conditions.push(`d.status = $${p}`); values.push(status); p++; }
-  if (assigned_to) { conditions.push(`d.assigned_to = $${p}`); values.push(assigned_to); p++; }
-
-  if (for_my_action && department_id) {
-    conditions.push(`(d.department_id = $${p} OR d.assigned_to = $${p + 1})`);
-    values.push(department_id, requestingUserId);
-    p += 2;
-  } else if (for_my_action) {
-    conditions.push(`d.assigned_to = $${p}`);
-    values.push(requestingUserId);
-    p++;
-  } else if (department_id) {
-    conditions.push(`d.department_id = $${p}`);
-    values.push(department_id);
-    p++;
-  }
-
-  // ─── Bring Up Filters ─────────────────────────────────────────────────────
-
-  if (has_bring_up_date) {
-    conditions.push(`d.bring_up_date IS NOT NULL`);
-  }
-
-  // Only apply status filter if a specific status is provided (not 'all' or undefined)
-  if (bring_up_status && bring_up_status !== 'all') {
-    const now = new Date().toISOString();
-    if (bring_up_status === 'pending') {
-      conditions.push(`d.bring_up_date IS NOT NULL AND d.bring_up_completed_at IS NULL AND d.bring_up_date >= $${p}`);
-      values.push(now);
+    if (requestingUserRole === 'super_admin') {
+      console.log('[FindAll] Super admin - showing all documents');
+    } else {
+      conditions.push(`(d.is_draft = false OR d.created_by = $${p})`);
+      values.push(requestingUserId);
       p++;
-    } else if (bring_up_status === 'overdue') {
-      conditions.push(`d.bring_up_date IS NOT NULL AND d.bring_up_completed_at IS NULL AND d.bring_up_date < $${p}`);
-      values.push(now);
-      p++;
-    } else if (bring_up_status === 'completed') {
-      conditions.push(`d.bring_up_completed_at IS NOT NULL`);
     }
+
+    if (folder_id) {
+      conditions.push(`d.folder_id = $${p}`);
+      values.push(folder_id);
+      p++;
+    }
+
+    if (search) {
+      conditions.push(`(d.title ILIKE $${p} OR d.reference_no ILIKE $${p} OR d.original_name ILIKE $${p})`);
+      values.push(`%${search}%`); p++;
+    }
+    if (type) { conditions.push(`d.type = $${p}`); values.push(type); p++; }
+    if (category) { conditions.push(`d.category = $${p}`); values.push(category); p++; }
+    if (status) { conditions.push(`d.status = $${p}`); values.push(status); p++; }
+    if (assigned_to) { conditions.push(`d.assigned_to = $${p}`); values.push(assigned_to); p++; }
+
+    if (for_my_action && department_id) {
+      conditions.push(`(d.department_id = $${p} OR d.assigned_to = $${p + 1})`);
+      values.push(department_id, requestingUserId);
+      p += 2;
+    } else if (for_my_action) {
+      conditions.push(`d.assigned_to = $${p}`);
+      values.push(requestingUserId);
+      p++;
+    } else if (department_id) {
+      conditions.push(`d.department_id = $${p}`);
+      values.push(department_id);
+      p++;
+    }
+
+    // ─── Bring Up Filters ─────────────────────────────────────────────────────
+
+    if (has_bring_up_date) {
+      conditions.push(`d.bring_up_date IS NOT NULL`);
+    }
+
+    // Only apply status filter if a specific status is provided (not 'all' or undefined)
+    if (bring_up_status && bring_up_status !== 'all') {
+      const now = new Date().toISOString();
+      if (bring_up_status === 'pending') {
+        conditions.push(`d.bring_up_date IS NOT NULL AND d.bring_up_completed_at IS NULL AND d.bring_up_date >= $${p}`);
+        values.push(now);
+        p++;
+      } else if (bring_up_status === 'overdue') {
+        conditions.push(`d.bring_up_date IS NOT NULL AND d.bring_up_completed_at IS NULL AND d.bring_up_date < $${p}`);
+        values.push(now);
+        p++;
+      } else if (bring_up_status === 'completed') {
+        conditions.push(`d.bring_up_completed_at IS NOT NULL`);
+      }
+    }
+
+    if (bring_up_date_from) {
+      conditions.push(`d.bring_up_date >= $${p}`);
+      values.push(bring_up_date_from);
+      p++;
+    }
+
+    if (bring_up_date_to) {
+      conditions.push(`d.bring_up_date <= $${p}`);
+      values.push(bring_up_date_to);
+      p++;
+    }
+
+    if (bring_up_due_today) {
+      const today = new Date().toISOString().split('T')[0];
+      conditions.push(`DATE(d.bring_up_date) = $${p}`);
+      values.push(today);
+      p++;
+    }
+
+    if (bring_up_due_this_week) {
+      const now = new Date();
+      const startOfWeek = new Date(now);
+      startOfWeek.setDate(now.getDate() - now.getDay());
+      const endOfWeek = new Date(now);
+      endOfWeek.setDate(now.getDate() + (6 - now.getDay()));
+      conditions.push(`DATE(d.bring_up_date) BETWEEN $${p} AND $${p + 1}`);
+      values.push(startOfWeek.toISOString().split('T')[0], endOfWeek.toISOString().split('T')[0]);
+      p += 2;
+    }
+
+    if (assigned_for_bring_up) {
+      conditions.push(`d.assigned_to = $${p}`);
+      values.push(assigned_for_bring_up);
+      p++;
+    }
+
+    const where = `WHERE ${conditions.join(' AND ')}`;
+
+    const [countResult, dataResult] = await Promise.all([
+      pool.query(`SELECT COUNT(*) AS total ${DOC_JOIN} ${where}`, values),
+      pool.query(
+        `SELECT 
+          ${DOC_SELECT},
+          ${MARK_SELECT}
+         ${DOC_JOIN}
+         ${MARK_JOIN}
+         ${where}
+         ORDER BY ${sortCol} ${sortDir}
+         LIMIT $${p} OFFSET $${p + 1}`,
+        [...values, limit, offset]
+      ),
+    ]);
+
+    // ─── Fetch follow-ups for all documents ──────────────────────────────────
+    const documentIds = dataResult.rows.map(row => row.id);
+    let followUpsMap: Record<string, FollowUp[]> = {};
+
+    if (documentIds.length > 0) {
+      const { rows: followUpRows } = await pool.query(
+        `SELECT ${FOLLOW_UP_SELECT} ${FOLLOW_UP_JOIN}
+         WHERE fu.document_id = ANY($1) AND fu.is_active = true
+         ORDER BY fu.created_at DESC`,
+        [documentIds]
+      );
+      
+      followUpsMap = followUpRows.reduce((acc, row) => {
+        const docId = row.document_id;
+        if (!acc[docId]) acc[docId] = [];
+        acc[docId].push(row);
+        return acc;
+      }, {} as Record<string, FollowUp[]>);
+    }
+
+    // ─── Fetch bring up history for all documents ────────────────────────────
+    let bringUpHistoryMap: Record<string, BringUpHistoryEntry[]> = {};
+
+    if (documentIds.length > 0) {
+      const { rows: historyRows } = await pool.query(
+        `SELECT ${BRING_UP_HISTORY_SELECT} ${BRING_UP_HISTORY_JOIN}
+         WHERE bh.document_id = ANY($1)
+         ORDER BY bh.set_at DESC`,
+        [documentIds]
+      );
+      
+      bringUpHistoryMap = historyRows.reduce((acc, row) => {
+        const docId = row.document_id;
+        if (!acc[docId]) acc[docId] = [];
+        acc[docId].push(row);
+        return acc;
+      }, {} as Record<string, BringUpHistoryEntry[]>);
+    }
+
+    // ─── Map rows to documents and attach follow-ups & history ──────────────
+    const documents = dataResult.rows.map(row => {
+      const doc = mapRowToDocument(row);
+      doc.follow_ups = followUpsMap[doc.id] || [];
+      doc.bring_up_history = bringUpHistoryMap[doc.id] || null;
+      return doc;
+    });
+
+    const total = parseInt(countResult.rows[0]?.total ?? '0', 10);
+    return {
+      data: documents,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   }
-
-  if (bring_up_date_from) {
-    conditions.push(`d.bring_up_date >= $${p}`);
-    values.push(bring_up_date_from);
-    p++;
-  }
-
-  if (bring_up_date_to) {
-    conditions.push(`d.bring_up_date <= $${p}`);
-    values.push(bring_up_date_to);
-    p++;
-  }
-
-  if (bring_up_due_today) {
-    const today = new Date().toISOString().split('T')[0];
-    conditions.push(`DATE(d.bring_up_date) = $${p}`);
-    values.push(today);
-    p++;
-  }
-
-  if (bring_up_due_this_week) {
-    const now = new Date();
-    const startOfWeek = new Date(now);
-    startOfWeek.setDate(now.getDate() - now.getDay());
-    const endOfWeek = new Date(now);
-    endOfWeek.setDate(now.getDate() + (6 - now.getDay()));
-    conditions.push(`DATE(d.bring_up_date) BETWEEN $${p} AND $${p + 1}`);
-    values.push(startOfWeek.toISOString().split('T')[0], endOfWeek.toISOString().split('T')[0]);
-    p += 2;
-  }
-
-  if (assigned_for_bring_up) {
-    conditions.push(`d.assigned_to = $${p}`);
-    values.push(assigned_for_bring_up);
-    p++;
-  }
-
-  const where = `WHERE ${conditions.join(' AND ')}`;
-
-  const [countResult, dataResult] = await Promise.all([
-    pool.query(`SELECT COUNT(*) AS total ${DOC_JOIN} ${where}`, values),
-    pool.query(
-      `SELECT 
-        ${DOC_SELECT},
-        ${MARK_SELECT}
-       ${DOC_JOIN}
-       ${MARK_JOIN}
-       ${where}
-       ORDER BY ${sortCol} ${sortDir}
-       LIMIT $${p} OFFSET $${p + 1}`,
-      [...values, limit, offset]
-    ),
-  ]);
-
-  // ─── Fetch follow-ups for all documents ──────────────────────────────────
-  const documentIds = dataResult.rows.map(row => row.id);
-  let followUpsMap: Record<string, FollowUp[]> = {};
-
-  if (documentIds.length > 0) {
-    const { rows: followUpRows } = await pool.query(
-      `SELECT ${FOLLOW_UP_SELECT} ${FOLLOW_UP_JOIN}
-       WHERE fu.document_id = ANY($1) AND fu.is_active = true
-       ORDER BY fu.created_at DESC`,
-      [documentIds]
-    );
-    
-    followUpsMap = followUpRows.reduce((acc, row) => {
-      const docId = row.document_id;
-      if (!acc[docId]) acc[docId] = [];
-      acc[docId].push(row);
-      return acc;
-    }, {} as Record<string, FollowUp[]>);
-  }
-
-  // ─── Fetch bring up history for all documents ────────────────────────────
-  let bringUpHistoryMap: Record<string, BringUpHistoryEntry[]> = {};
-
-  if (documentIds.length > 0) {
-    const { rows: historyRows } = await pool.query(
-      `SELECT ${BRING_UP_HISTORY_SELECT} ${BRING_UP_HISTORY_JOIN}
-       WHERE bh.document_id = ANY($1)
-       ORDER BY bh.set_at DESC`,
-      [documentIds]
-    );
-    
-    bringUpHistoryMap = historyRows.reduce((acc, row) => {
-      const docId = row.document_id;
-      if (!acc[docId]) acc[docId] = [];
-      acc[docId].push(row);
-      return acc;
-    }, {} as Record<string, BringUpHistoryEntry[]>);
-  }
-
-  // ─── Map rows to documents and attach follow-ups & history ──────────────
-  const documents = dataResult.rows.map(row => {
-    const doc = mapRowToDocument(row);
-    doc.follow_ups = followUpsMap[doc.id] || [];
-    doc.bring_up_history = bringUpHistoryMap[doc.id] || null;
-    return doc;
-  });
-
-  const total = parseInt(countResult.rows[0]?.total ?? '0', 10);
-  return {
-    data: documents,
-    total,
-    page,
-    limit,
-    totalPages: Math.ceil(total / limit),
-  };
-}
 
   // ── Find single ─────────────────────────────────────────────────────────────
 
@@ -1195,7 +1192,8 @@ static async findAll(
 
     const signatoryName = doc.signature_name || signer.full_name;
 
-    const isTemplatedDocument = doc.type === 'memo' || doc.type === 'letter';
+    // ─── ADDED: certificate to templated document types ──────────────────────
+    const isTemplatedDocument = doc.type === 'memo' || doc.type === 'letter' || doc.type === 'certificate';
 
     const position = (!isTemplatedDocument && doc.signature_position_x !== null && doc.signature_position_x !== undefined)
       ? {
@@ -1349,7 +1347,7 @@ static async findAll(
     return (await this.findById(id))!;
   }
 
-  // ─── Release Document to Admin Side ──────────────────────────────────────────
+  // ── Release Document to Admin Side ──────────────────────────────────────────
 
   static async releaseDocument(
     id: string, 
@@ -1403,7 +1401,7 @@ static async findAll(
               type_name: doc.type,
               title: `Document Assigned: ${doc.title}`,
               message: `A document has been assigned to you by ${doc.created_by_name || 'the Registrar'}.${note ? `\n\nNote: ${note}` : ''}`,
-              icon: doc.type === 'memo' ? 'FileText' : doc.type === 'letter' ? 'Mail' : 'Bell',
+              icon: doc.type === 'memo' ? 'FileText' : doc.type === 'letter' ? 'Mail' : doc.type === 'certificate' ? 'Award' : 'Bell',
               color: '#1a3d1c',
               link: `/documents/${id}`,
               priority: 'high',
@@ -1423,7 +1421,7 @@ static async findAll(
             type_name: doc.type,
             title: `Document Released: ${doc.title}`,
             message: `Your document "${doc.title}" has been released and is now available on the admin side.${note ? `\n\nNote: ${note}` : ''}`,
-            icon: doc.type === 'memo' ? 'FileText' : doc.type === 'letter' ? 'Mail' : 'Bell',
+            icon: doc.type === 'memo' ? 'FileText' : doc.type === 'letter' ? 'Mail' : doc.type === 'certificate' ? 'Award' : 'Bell',
             color: '#1a3d1c',
             link: `/documents/${id}`,
             priority: 'high',
@@ -1659,8 +1657,8 @@ static async findAll(
         type_name: type,
         title,
         message,
-        icon: type === 'memo' ? 'FileText' : type === 'letter' ? 'Mail' : 'Bell',
-        color: type === 'memo' || type === 'letter' ? '#1a3d1c' : '#6b7280',
+        icon: type === 'memo' ? 'FileText' : type === 'letter' ? 'Mail' : type === 'certificate' ? 'Award' : 'Bell',
+        color: type === 'memo' || type === 'letter' ? '#1a3d1c' : type === 'certificate' ? '#c9a84c' : '#6b7280',
         link: documentId ? `/documents/${documentId}` : undefined,
         priority: type === 'memo' || type === 'letter' ? 'high' : 'normal',
         metadata: {
@@ -1676,7 +1674,7 @@ static async findAll(
   }
 
   // ════════════════════════════════════════════════════════════════════════════
-  //  Memo & Letter generation with PDF
+  //  Memo, Letter & Certificate generation with PDF
   // ════════════════════════════════════════════════════════════════════════════
 
   private static async getUserDisplayName(userId: string): Promise<string> {
@@ -1829,11 +1827,64 @@ static async findAll(
     });
   }
 
+  // ─── ADDED: generateCertificate method ──────────────────────────────────────
+
+  static async generateCertificate(input: ComposeCertificateInput, createdBy: string): Promise<Document> {
+    // Get the user's display name for the "from" field
+    const fromDepartment = input.from || (await this.getUserDisplayName(createdBy));
+    const signatureName = input.signatureName || fromDepartment;
+    const signatureTitle = input.signatureTitle || 'Registrar, High Court';
+    const ref = input.reference_no || `RHC/CERT/${new Date().getFullYear()}/${Date.now().toString().slice(-6)}`;
+    const documentDateIso = input.date ?? new Date().toISOString();
+    const dateDisplay = new Date(documentDateIso).toLocaleDateString('en-KE', {
+      year: 'numeric', month: 'long', day: 'numeric',
+    });
+
+    // Build CertificateData for the template
+    // IMPORTANT: DO NOT pass ref and date - certificates don't display them
+    const certData: CertificateData = {
+      title: input.title,
+      ruleReference: input.ruleReference,
+      // ref and date intentionally omitted - certificates don't show them
+      body: input.body,
+      datedLine: input.datedLine,
+      signatoryLines: input.signatoryLines,
+      draftedByInitials: input.draftedByInitials,
+      logoUrl: input.logoUrl || process.env.CERT_LOGO_URL || undefined,
+      footerEmblemUrl: input.footerEmblemUrl || process.env.CERT_FOOTER_EMBLEM_URL || undefined,
+      footerAddress: input.footerAddress || 'Milimani Law Courts | 3rd Floor, Chamber 337 | P.O. Box 30041-00100 | Nairobi',
+      footerContact: input.footerContact || 'Tel. +254 0730 181478 | registrarhighcourt@court.go.ke | www.judiciary.go.ke',
+      footerTagline: input.footerTagline || 'Justice Be Our Shield and Defender',
+    };
+
+    // Generate PDF from the certificate data using the document generator
+    const pdfBuffer = await generateDocumentFromTemplate('certificate', certData);
+
+    // Save the document - use the fields from input or defaults
+    return await this.saveDocument({
+      title: input.title,
+      type: 'certificate',
+      ref,
+      body: input.body,
+      pdfBuffer,
+      createdBy,
+      departmentId: input.department_id,
+      toRecipient: input.to || '',
+      fromSender: fromDepartment,
+      documentDate: documentDateIso,
+      subject: input.title,
+      signatureName,
+      signatureTitle,
+    });
+  }
+
+  // ─── UPDATED: regeneratePdf with certificate support ─────────────────────
+
   static async regeneratePdf(documentId: string): Promise<Document> {
     const doc = await this.findById(documentId);
     if (!doc) throw new AppError(404, 'Document not found');
-    if (doc.type !== 'memo' && doc.type !== 'letter') {
-      throw new AppError(400, 'Only memo and letter documents can be regenerated');
+    if (doc.type !== 'memo' && doc.type !== 'letter' && doc.type !== 'certificate') {
+      throw new AppError(400, 'Only memo, letter, and certificate documents can be regenerated');
     }
     if (doc.status === 'filed') {
       throw new AppError(409, 'Filed documents cannot be regenerated');
@@ -1846,6 +1897,7 @@ static async findAll(
       : new Date().toLocaleDateString('en-KE', { year: 'numeric', month: 'long', day: 'numeric' });
 
     let pdfBuffer: Buffer;
+    
     if (doc.type === 'memo') {
       pdfBuffer = await generateDocumentFromTemplate('memo', {
         to: doc.to_recipient || '',
@@ -1859,7 +1911,7 @@ static async findAll(
         logoUrl: process.env.MEMO_LOGO_URL || undefined,
         footerEmblemUrl: process.env.MEMO_FOOTER_EMBLEM_URL || undefined,
       });
-    } else {
+    } else if (doc.type === 'letter') {
       pdfBuffer = await generateDocumentFromTemplate('letter', {
         ref: doc.reference_no || '',
         date: dateDisplay,
@@ -1874,6 +1926,31 @@ static async findAll(
         logoUrl: process.env.LETTER_LOGO_URL || undefined,
         footerEmblemUrl: process.env.LETTER_FOOTER_EMBLEM_URL || undefined,
       });
+    } else {
+      // ─── ADDED: certificate regeneration ──────────────────────────────────
+      // Build CertificateData that matches the template's CertificateData interface
+      // IMPORTANT: DO NOT pass ref and date - certificates don't display them
+      const certData: CertificateData = {
+        title: doc.title || 'Certificate',
+        ruleReference: doc.ref_other_description || undefined,
+        // ref and date intentionally omitted - certificates don't show them
+        body: doc.body || '',
+        datedLine: doc.document_date 
+          ? `Dated, Signed and Sealed this ${new Date(doc.document_date).toLocaleDateString('en-KE', { year: 'numeric', month: 'long', day: 'numeric' })}.`
+          : `Dated, Signed and Sealed this ${dateDisplay}.`,
+        signatoryLines: doc.signature_name 
+          ? [doc.signature_name, doc.signature_title || 'Registrar, High Court']
+          : ['Registrar, High Court'],
+        draftedByInitials: doc.from_sender || undefined,
+        logoUrl: process.env.CERT_LOGO_URL || undefined,
+        footerEmblemUrl: process.env.CERT_FOOTER_EMBLEM_URL || undefined,
+        footerAddress: 'Milimani Law Courts | 3rd Floor, Chamber 337 | P.O. Box 30041-00100 | Nairobi',
+        footerContact: 'Tel. +254 0730 181478 | registrarhighcourt@court.go.ke | www.judiciary.go.ke',
+        footerTagline: 'Justice Be Our Shield and Defender',
+      };
+      
+      // Pass the CertificateData directly to generateDocumentFromTemplate
+      pdfBuffer = await generateDocumentFromTemplate('certificate', certData);
     }
 
     const multerFile: Express.Multer.File = {
@@ -1956,8 +2033,8 @@ static async findAll(
             type_name: doc.type,
             title,
             message,
-            icon: doc.type === 'memo' ? 'FileText' : doc.type === 'letter' ? 'Mail' : 'Bell',
-            color: '#1a3d1c',
+            icon: doc.type === 'memo' ? 'FileText' : doc.type === 'letter' ? 'Mail' : doc.type === 'certificate' ? 'Award' : 'Bell',
+            color: doc.type === 'certificate' ? '#c9a84c' : '#1a3d1c',
             link: `/documents/${documentId}`,
             priority: 'high',
             metadata: { document_id: documentId, type: doc.type },
@@ -2340,140 +2417,140 @@ static async findAll(
   }
 
   static async getBringUps(
-  filters: BringUpFilters,
-  userId?: string
-): Promise<DocumentPaginationResponse> {
-  const {
-    status,
-    date_from,
-    date_to,
-    due_today,
-    due_this_week,
-    assigned_to,
-    page = 1,
-    limit = 20,
-    sort_by = 'bring_up_date',
-    sort_order = 'ASC',
-  } = filters;
+    filters: BringUpFilters,
+    userId?: string
+  ): Promise<DocumentPaginationResponse> {
+    const {
+      status,
+      date_from,
+      date_to,
+      due_today,
+      due_this_week,
+      assigned_to,
+      page = 1,
+      limit = 20,
+      sort_by = 'bring_up_date',
+      sort_order = 'ASC',
+    } = filters;
 
-  const sortCol = sort_by === 'bring_up_date' ? 'd.bring_up_date' : `d.${sort_by}`;
-  const sortDir = sort_order === 'ASC' ? 'ASC' : 'DESC';
-  const offset = (page - 1) * limit;
+    const sortCol = sort_by === 'bring_up_date' ? 'd.bring_up_date' : `d.${sort_by}`;
+    const sortDir = sort_order === 'ASC' ? 'ASC' : 'DESC';
+    const offset = (page - 1) * limit;
 
-  const conditions: string[] = ['d.is_active = true', 'd.bring_up_date IS NOT NULL'];
-  const values: unknown[] = [];
-  let p = 1;
+    const conditions: string[] = ['d.is_active = true', 'd.bring_up_date IS NOT NULL'];
+    const values: unknown[] = [];
+    let p = 1;
 
-  const now = new Date().toISOString();
+    const now = new Date().toISOString();
 
-  // Only apply status filter if a specific status is provided (not 'all' or undefined)
-  if (status && status !== 'all') {
-    if (status === 'pending') {
-      conditions.push(`d.bring_up_completed_at IS NULL AND d.bring_up_date >= $${p}`);
-      values.push(now);
-      p++;
-    } else if (status === 'overdue') {
-      conditions.push(`d.bring_up_completed_at IS NULL AND d.bring_up_date < $${p}`);
-      values.push(now);
-      p++;
-    } else if (status === 'completed') {
-      conditions.push(`d.bring_up_completed_at IS NOT NULL`);
+    // Only apply status filter if a specific status is provided (not 'all' or undefined)
+    if (status && status !== 'all') {
+      if (status === 'pending') {
+        conditions.push(`d.bring_up_completed_at IS NULL AND d.bring_up_date >= $${p}`);
+        values.push(now);
+        p++;
+      } else if (status === 'overdue') {
+        conditions.push(`d.bring_up_completed_at IS NULL AND d.bring_up_date < $${p}`);
+        values.push(now);
+        p++;
+      } else if (status === 'completed') {
+        conditions.push(`d.bring_up_completed_at IS NOT NULL`);
+      }
     }
+
+    if (date_from) {
+      conditions.push(`d.bring_up_date >= $${p}`);
+      values.push(date_from);
+      p++;
+    }
+
+    if (date_to) {
+      conditions.push(`d.bring_up_date <= $${p}`);
+      values.push(date_to);
+      p++;
+    }
+
+    if (due_today) {
+      const today = new Date().toISOString().split('T')[0];
+      conditions.push(`DATE(d.bring_up_date) = $${p}`);
+      values.push(today);
+      p++;
+    }
+
+    if (due_this_week) {
+      const nowDate = new Date();
+      const startOfWeek = new Date(nowDate);
+      startOfWeek.setDate(nowDate.getDate() - nowDate.getDay());
+      const endOfWeek = new Date(nowDate);
+      endOfWeek.setDate(nowDate.getDate() + (6 - nowDate.getDay()));
+      conditions.push(`DATE(d.bring_up_date) BETWEEN $${p} AND $${p + 1}`);
+      values.push(startOfWeek.toISOString().split('T')[0], endOfWeek.toISOString().split('T')[0]);
+      p += 2;
+    }
+
+    if (assigned_to) {
+      conditions.push(`d.assigned_to = $${p}`);
+      values.push(assigned_to);
+      p++;
+    }
+
+    if (userId) {
+      conditions.push(`(d.assigned_to = $${p} OR d.created_by = $${p + 1})`);
+      values.push(userId, userId);
+      p += 2;
+    }
+
+    const where = `WHERE ${conditions.join(' AND ')}`;
+
+    const [countResult, dataResult] = await Promise.all([
+      pool.query(
+        `SELECT COUNT(*) AS total ${DOC_JOIN} ${where}`,
+        values
+      ),
+      pool.query(
+        `SELECT ${DOC_SELECT} ${DOC_JOIN}
+         ${where}
+         ORDER BY ${sortCol} ${sortDir}
+         LIMIT $${p} OFFSET $${p + 1}`,
+        [...values, limit, offset]
+      ),
+    ]);
+
+    // ─── Fetch bring up history for all documents ────────────────────────────
+    const documentIds = dataResult.rows.map(row => row.id);
+    let bringUpHistoryMap: Record<string, BringUpHistoryEntry[]> = {};
+
+    if (documentIds.length > 0) {
+      const { rows: historyRows } = await pool.query(
+        `SELECT ${BRING_UP_HISTORY_SELECT} ${BRING_UP_HISTORY_JOIN}
+         WHERE bh.document_id = ANY($1)
+         ORDER BY bh.set_at DESC`,
+        [documentIds]
+      );
+      
+      bringUpHistoryMap = historyRows.reduce((acc, row) => {
+        const docId = row.document_id;
+        if (!acc[docId]) acc[docId] = [];
+        acc[docId].push(row);
+        return acc;
+      }, {} as Record<string, BringUpHistoryEntry[]>);
+    }
+
+    const documents = dataResult.rows.map(row => {
+      const doc = mapRowToDocument(row);
+      doc.bring_up_history = bringUpHistoryMap[doc.id] || null;
+      return doc;
+    });
+
+    const total = parseInt(countResult.rows[0]?.total ?? '0', 10);
+    return {
+      data: documents,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   }
-
-  if (date_from) {
-    conditions.push(`d.bring_up_date >= $${p}`);
-    values.push(date_from);
-    p++;
-  }
-
-  if (date_to) {
-    conditions.push(`d.bring_up_date <= $${p}`);
-    values.push(date_to);
-    p++;
-  }
-
-  if (due_today) {
-    const today = new Date().toISOString().split('T')[0];
-    conditions.push(`DATE(d.bring_up_date) = $${p}`);
-    values.push(today);
-    p++;
-  }
-
-  if (due_this_week) {
-    const nowDate = new Date();
-    const startOfWeek = new Date(nowDate);
-    startOfWeek.setDate(nowDate.getDate() - nowDate.getDay());
-    const endOfWeek = new Date(nowDate);
-    endOfWeek.setDate(nowDate.getDate() + (6 - nowDate.getDay()));
-    conditions.push(`DATE(d.bring_up_date) BETWEEN $${p} AND $${p + 1}`);
-    values.push(startOfWeek.toISOString().split('T')[0], endOfWeek.toISOString().split('T')[0]);
-    p += 2;
-  }
-
-  if (assigned_to) {
-    conditions.push(`d.assigned_to = $${p}`);
-    values.push(assigned_to);
-    p++;
-  }
-
-  if (userId) {
-    conditions.push(`(d.assigned_to = $${p} OR d.created_by = $${p + 1})`);
-    values.push(userId, userId);
-    p += 2;
-  }
-
-  const where = `WHERE ${conditions.join(' AND ')}`;
-
-  const [countResult, dataResult] = await Promise.all([
-    pool.query(
-      `SELECT COUNT(*) AS total ${DOC_JOIN} ${where}`,
-      values
-    ),
-    pool.query(
-      `SELECT ${DOC_SELECT} ${DOC_JOIN}
-       ${where}
-       ORDER BY ${sortCol} ${sortDir}
-       LIMIT $${p} OFFSET $${p + 1}`,
-      [...values, limit, offset]
-    ),
-  ]);
-
-  // ─── Fetch bring up history for all documents ────────────────────────────
-  const documentIds = dataResult.rows.map(row => row.id);
-  let bringUpHistoryMap: Record<string, BringUpHistoryEntry[]> = {};
-
-  if (documentIds.length > 0) {
-    const { rows: historyRows } = await pool.query(
-      `SELECT ${BRING_UP_HISTORY_SELECT} ${BRING_UP_HISTORY_JOIN}
-       WHERE bh.document_id = ANY($1)
-       ORDER BY bh.set_at DESC`,
-      [documentIds]
-    );
-    
-    bringUpHistoryMap = historyRows.reduce((acc, row) => {
-      const docId = row.document_id;
-      if (!acc[docId]) acc[docId] = [];
-      acc[docId].push(row);
-      return acc;
-    }, {} as Record<string, BringUpHistoryEntry[]>);
-  }
-
-  const documents = dataResult.rows.map(row => {
-    const doc = mapRowToDocument(row);
-    doc.bring_up_history = bringUpHistoryMap[doc.id] || null;
-    return doc;
-  });
-
-  const total = parseInt(countResult.rows[0]?.total ?? '0', 10);
-  return {
-    data: documents,
-    total,
-    page,
-    limit,
-    totalPages: Math.ceil(total / limit),
-  };
-}
 
   static async getBringUpSummary(userId?: string): Promise<BringUpSummary> {
     const now = new Date().toISOString();
@@ -2660,141 +2737,6 @@ static async findAll(
 
     console.log(`[BringUp] Sent ${dueTodayCount} due today reminders and ${overdueCount} overdue reminders`);
     return { dueToday: dueTodayCount, overdue: overdueCount };
-  }
-
-  // ════════════════════════════════════════════════════════════════════════════
-  //  Folder Operations
-  // ════════════════════════════════════════════════════════════════════════════
-
-  static async redirectToFolder(
-    documentId: string,
-    folderId: string,
-    userId: string,
-    note?: string
-  ): Promise<Document> {
-    const doc = await this.findById(documentId);
-    if (!doc) throw new AppError(404, 'Document not found');
-
-    const { rows: folderRows } = await pool.query(
-      `SELECT id, name FROM rhc_folders WHERE id = $1 AND is_active = true`,
-      [folderId]
-    );
-    if (!folderRows.length) {
-      throw new AppError(404, 'Folder not found or inactive');
-    }
-
-    await pool.query(
-      `UPDATE documents 
-       SET folder_id = $1, updated_at = NOW()
-       WHERE id = $2`,
-      [folderId, documentId]
-    );
-
-    await this.logFlow(
-      pool,
-      documentId,
-      'redirected_to_folder',
-      userId,
-      null,
-      `Document redirected to folder: ${folderRows[0].name}${note ? ` - ${note}` : ''}`
-    );
-
-    return (await this.findById(documentId))!;
-  }
-
-  static async removeFromFolder(
-    documentId: string,
-    userId: string,
-    note?: string
-  ): Promise<Document> {
-    const doc = await this.findById(documentId);
-    if (!doc) throw new AppError(404, 'Document not found');
-
-    if (!doc.folder_id) {
-      throw new AppError(400, 'Document is not in a folder');
-    }
-
-    await pool.query(
-      `UPDATE documents 
-       SET folder_id = NULL, updated_at = NOW()
-       WHERE id = $1`,
-      [documentId]
-    );
-
-    await this.logFlow(
-      pool,
-      documentId,
-      'removed_from_folder',
-      userId,
-      null,
-      `Document removed from folder${note ? ` - ${note}` : ''}`
-    );
-
-    return (await this.findById(documentId))!;
-  }
-
-  static async getDocumentsByFolder(
-    folderId: string,
-    page: number = 1,
-    limit: number = 20,
-    search?: string,
-    type?: string,
-    status?: string
-  ): Promise<DocumentPaginationResponse> {
-    const offset = (page - 1) * limit;
-
-    const { rows: folderRows } = await pool.query(
-      `SELECT id, name FROM rhc_folders WHERE id = $1 AND is_active = true`,
-      [folderId]
-    );
-    if (!folderRows.length) {
-      throw new AppError(404, 'Folder not found');
-    }
-
-    const conditions: string[] = ['d.folder_id = $1', 'd.is_active = true'];
-    const values: unknown[] = [folderId];
-    let p = 2;
-
-    if (search) {
-      conditions.push(`(d.title ILIKE $${p} OR d.reference_no ILIKE $${p} OR d.original_name ILIKE $${p})`);
-      values.push(`%${search}%`);
-      p++;
-    }
-    if (type) {
-      conditions.push(`d.type = $${p}`);
-      values.push(type);
-      p++;
-    }
-    if (status) {
-      conditions.push(`d.status = $${p}`);
-      values.push(status);
-      p++;
-    }
-
-    const where = `WHERE ${conditions.join(' AND ')}`;
-
-    const [countResult, dataResult] = await Promise.all([
-      pool.query(
-        `SELECT COUNT(*) AS total ${DOC_JOIN} ${where}`,
-        values
-      ),
-      pool.query(
-        `SELECT ${DOC_SELECT} ${DOC_JOIN}
-         ${where}
-         ORDER BY d.created_at DESC
-         LIMIT $${p} OFFSET $${p + 1}`,
-        [...values, limit, offset]
-      ),
-    ]);
-
-    const total = parseInt(countResult.rows[0]?.total ?? '0', 10);
-    return {
-      data: dataResult.rows.map(mapRowToDocument),
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
   }
 
   // ════════════════════════════════════════════════════════════════════════════
@@ -3514,6 +3456,141 @@ static async findAll(
       filed_away: parseInt(rows[0]?.filed_away || '0', 10),
       total: parseInt(rows[0]?.total || '0', 10),
       active: parseInt(rows[0]?.active || '0', 10),
+    };
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  //  FOLDER OPERATIONS
+  // ════════════════════════════════════════════════════════════════════════════
+
+  static async redirectToFolder(
+    documentId: string,
+    folderId: string,
+    userId: string,
+    note?: string
+  ): Promise<Document> {
+    const doc = await this.findById(documentId);
+    if (!doc) throw new AppError(404, 'Document not found');
+
+    const { rows: folderRows } = await pool.query(
+      `SELECT id, name FROM rhc_folders WHERE id = $1 AND is_active = true`,
+      [folderId]
+    );
+    if (!folderRows.length) {
+      throw new AppError(404, 'Folder not found or inactive');
+    }
+
+    await pool.query(
+      `UPDATE documents 
+       SET folder_id = $1, updated_at = NOW()
+       WHERE id = $2`,
+      [folderId, documentId]
+    );
+
+    await this.logFlow(
+      pool,
+      documentId,
+      'redirected_to_folder',
+      userId,
+      null,
+      `Document redirected to folder: ${folderRows[0].name}${note ? ` - ${note}` : ''}`
+    );
+
+    return (await this.findById(documentId))!;
+  }
+
+  static async removeFromFolder(
+    documentId: string,
+    userId: string,
+    note?: string
+  ): Promise<Document> {
+    const doc = await this.findById(documentId);
+    if (!doc) throw new AppError(404, 'Document not found');
+
+    if (!doc.folder_id) {
+      throw new AppError(400, 'Document is not in a folder');
+    }
+
+    await pool.query(
+      `UPDATE documents 
+       SET folder_id = NULL, updated_at = NOW()
+       WHERE id = $1`,
+      [documentId]
+    );
+
+    await this.logFlow(
+      pool,
+      documentId,
+      'removed_from_folder',
+      userId,
+      null,
+      `Document removed from folder${note ? ` - ${note}` : ''}`
+    );
+
+    return (await this.findById(documentId))!;
+  }
+
+  static async getDocumentsByFolder(
+    folderId: string,
+    page: number = 1,
+    limit: number = 20,
+    search?: string,
+    type?: string,
+    status?: string
+  ): Promise<DocumentPaginationResponse> {
+    const offset = (page - 1) * limit;
+
+    const { rows: folderRows } = await pool.query(
+      `SELECT id, name FROM rhc_folders WHERE id = $1 AND is_active = true`,
+      [folderId]
+    );
+    if (!folderRows.length) {
+      throw new AppError(404, 'Folder not found');
+    }
+
+    const conditions: string[] = ['d.folder_id = $1', 'd.is_active = true'];
+    const values: unknown[] = [folderId];
+    let p = 2;
+
+    if (search) {
+      conditions.push(`(d.title ILIKE $${p} OR d.reference_no ILIKE $${p} OR d.original_name ILIKE $${p})`);
+      values.push(`%${search}%`);
+      p++;
+    }
+    if (type) {
+      conditions.push(`d.type = $${p}`);
+      values.push(type);
+      p++;
+    }
+    if (status) {
+      conditions.push(`d.status = $${p}`);
+      values.push(status);
+      p++;
+    }
+
+    const where = `WHERE ${conditions.join(' AND ')}`;
+
+    const [countResult, dataResult] = await Promise.all([
+      pool.query(
+        `SELECT COUNT(*) AS total ${DOC_JOIN} ${where}`,
+        values
+      ),
+      pool.query(
+        `SELECT ${DOC_SELECT} ${DOC_JOIN}
+         ${where}
+         ORDER BY d.created_at DESC
+         LIMIT $${p} OFFSET $${p + 1}`,
+        [...values, limit, offset]
+      ),
+    ]);
+
+    const total = parseInt(countResult.rows[0]?.total ?? '0', 10);
+    return {
+      data: dataResult.rows.map(mapRowToDocument),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
     };
   }
 }

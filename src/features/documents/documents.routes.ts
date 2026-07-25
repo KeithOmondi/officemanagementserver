@@ -154,6 +154,13 @@ router.post('/compose-memo', requireRole('staff'), documentController.composeMem
  */
 router.post('/compose-letter', requireRole('staff'), documentController.composeLetter);
 
+/**
+ * @route   POST /api/documents/compose-certificate
+ * @desc    Generate a certificate document from template
+ * @access  Staff and above
+ */
+router.post('/compose-certificate', requireRole('staff'), documentController.composeCertificate);
+
 // ════════════════════════════════════════════════════════════════════════════
 //  2. ROUTES WITH PARAMETERS (but specific patterns)
 // ════════════════════════════════════════════════════════════════════════════
@@ -317,7 +324,7 @@ router.post(
 
 /**
  * @route   POST /api/documents/:id/regenerate-pdf
- * @desc    Regenerate PDF for memo/letter documents
+ * @desc    Regenerate PDF for memo/letter/certificate documents
  * @access  Super Admin only
  */
 router.post(

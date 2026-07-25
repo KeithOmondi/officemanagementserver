@@ -51,13 +51,11 @@ function formatToBlock(toText: string): string {
   let locationLine = '';
   let bodyLines = [...lines];
 
-  // Extract salutation
   if (lines.length > 0 && salutationRegex.test(lines[lines.length - 1])) {
     salutationLine = lines.pop()!;
     bodyLines = [...lines];
   }
 
-  // Extract location line (e.g. NAIROBI)
   if (bodyLines.length > 0) {
     locationLine = bodyLines.pop()!;
   }
@@ -221,7 +219,6 @@ export function getLetterHTML(data: LetterData): string {
           line-height: 1.4;
         }
 
-        /* Bold & Underlined Location Line (e.g. NAIROBI) */
         .body-content .to-block .to-location {
           font-weight: bold;
           text-decoration: underline;
@@ -229,7 +226,6 @@ export function getLetterHTML(data: LetterData): string {
           margin-top: 2px;
         }
 
-        /* Regular Salutation (e.g. YOUR HONOR,) */
         .body-content .to-block .to-salutation {
           font-weight: normal;
           text-decoration: none;
@@ -237,7 +233,6 @@ export function getLetterHTML(data: LetterData): string {
           margin-top: 12px;
         }
 
-        /* Subject line */
         .body-content .subject-line {
           font-weight: bold;
           text-decoration: underline;
@@ -267,9 +262,17 @@ export function getLetterHTML(data: LetterData): string {
           user-select: none;
         }
 
+        /* Gap from the signature anchor to the printed name/title below,
+           in Puppeteer's 96dpi rendering (1px ≈ 0.75pt at print time).
+           This margin, plus signature-section's own margin-top, is the
+           room the embedded signature image has to sit in — kept in line
+           with Certificate's gap (which has proven reliable) rather than
+           the previous 45/60px values that were tight enough to overlap
+           the signatory block on some signatures. See embedSignature.ts's
+           ascent/descent clearance logic for how this space gets used. */
         .signature {
           font-size: 12pt;
-          margin-top: 60px;
+          margin-top: 85px;
         }
 
         .signature .name {

@@ -21,6 +21,7 @@ const documentEntityEnum = z.enum([
     'club',             // Club membership documents
     'utility_memo',     // Utility memo documents
     'aide',             // Aide request documents
+    'sentry',           // Sentry request documents
 ]);
 
 const documentStatusEnum = z.enum(['draft', 'pending_approval', 'approved', 'rejected', 'returned']);
@@ -35,7 +36,9 @@ const requestTypeEnum = z.enum([
     'Sentry'
 ]);
 
-const aideStatusEnum = z.enum(['in_progress', 'rejected', 'attached']);
+const aideStatusEnum = z.enum(['pending', 'in_progress', 'rejected', 'attached']);
+
+const sentryStatusEnum = z.enum(['pending', 'active', 'resolved', 'rejected']);
 
 const officerRankEnum = z.enum([
     'Police Constable (PC)',
@@ -81,6 +84,10 @@ export const uploadHelpdeskDocumentSchema = z.object({
         proposed_assignment: z.string().max(500).optional().nullable(),
         aide_status: z.string().pipe(aideStatusEnum).optional().nullable(),
         
+        // ─── Sentry Request Fields ──────────────────────────────────────────────
+        residence_location: z.string().max(200).optional().nullable(),
+        sentry_status: z.string().pipe(sentryStatusEnum).optional().nullable(),
+        
         // ─── Legacy fields ──────────────────────────────────────────────────────
         rank: z.string().max(50).optional().nullable(),
         reporting_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format').optional().nullable(),
@@ -112,6 +119,10 @@ export const listHelpdeskDocumentsSchema = z.object({
         current_station: z.string().optional(),
         current_unit: z.string().pipe(unitTypeEnum).optional(),
         aide_status: z.string().pipe(aideStatusEnum).optional(),
+        
+        // ─── Sentry Request Filters ──────────────────────────────────────────────
+        residence_location: z.string().optional(),
+        sentry_status: z.string().pipe(sentryStatusEnum).optional(),
         
         // ─── Legacy fields ──────────────────────────────────────────────────────
         rank: z.string().optional(),
@@ -237,6 +248,10 @@ export const linkDocumentSchema = z.object({
         proposed_assignment: z.string().max(500).optional().nullable(),
         aide_status: z.string().pipe(aideStatusEnum).optional().nullable(),
         
+        // ─── Sentry Request Fields ──────────────────────────────────────────────
+        residence_location: z.string().max(200).optional().nullable(),
+        sentry_status: z.string().pipe(sentryStatusEnum).optional().nullable(),
+        
         // ─── Legacy fields ──────────────────────────────────────────────────────
         rank: z.string().max(50).optional().nullable(),
         reporting_date: dateStringSchema.optional().nullable(),
@@ -309,6 +324,10 @@ export const bulkLinkDocumentsSchema = z.object({
         proposed_assignment: z.string().max(500).optional().nullable(),
         aide_status: z.string().pipe(aideStatusEnum).optional().nullable(),
         
+        // ─── Sentry Request Fields ──────────────────────────────────────────────
+        residence_location: z.string().max(200).optional().nullable(),
+        sentry_status: z.string().pipe(sentryStatusEnum).optional().nullable(),
+        
         // ─── Legacy fields ──────────────────────────────────────────────────────
         rank: z.string().max(50).optional().nullable(),
         reporting_date: dateStringSchema.optional().nullable(),
@@ -346,6 +365,10 @@ export const batchUploadSchema = z.object({
                 current_unit: z.string().pipe(unitTypeEnum).optional().nullable(),
                 proposed_assignment: z.string().max(500).optional().nullable(),
                 aide_status: z.string().pipe(aideStatusEnum).optional().nullable(),
+                
+                // ─── Sentry Request Fields ──────────────────────────────────────────────
+                residence_location: z.string().max(200).optional().nullable(),
+                sentry_status: z.string().pipe(sentryStatusEnum).optional().nullable(),
                 
                 // ─── Legacy fields ──────────────────────────────────────────────────────
                 rank: z.string().max(50).optional().nullable(),
@@ -385,6 +408,7 @@ export {
     documentStatusEnum,
     requestTypeEnum,
     aideStatusEnum,
+    sentryStatusEnum,
     officerRankEnum,
     unitTypeEnum,
     dateStringSchema,

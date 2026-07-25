@@ -10,6 +10,7 @@ export const documentTypeEnum = z.enum([
   'upload',
   'memo',
   'letter',
+  'certificate',
 ]);
 
 /**
@@ -45,6 +46,7 @@ export const documentCategoryEnum = z.enum([
   'orders',
   'drafts',
   'general',
+  'certificates',
 ]);
 
 export const refTypeEnum = z.enum([
@@ -367,7 +369,7 @@ export const sendToUserSchema = z.object({
 });
 
 // ════════════════════════════════════════════════════════════════════════
-//  Memo & Letter composition schemas
+//  Memo, Letter & Certificate composition schemas
 // ════════════════════════════════════════════════════════════════════════
 
 const baseComposeSchema = z.object({
@@ -392,6 +394,37 @@ export const composeLetterSchema = z.object({
     cc: z.string().optional(),
     enclosures: z.string().optional(),
   }),
+});
+
+// ─── Certificate composition schema ─────────────────────────────────────────
+
+// src/features/documents/documents.validator.ts
+
+export const composeCertificateSchema = z.object({
+  body: z
+    .object({
+      title: z.string().min(1, 'Certificate title is required').max(255).trim(),
+      ruleReference: z.string().max(255).trim().optional(),
+      ref: z.string().max(100).trim().optional(),
+      date: z.string().datetime().optional(),
+      body: z.string().min(1, 'Certificate body content is required'),
+      datedLine: z.string().min(1, 'Dated line is required').max(500).trim(),
+      signatoryLines: z.array(z.string().min(1, 'Signatory line cannot be empty')).min(1, 'At least one signatory line is required'),
+      draftedByInitials: z.string().max(50).trim().optional(),
+      logoUrl: z.string().url().optional(),
+      footerEmblemUrl: z.string().url().optional(),
+      footerAddress: z.string().max(500).trim().optional(),
+      footerContact: z.string().max(500).trim().optional(),
+      footerTagline: z.string().max(200).trim().optional(),
+      // ─── Fields for document storage ──────────────────────────────────────
+      from: z.string().max(255).trim().optional(),           // Maps to from_sender
+      to: z.string().max(500).trim().optional(),             // Maps to to_recipient
+      signatureName: z.string().max(255).trim().optional(),  // Maps to signature_name
+      signatureTitle: z.string().max(255).trim().optional(), // Maps to signature_title
+      department_id: z.string().uuid().optional(),
+      reference_no: z.string().max(100).trim().optional(),
+    })
+    .strict(),
 });
 
 // ════════════════════════════════════════════════════════════════════════
@@ -842,6 +875,7 @@ export type SendToUserInput = z.infer<typeof sendToUserSchema>['body'];
 
 export type ComposeMemoInput = z.infer<typeof composeMemoSchema>['body'];
 export type ComposeLetterInput = z.infer<typeof composeLetterSchema>['body'];
+export type ComposeCertificateInput = z.infer<typeof composeCertificateSchema>['body'];
 
 export type UpdateMarkInput = z.infer<typeof updateMarkSchema>['body'];
 

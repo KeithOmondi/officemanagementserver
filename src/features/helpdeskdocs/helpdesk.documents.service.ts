@@ -32,6 +32,7 @@ const DOC_SELECT = `
     d.rank, d.reporting_date,
     d.officer_rank, d.officer_name, d.employment_number,
     d.current_station, d.current_unit, d.proposed_assignment, d.aide_status,
+    d.residence_location, d.sentry_status,
     u.full_name as uploaded_by_name,
     au.full_name as approved_by_name,
     ru.full_name as returned_by_name
@@ -65,6 +66,9 @@ function cleanInput(input: CreateHelpdeskDocumentInput): CreateHelpdeskDocumentI
         current_unit: input.current_unit === null ? undefined : input.current_unit?.trim() || undefined,
         proposed_assignment: input.proposed_assignment === null ? undefined : input.proposed_assignment?.trim() || undefined,
         aide_status: input.aide_status === null ? undefined : input.aide_status?.trim() || undefined,
+        // ─── Sentry Request Fields ──────────────────────────────────────────────
+        residence_location: input.residence_location === null ? undefined : input.residence_location?.trim() || undefined,
+        sentry_status: input.sentry_status === null ? undefined : input.sentry_status?.trim() || undefined,
     };
 }
 
@@ -104,8 +108,9 @@ export class HelpdeskDocumentsService {
                      file_url, public_id, file_size, uploaded_by, status,
                      request_type, judge_name, rank, reporting_date,
                      officer_rank, officer_name, employment_number,
-                     current_station, current_unit, proposed_assignment, aide_status)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+                     current_station, current_unit, proposed_assignment, aide_status,
+                     residence_location, sentry_status)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
                  RETURNING id`,
                 [
                     cleaned.ref.trim(),
@@ -129,6 +134,8 @@ export class HelpdeskDocumentsService {
                     cleaned.current_unit || null,
                     cleaned.proposed_assignment || null,
                     cleaned.aide_status || null,
+                    cleaned.residence_location || null,
+                    cleaned.sentry_status || null,
                 ]
             );
 
@@ -258,6 +265,17 @@ export class HelpdeskDocumentsService {
         if (filters.aide_status) {
             query += ` AND d.aide_status = $${p}`;
             params.push(filters.aide_status);
+            p++;
+        }
+        // ─── Sentry Request Filters ──────────────────────────────────────────────
+        if (filters.residence_location) {
+            query += ` AND d.residence_location ILIKE $${p}`;
+            params.push(`%${filters.residence_location}%`);
+            p++;
+        }
+        if (filters.sentry_status) {
+            query += ` AND d.sentry_status = $${p}`;
+            params.push(filters.sentry_status);
             p++;
         }
         if (filters.date_from) {
@@ -802,7 +820,10 @@ export class HelpdeskDocumentsService {
         currentStation?: string,
         currentUnit?: string,
         proposedAssignment?: string,
-        aideStatus?: string
+        aideStatus?: string,
+        // ─── Sentry Request Fields ──────────────────────────────────────────────
+        residenceLocation?: string,
+        sentryStatus?: string
     ): Promise<HelpdeskDocument> {
         const doc = await this.findById(id);
         if (!doc) throw new AppError(404, 'Document not found');
@@ -890,6 +911,19 @@ export class HelpdeskDocumentsService {
             p++;
         }
 
+        // ─── Sentry Request Fields ──────────────────────────────────────────────
+        if (residenceLocation !== undefined) {
+            updates.push(`residence_location = $${p}`);
+            values.push(residenceLocation || null);
+            p++;
+        }
+
+        if (sentryStatus !== undefined) {
+            updates.push(`sentry_status = $${p}`);
+            values.push(sentryStatus || null);
+            p++;
+        }
+
         updates.push(`updated_at = NOW()`);
         values.push(id);
 
@@ -922,7 +956,10 @@ export class HelpdeskDocumentsService {
         currentStation?: string,
         currentUnit?: string,
         proposedAssignment?: string,
-        aideStatus?: string
+        aideStatus?: string,
+        // ─── Sentry Request Fields ──────────────────────────────────────────────
+        residenceLocation?: string,
+        sentryStatus?: string
     ): Promise<{ success: string[]; failed: string[] }> {
         const success: string[] = [];
         const failed: string[] = [];
@@ -943,7 +980,9 @@ export class HelpdeskDocumentsService {
                     currentStation,
                     currentUnit,
                     proposedAssignment,
-                    aideStatus
+                    aideStatus,
+                    residenceLocation,
+                    sentryStatus
                 );
                 success.push(id);
             } catch (error) {

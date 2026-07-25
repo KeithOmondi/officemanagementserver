@@ -16,7 +16,8 @@ export type DocumentEntityType =
     | 'protocol'         // Protocol event documents
     | 'club'             // Club membership documents
     | 'utility_memo'     // Utility memo documents
-    | 'aide';            // Aide request documents
+    | 'aide'             // Aide request documents
+    | 'sentry';          // Sentry request documents
 
 export type DocumentStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected' | 'returned';
 
@@ -62,6 +63,10 @@ export interface HelpdeskDocument {
     current_unit?: string | null;      // Current unit (KPS, APS, GSU, etc.)
     proposed_assignment?: string | null; // Proposed assignment description
     aide_status?: string | null;       // Aide request status (in_progress, rejected, attached)
+    
+    // ─── Sentry Request Fields ────────────────────────────────────────────────
+    residence_location?: string | null; // Residence location for sentry
+    sentry_status?: string | null;      // Sentry request status (pending, active, resolved, rejected)
     
     // ─── Legacy fields ──────────────────────────────────────────────────────
     rank?: string | null;              // Officer's rank (deprecated, use officer_rank)
@@ -109,6 +114,10 @@ export interface CreateHelpdeskDocumentInput {
     proposed_assignment?: string | null;
     aide_status?: string | null;
     
+    // ─── Sentry Request Fields ──────────────────────────────────────────────
+    residence_location?: string | null;
+    sentry_status?: string | null;
+    
     // ─── Legacy fields ──────────────────────────────────────────────────────
     rank?: string | null;
     reporting_date?: string | null;
@@ -147,6 +156,10 @@ export interface HelpdeskDocumentFilters {
     current_station?: string;   // Filter by current station
     current_unit?: string;      // Filter by current unit
     aide_status?: string;       // Filter by aide status
+    
+    // ─── Sentry Request Filters ──────────────────────────────────────────────
+    residence_location?: string; // Filter by residence location
+    sentry_status?: string;      // Filter by sentry status
     
     // ─── Legacy fields ──────────────────────────────────────────────────────
     rank?: string;              // Filter by rank
@@ -189,6 +202,10 @@ export interface LinkDocumentInput {
     current_unit?: string | null;
     proposed_assignment?: string | null;
     aide_status?: string | null;
+    
+    // ─── Sentry Request Fields ──────────────────────────────────────────────
+    residence_location?: string | null;
+    sentry_status?: string | null;
     
     // ─── Legacy fields ──────────────────────────────────────────────────────
     rank?: string | null;
@@ -249,6 +266,7 @@ export const DOCUMENT_ENTITY_LABELS: Record<DocumentEntityType, string> = {
     club: 'Club Membership',
     utility_memo: 'Utility Memo',
     aide: 'Aide Request',
+    sentry: 'Sentry Request',
 };
 
 export const DOCUMENT_ENTITY_ICONS: Record<DocumentEntityType, string> = {
@@ -266,6 +284,7 @@ export const DOCUMENT_ENTITY_ICONS: Record<DocumentEntityType, string> = {
     club: 'Users',
     utility_memo: 'FileText',
     aide: 'Shield',
+    sentry: 'Home',
 };
 
 export const DOCUMENT_ENTITY_COLORS: Record<DocumentEntityType, string> = {
@@ -283,6 +302,7 @@ export const DOCUMENT_ENTITY_COLORS: Record<DocumentEntityType, string> = {
     club: 'text-purple-600 bg-purple-50',
     utility_memo: 'text-amber-600 bg-amber-50',
     aide: 'text-blue-600 bg-blue-50',
+    sentry: 'text-emerald-600 bg-emerald-50',
 };
 
 export const DOCUMENT_STATUS_LABELS: Record<DocumentStatus, string> = {
@@ -360,7 +380,8 @@ export function isDocumentEntityType(value: string): value is DocumentEntityType
         'protocol',
         'club',
         'utility_memo',
-        'aide'
+        'aide',
+        'sentry'
     ].includes(value);
 }
 
@@ -482,6 +503,14 @@ export function buildDocumentFilters(filters: HelpdeskDocumentFilters): Record<s
     }
     if (filters.aide_status) {
         result.aide_status = filters.aide_status;
+    }
+    
+    // ─── Sentry Request Filters ──────────────────────────────────────────────
+    if (filters.residence_location) {
+        result.residence_location = filters.residence_location;
+    }
+    if (filters.sentry_status) {
+        result.sentry_status = filters.sentry_status;
     }
     
     // ─── Legacy fields ──────────────────────────────────────────────────────

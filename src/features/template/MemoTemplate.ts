@@ -83,7 +83,7 @@ export function getMemoHTML(data: MemoData): string {
   const fields = [
     { label: "TO", value: to },
     { label: "FROM", value: from },
-    { label: "CC", value: "" }, // Left flexible if needed
+    { label: "CC", value: "" },
     { label: "REF", value: ref },
     { label: "DATE", value: date },
     { label: "SUBJECT", value: subject },
@@ -121,7 +121,6 @@ export function getMemoHTML(data: MemoData): string {
     .header { text-align: center; margin-bottom: 15px; }
     .header img { height: 78px; width: auto; display: inline-block; }
     
-    /* Header Titles: Arial Bold 18 & 16 */
     .title-block { text-align: center; margin: 18px 0 22px; font-family: Arial, Helvetica, sans-serif; }
     .title-block .office-title { font-size: 18px; font-weight: bold; text-transform: uppercase; line-height: 1.3; }
     .title-block .memo-title { font-size: 16px; font-weight: bold; text-transform: uppercase; line-height: 1.3; margin-top: 4px; }
@@ -129,7 +128,6 @@ export function getMemoHTML(data: MemoData): string {
     .top-rule { border-top: 2.5px solid #000; margin-bottom: 10px; }
     .fields { margin: 10px 0 0; }
     
-    /* Fields: Tahoma Bold 12pt (16px) */
     .field { display: flex; font-size: 12pt; font-weight: bold; line-height: 2; font-family: Tahoma, Geneva, Verdana, sans-serif; }
     .field .label { width: 110px; flex-shrink: 0; text-transform: uppercase; }
     .field .colon { width: 25px; flex-shrink: 0; }
@@ -137,7 +135,6 @@ export function getMemoHTML(data: MemoData): string {
     
     .bottom-rule { border-top: 2.5px solid #000; margin: 12px 0 30px; }
     
-    /* Body: Tahoma Bold 12pt (16px) */
     .body-content { 
       margin: 0 0 30px; 
       font-size: 12pt; 
@@ -167,12 +164,19 @@ export function getMemoHTML(data: MemoData): string {
       user-select: none;
     }
 
-    /* Signature: Tahoma Bold 12pt (16px) */
+    /* Gap from the signature anchor to the printed name/title below, in
+       Puppeteer's 96dpi rendering (1px ≈ 0.75pt at print time). This
+       margin, plus signature-section's own margin-top, is the room the
+       embedded signature image has to sit in. Raised from 45px to 90px —
+       the previous value left only ~56pt total gap, which after
+       ascent/descent clearance overhead (see embedSignature.ts) was tight
+       enough to overlap the signatory name/title on some signatures.
+       Brought in line with Certificate's gap, which has been reliable. */
     .signature {
       font-size: 12pt;
       font-weight: bold;
       text-align: left;
-      margin-top: 45px;
+      margin-top: 90px;
       page-break-inside: avoid;
       break-inside: avoid;
       font-family: Tahoma, Geneva, Verdana, sans-serif;
@@ -180,10 +184,8 @@ export function getMemoHTML(data: MemoData): string {
     .signature .signatory-name { text-transform: uppercase; margin-bottom: 2px; }
     .signature .org-unit { text-transform: uppercase; }
     
-    /* Enclosure: Tahoma 12pt */
     .signature .enclosure { font-weight: normal; font-size: 12pt; margin-top: 8px; }
     
-    /* Drafted By: Tahoma 6pt Italic Underline */
     .signature .drafted-by { 
       font-weight: normal; 
       font-style: italic; 

@@ -19,6 +19,7 @@ import {
   sendToUserSchema,
   composeMemoSchema,
   composeLetterSchema,
+  composeCertificateSchema,
   updateMarkSchema,
   redirectToFolderSchema,
   removeFromFolderSchema,
@@ -140,7 +141,7 @@ export const documentController = {
     return sendSuccess(res, doc, 'Document uploaded successfully', 201);
   }),
 
-  // ── Compose Memo & Letter ──────────────────────────────────────────────────
+  // ── Compose Memo, Letter & Certificate ──────────────────────────────────────
 
   composeMemo: asyncHandler(async (req: Request, res: Response) => {
     const result = composeMemoSchema.safeParse({ body: req.body });
@@ -160,6 +161,18 @@ export const documentController = {
     safeDocumentCreated(req, doc);
     
     return sendSuccess(res, doc, 'Letter generated successfully', 201);
+  }),
+
+  // ─── ADDED: Compose Certificate ─────────────────────────────────────────────
+
+  composeCertificate: asyncHandler(async (req: Request, res: Response) => {
+    const result = composeCertificateSchema.safeParse({ body: req.body });
+    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid certificate data');
+    const doc = await DocumentService.generateCertificate(result.data.body, req.user!.id);
+    
+    safeDocumentCreated(req, doc);
+    
+    return sendSuccess(res, doc, 'Certificate generated successfully', 201);
   }),
 
   // ── Send to User ─────────────────────────────────────────────────────────────
@@ -244,9 +257,9 @@ export const documentController = {
       bodyResult.data.body.signature_title !== undefined ||
       bodyResult.data.body.from_first !== undefined;
 
-    if (hasMemoFields && (doc.type === 'memo' || doc.type === 'letter')) {
+    if (hasMemoFields && (doc.type === 'memo' || doc.type === 'letter' || doc.type === 'certificate')) {
       if (req.user!.role !== 'super_admin') {
-        throw new AppError(403, 'Only super administrators can edit memo and letter fields (TO, FROM, DATE, SUBJECT, CC, ENCLOSURES, SIGNATURE, SIGNATURE ORDER, SIGNATURE PLACEMENT)');
+        throw new AppError(403, 'Only super administrators can edit memo, letter, and certificate fields (TO, FROM, DATE, SUBJECT, CC, ENCLOSURES, SIGNATURE, SIGNATURE ORDER, SIGNATURE PLACEMENT)');
       }
     }
 
@@ -486,7 +499,8 @@ export const documentController = {
     const doc = await DocumentService.findById(paramsResult.data.params.id);
     if (!doc) throw new AppError(404, 'Document not found');
 
-    const isTemplatedDocument = doc.type === 'memo' || doc.type === 'letter';
+    // ─── UPDATED: Include certificate in templated document check ────────────
+    const isTemplatedDocument = doc.type === 'memo' || doc.type === 'letter' || doc.type === 'certificate';
 
     const positionX = req.body?.position_x as number | undefined;
     const positionY = req.body?.position_y as number | undefined;

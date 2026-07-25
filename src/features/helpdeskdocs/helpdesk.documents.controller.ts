@@ -228,7 +228,7 @@ export class HelpdeskDocumentsController {
                 'circuit', 'bench', 'partHeard', 'serviceWeek', 
                 'otherPayment', 'ticket', 'medicalClaim', 
                 'generalRequest', 'securityRequest',
-                'visa', 'protocol', 'club', 'utility_memo', 'aide'
+                'visa', 'protocol', 'club', 'utility_memo', 'aide', 'sentry'
             ] as const);
             
             const entity_id = getQueryParam(req, 'entity_id');
@@ -260,6 +260,10 @@ export class HelpdeskDocumentsController {
             const current_unit = getQueryParam(req, 'current_unit');
             const aide_status = getQueryParam(req, 'aide_status');
 
+            // ─── Sentry Request Filters ──────────────────────────────────────────
+            const residence_location = getQueryParam(req, 'residence_location');
+            const sentry_status = getQueryParam(req, 'sentry_status');
+
             const docs = await HelpdeskDocumentsService.findAll({
                 entity_type,
                 entity_id,
@@ -284,6 +288,9 @@ export class HelpdeskDocumentsController {
                 current_station,
                 current_unit,
                 aide_status,
+                // ─── Sentry Request Filters ──────────────────────────────────────
+                residence_location,
+                sentry_status,
             });
 
             return sendSuccess(res, docs, `Found ${docs.length} documents.`);
@@ -502,138 +509,150 @@ export class HelpdeskDocumentsController {
 
     // ─── Link Document to Entity ─────────────────────────────────────────────
 
-    // ─── Link Document to Entity ─────────────────────────────────────────────
+    static async link(req: Request, res: Response, next: NextFunction) {
+        try {
+            const id = getParam(req, 'id');
+            const { 
+                entity_type, 
+                entity_id, 
+                request_type, 
+                judge_name,
+                rank,
+                reporting_date,
+                // ─── Aide Request Fields ──────────────────────────────────────
+                officer_rank,
+                officer_name,
+                employment_number,
+                current_station,
+                current_unit,
+                proposed_assignment,
+                aide_status,
+                // ─── Sentry Request Fields ──────────────────────────────────────
+                residence_location,
+                sentry_status,
+            } = req.body as LinkDocumentBody;
 
-static async link(req: Request, res: Response, next: NextFunction) {
-    try {
-        const id = getParam(req, 'id');
-        const { 
-            entity_type, 
-            entity_id, 
-            request_type, 
-            judge_name,
-            rank,
-            reporting_date,
-            // ─── Aide Request Fields ──────────────────────────────────────
-            officer_rank,
-            officer_name,
-            employment_number,
-            current_station,
-            current_unit,
-            proposed_assignment,
-            aide_status,
-        } = req.body as LinkDocumentBody;
+            if (!entity_type) {
+                throw new AppError(400, 'Entity type is required');
+            }
+            if (!entity_id) {
+                throw new AppError(400, 'Entity ID is required');
+            }
 
-        if (!entity_type) {
-            throw new AppError(400, 'Entity type is required');
+            // ─── Convert null to undefined ────────────────────────────────────────
+            const cleanedRank = rank === null ? undefined : rank;
+            const cleanedReportingDate = reporting_date === null ? undefined : reporting_date;
+            const cleanedOfficerRank = officer_rank === null ? undefined : officer_rank;
+            const cleanedOfficerName = officer_name === null ? undefined : officer_name;
+            const cleanedEmploymentNumber = employment_number === null ? undefined : employment_number;
+            const cleanedCurrentStation = current_station === null ? undefined : current_station;
+            const cleanedCurrentUnit = current_unit === null ? undefined : current_unit;
+            const cleanedProposedAssignment = proposed_assignment === null ? undefined : proposed_assignment;
+            const cleanedAideStatus = aide_status === null ? undefined : aide_status;
+            const cleanedResidenceLocation = residence_location === null ? undefined : residence_location;
+            const cleanedSentryStatus = sentry_status === null ? undefined : sentry_status;
+
+            const doc = await HelpdeskDocumentsService.linkToEntity(
+                id, 
+                entity_type, 
+                entity_id,
+                request_type,
+                judge_name,
+                cleanedRank,
+                cleanedReportingDate,
+                // ─── Aide Request Fields ──────────────────────────────────────
+                cleanedOfficerRank,
+                cleanedOfficerName,
+                cleanedEmploymentNumber,
+                cleanedCurrentStation,
+                cleanedCurrentUnit,
+                cleanedProposedAssignment,
+                cleanedAideStatus,
+                // ─── Sentry Request Fields ──────────────────────────────────────
+                cleanedResidenceLocation,
+                cleanedSentryStatus
+            );
+
+            return sendSuccess(res, doc, 'Document linked successfully.');
+        } catch (err) {
+            next(err);
         }
-        if (!entity_id) {
-            throw new AppError(400, 'Entity ID is required');
-        }
-
-        // ─── Convert null to undefined ────────────────────────────────────────
-        const cleanedRank = rank === null ? undefined : rank;
-        const cleanedReportingDate = reporting_date === null ? undefined : reporting_date;
-        const cleanedOfficerRank = officer_rank === null ? undefined : officer_rank;
-        const cleanedOfficerName = officer_name === null ? undefined : officer_name;
-        const cleanedEmploymentNumber = employment_number === null ? undefined : employment_number;
-        const cleanedCurrentStation = current_station === null ? undefined : current_station;
-        const cleanedCurrentUnit = current_unit === null ? undefined : current_unit;
-        const cleanedProposedAssignment = proposed_assignment === null ? undefined : proposed_assignment;
-        const cleanedAideStatus = aide_status === null ? undefined : aide_status;
-
-        const doc = await HelpdeskDocumentsService.linkToEntity(
-            id, 
-            entity_type, 
-            entity_id,
-            request_type,
-            judge_name,
-            cleanedRank,
-            cleanedReportingDate,
-            // ─── Aide Request Fields ──────────────────────────────────────
-            cleanedOfficerRank,
-            cleanedOfficerName,
-            cleanedEmploymentNumber,
-            cleanedCurrentStation,
-            cleanedCurrentUnit,
-            cleanedProposedAssignment,
-            cleanedAideStatus
-        );
-
-        return sendSuccess(res, doc, 'Document linked successfully.');
-    } catch (err) {
-        next(err);
     }
-}
 
     // ─── Bulk Link Documents ─────────────────────────────────────────────────
 
-    // ─── Bulk Link Documents ─────────────────────────────────────────────────
+    static async bulkLink(req: Request, res: Response, next: NextFunction) {
+        try {
+            const { 
+                document_ids, 
+                entity_type, 
+                entity_id, 
+                request_type, 
+                judge_name,
+                rank,
+                reporting_date,
+                // ─── Aide Request Fields ──────────────────────────────────────
+                officer_rank,
+                officer_name,
+                employment_number,
+                current_station,
+                current_unit,
+                proposed_assignment,
+                aide_status,
+                // ─── Sentry Request Fields ──────────────────────────────────────
+                residence_location,
+                sentry_status,
+            } = req.body as BulkLinkDocumentsBody;
 
-static async bulkLink(req: Request, res: Response, next: NextFunction) {
-    try {
-        const { 
-            document_ids, 
-            entity_type, 
-            entity_id, 
-            request_type, 
-            judge_name,
-            rank,
-            reporting_date,
-            // ─── Aide Request Fields ──────────────────────────────────────
-            officer_rank,
-            officer_name,
-            employment_number,
-            current_station,
-            current_unit,
-            proposed_assignment,
-            aide_status,
-        } = req.body as BulkLinkDocumentsBody;
+            if (!document_ids || document_ids.length === 0) {
+                throw new AppError(400, 'At least one document ID is required');
+            }
+            if (!entity_type) {
+                throw new AppError(400, 'Entity type is required');
+            }
+            if (!entity_id) {
+                throw new AppError(400, 'Entity ID is required');
+            }
 
-        if (!document_ids || document_ids.length === 0) {
-            throw new AppError(400, 'At least one document ID is required');
+            // ─── Convert null to undefined ────────────────────────────────────────
+            const cleanedRank = rank === null ? undefined : rank;
+            const cleanedReportingDate = reporting_date === null ? undefined : reporting_date;
+            const cleanedOfficerRank = officer_rank === null ? undefined : officer_rank;
+            const cleanedOfficerName = officer_name === null ? undefined : officer_name;
+            const cleanedEmploymentNumber = employment_number === null ? undefined : employment_number;
+            const cleanedCurrentStation = current_station === null ? undefined : current_station;
+            const cleanedCurrentUnit = current_unit === null ? undefined : current_unit;
+            const cleanedProposedAssignment = proposed_assignment === null ? undefined : proposed_assignment;
+            const cleanedAideStatus = aide_status === null ? undefined : aide_status;
+            const cleanedResidenceLocation = residence_location === null ? undefined : residence_location;
+            const cleanedSentryStatus = sentry_status === null ? undefined : sentry_status;
+
+            const result = await HelpdeskDocumentsService.bulkLinkToEntity(
+                document_ids,
+                entity_type,
+                entity_id,
+                request_type,
+                judge_name,
+                cleanedRank,
+                cleanedReportingDate,
+                // ─── Aide Request Fields ──────────────────────────────────────
+                cleanedOfficerRank,
+                cleanedOfficerName,
+                cleanedEmploymentNumber,
+                cleanedCurrentStation,
+                cleanedCurrentUnit,
+                cleanedProposedAssignment,
+                cleanedAideStatus,
+                // ─── Sentry Request Fields ──────────────────────────────────────
+                cleanedResidenceLocation,
+                cleanedSentryStatus
+            );
+
+            return sendSuccess(res, result, `${result.success.length} documents linked successfully.`);
+        } catch (err) {
+            next(err);
         }
-        if (!entity_type) {
-            throw new AppError(400, 'Entity type is required');
-        }
-        if (!entity_id) {
-            throw new AppError(400, 'Entity ID is required');
-        }
-
-        // ─── Convert null to undefined ────────────────────────────────────────
-        const cleanedRank = rank === null ? undefined : rank;
-        const cleanedReportingDate = reporting_date === null ? undefined : reporting_date;
-        const cleanedOfficerRank = officer_rank === null ? undefined : officer_rank;
-        const cleanedOfficerName = officer_name === null ? undefined : officer_name;
-        const cleanedEmploymentNumber = employment_number === null ? undefined : employment_number;
-        const cleanedCurrentStation = current_station === null ? undefined : current_station;
-        const cleanedCurrentUnit = current_unit === null ? undefined : current_unit;
-        const cleanedProposedAssignment = proposed_assignment === null ? undefined : proposed_assignment;
-        const cleanedAideStatus = aide_status === null ? undefined : aide_status;
-
-        const result = await HelpdeskDocumentsService.bulkLinkToEntity(
-            document_ids,
-            entity_type,
-            entity_id,
-            request_type,
-            judge_name,
-            cleanedRank,
-            cleanedReportingDate,
-            // ─── Aide Request Fields ──────────────────────────────────────
-            cleanedOfficerRank,
-            cleanedOfficerName,
-            cleanedEmploymentNumber,
-            cleanedCurrentStation,
-            cleanedCurrentUnit,
-            cleanedProposedAssignment,
-            cleanedAideStatus
-        );
-
-        return sendSuccess(res, result, `${result.success.length} documents linked successfully.`);
-    } catch (err) {
-        next(err);
     }
-}
 
     // ─── Bulk Update Status ──────────────────────────────────────────────────
 

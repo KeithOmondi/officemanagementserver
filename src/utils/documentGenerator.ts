@@ -5,8 +5,10 @@ import pLimit from 'p-limit';
 import { AppError } from './response';
 import { getMemoHTML, MemoData } from '../features/template/MemoTemplate';
 import { getLetterHTML, LetterData } from '../features/template/LetterTemplate';
+import { getCertificateHTML, CertificateData } from '../features/template/CertificateTemplate';
 
-type TemplateType = 'memo' | 'letter';
+type TemplateType = 'memo' | 'letter' | 'certificate';
+type TemplateData = MemoData | LetterData | CertificateData;
 
 // Caps concurrent PDF generations server-wide
 const limit = pLimit(3);
@@ -69,17 +71,33 @@ async function getBrowser(): Promise<Browser> {
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function renderTemplateHTML(type: TemplateType, data: TemplateData): string {
+  switch (type) {
+    case 'memo':
+      return getMemoHTML(data as MemoData);
+    case 'letter':
+      return getLetterHTML(data as LetterData);
+    case 'certificate':
+      return getCertificateHTML(data as CertificateData);
+    default: {
+      // Exhaustiveness check — if a new TemplateType is added without a
+      // case here, this will fail to compile rather than silently
+      // producing a blank PDF at runtime.
+      const _exhaustive: never = type;
+      throw new AppError(400, `Unknown template type: ${_exhaustive}`);
+    }
+  }
+}
+
 export async function generateDocumentFromTemplate(
   type: TemplateType,
-  data: MemoData | LetterData
+  data: TemplateData
 ): Promise<Buffer> {
   return limit(async () => {
     try {
       console.log(`📄 Generating ${type} PDF from HTML template...`);
 
-      const html = type === 'memo'
-        ? getMemoHTML(data as MemoData)
-        : getLetterHTML(data as LetterData);
+      const html = renderTemplateHTML(type, data);
 
       const browser = await getBrowser();
       const page = await browser.newPage();
@@ -130,7 +148,7 @@ export async function closeBrowser() {
 
 export async function generateDocumentFromTemplateAsDocx(
   type: TemplateType,
-  data: MemoData | LetterData
+  data: TemplateData
 ): Promise<Buffer> {
   console.warn('⚠️ generateDocumentFromTemplateAsDocx is deprecated, use generateDocumentFromTemplate instead');
   return generateDocumentFromTemplate(type, data);

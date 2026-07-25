@@ -3,7 +3,7 @@
 // ─── Type enums ────────────────────────────────────────────────────────────────
 
 export type DocumentType =
-  | 'memo' | 'letter' | 'judgment' | 'ruling'
+  | 'memo' | 'letter' | 'certificate' | 'judgment' | 'ruling'
   | 'order' | 'correspondence' | 'upload' | 'ticket';
 
 export type DocumentStatus =
@@ -21,7 +21,7 @@ export type DocumentStatus =
 
 export type DocumentCategory =
   | 'judgments' | 'rulings' | 'correspondence'
-  | 'orders' | 'drafts' | 'general';
+  | 'orders' | 'drafts' | 'general' | 'certificates';
 
 export type RoutePriority = 'low' | 'normal' | 'urgent';
 
@@ -114,7 +114,6 @@ export interface DocumentMark {
   assigned_to: string | null;
   assigned_to_name: string | null;
   instructions: string | null;
-  // REMOVED: bring_up_date: string | null; // Moved to Document level
   priority: RoutePriority;
   marked_at: Date;
   acknowledged_at: Date | null;
@@ -572,4 +571,76 @@ export interface MyFollowUpSummary {
   completed: number;
   filed_away: number;
   total: number;
+}
+
+// ─── Certificate Template Types ────────────────────────────────────────────────
+
+export interface CertificateTemplateData {
+  title: string;
+  ruleReference?: string;
+  ref?: string;
+  date?: string;
+  body: string;
+  datedLine: string;
+  signatoryLines: string[];
+  draftedByInitials?: string;
+  logoUrl?: string;
+  footerEmblemUrl?: string;
+  footerAddress?: string;
+  footerContact?: string;
+  footerTagline?: string;
+}
+
+// ─── Certificate Request Types ─────────────────────────────────────────────────
+
+export interface CreateCertificateInput {
+  title: string;
+  ruleReference?: string;
+  ref?: string;
+  date?: string;
+  body: string;
+  datedLine: string;
+  signatoryLines: string[];
+  draftedByInitials?: string;
+  logoUrl?: string;
+  footerEmblemUrl?: string;
+  footerAddress?: string;
+  footerContact?: string;
+  footerTagline?: string;
+  // Document base fields
+  title_display: string;
+  type: 'certificate';
+  category?: DocumentCategory;
+  reference_no?: string;
+  assigned_to?: string;
+  department_id?: string;
+}
+
+export interface UpdateCertificateInput extends Partial<CreateCertificateInput> {
+  id: string;
+}
+
+// ─── Compose Certificate Input (for the composition endpoint) ─────────────────
+
+export interface ComposeCertificateInput {
+  title: string;
+  ruleReference?: string;
+  ref?: string;
+  date?: string;
+  body: string;
+  datedLine: string;
+  signatoryLines: string[];
+  draftedByInitials?: string;
+  logoUrl?: string;
+  footerEmblemUrl?: string;
+  footerAddress?: string;
+  footerContact?: string;
+  footerTagline?: string;
+  // Document storage fields
+  from?: string;              // Maps to from_sender
+  to?: string;                // Maps to to_recipient
+  signatureName?: string;     // Maps to signature_name
+  signatureTitle?: string;    // Maps to signature_title
+  department_id?: string;
+  reference_no?: string;
 }

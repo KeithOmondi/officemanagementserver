@@ -10,11 +10,11 @@ import type {
     ReturnDocumentBody,
     AddCommentBody,
     LinkDocumentBody,
-    ListHelpdeskDocumentsQuery,
     BatchUploadBody,
     BulkLinkDocumentsBody,
     BulkUpdateStatusBody,
     UpdateEStampBody,
+    UpdateDocumentFileBody,
 } from './helpdesk.documents.schema';
 import { sendSuccess } from '../../utils/response';
 import { AppError } from '../../utils/response';
@@ -138,7 +138,6 @@ export class HelpdeskDocumentsController {
                 });
             }
 
-            // Clean the body before using it
             const rawBody = req.body as UploadHelpdeskDocumentBody;
             const cleanedBody = cleanFormDataBody(rawBody);
             const body = cleanedBody as UploadHelpdeskDocumentBody;
@@ -155,6 +154,45 @@ export class HelpdeskDocumentsController {
             const doc = await HelpdeskDocumentsService.upload(file, body, userId);
 
             return sendSuccess(res, doc, 'Document saved successfully.', 201);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    // ─── Update Document File ─────────────────────────────────────────────────
+
+    static async updateDocumentFile(req: Request, res: Response, next: NextFunction) {
+        try {
+            const id = getParam(req, 'id');
+            const file = req.file;
+            
+            if (!file) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'No file provided. Please upload a valid document file.'
+                });
+            }
+
+            const rawBody = req.body as UpdateDocumentFileBody;
+            const body = cleanFormDataBody(rawBody) as UpdateDocumentFileBody;
+            
+            const userId = (req as any).user?.id as string;
+
+            if (!userId) {
+                return res.status(401).json({
+                    success: false,
+                    message: 'User not authenticated'
+                });
+            }
+
+            const doc = await HelpdeskDocumentsService.updateDocumentFile(
+                id,
+                file,
+                body,
+                userId
+            );
+
+            return sendSuccess(res, doc, 'Document updated successfully.');
         } catch (err) {
             next(err);
         }
@@ -182,7 +220,6 @@ export class HelpdeskDocumentsController {
                 });
             }
 
-            // Clean each document in the batch
             const cleanedDocuments = rawBody.documents.map(doc => cleanFormDataBody(doc));
             const body = { documents: cleanedDocuments } as BatchUploadBody;
 
@@ -687,18 +724,15 @@ export class HelpdeskDocumentsController {
             const userId = (req as any).user?.id;
             const userRole = (req as any).user?.role;
 
-            // First check if document exists
             const doc = await HelpdeskDocumentsService.findById(id);
             if (!doc) {
                 throw new AppError(404, 'Document not found');
             }
 
-            // Check if document is already deleted
             if (!doc.is_active) {
                 throw new AppError(400, 'Document is already deleted');
             }
 
-            // Permission check - only uploader, dept_head, or super_admin can delete
             const isOwner = doc.uploaded_by === userId;
             const isDeptHead = userRole === 'dept_head';
             const isSuperAdmin = userRole === 'super_admin';
@@ -707,12 +741,10 @@ export class HelpdeskDocumentsController {
                 throw new AppError(403, 'You do not have permission to delete this document');
             }
 
-            // Prevent deleting approved documents unless super_admin
             if (doc.status === 'approved' && !isSuperAdmin) {
                 throw new AppError(403, 'Only super admins can delete approved documents');
             }
 
-            // Prevent deleting pending approval documents unless super_admin or dept_head
             if (doc.status === 'pending_approval' && !isSuperAdmin && !isDeptHead) {
                 throw new AppError(403, 'Only super admins or department heads can delete pending documents');
             }
@@ -732,7 +764,6 @@ export class HelpdeskDocumentsController {
             const id = getParam(req, 'id');
             const userRole = (req as any).user?.role;
 
-            // Only super_admin can hard delete
             if (userRole !== 'super_admin') {
                 throw new AppError(403, 'Only super admins can permanently delete documents');
             }

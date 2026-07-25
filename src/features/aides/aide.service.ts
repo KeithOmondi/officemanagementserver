@@ -68,6 +68,13 @@ export class AideRequestDuplicateError extends AppError {
   }
 }
 
+export class AideRequestInvalidStatusError extends AppError {
+  constructor(currentStatus: string, targetStatus: string) {
+    super(400, `Cannot transition from "${currentStatus}" to "${targetStatus}"`);
+    this.name = 'AideRequestInvalidStatusError';
+  }
+}
+
 export class SentryRequestNotFoundError extends AppError {
   constructor(id: string) {
     super(404, `Sentry request with ID "${id}" not found`);
@@ -82,6 +89,13 @@ export class SentryRequestDuplicateError extends AppError {
       : 'A duplicate sentry request already exists';
     super(409, message);
     this.name = 'SentryRequestDuplicateError';
+  }
+}
+
+export class SentryRequestInvalidStatusError extends AppError {
+  constructor(currentStatus: string, targetStatus: string) {
+    super(400, `Cannot transition from "${currentStatus}" to "${targetStatus}"`);
+    this.name = 'SentryRequestInvalidStatusError';
   }
 }
 
@@ -329,6 +343,104 @@ export class AideService {
     }
     return result;
   }
+
+  // ─── Aide Approve ────────────────────────────────────────────────────────────
+
+  /**
+   * Approve an aide request (Super Admin only)
+   * Transitions status from 'in_progress' to 'attached'
+   */
+  // src/services/aide.service.ts - Fix for approveAideRequest
+
+static async approveAideRequest(
+  id: string,
+  comments?: string
+): Promise<AideRequest> {
+  console.log(`[AideService] Approving aide request ${id}`);
+
+  // Check if exists and get current status
+  const existing = await this.findAideByIdOrThrow(id);
+
+  // Validate status transition
+  if (existing.status !== 'in_progress') {
+    throw new AideRequestInvalidStatusError(existing.status, 'attached');
+  }
+
+  // Build the remarks update based on whether comments are provided
+  let remarksValue: string | null;
+  if (comments) {
+    remarksValue = existing.remarks 
+      ? `${existing.remarks}\n[Approved] ${comments}`
+      : `[Approved] ${comments}`;
+  } else {
+    remarksValue = existing.remarks 
+      ? `${existing.remarks}\n[Approved]`
+      : '[Approved]';
+  }
+
+  // Update the status to 'attached'
+  await pool.query(
+    `UPDATE aide_requests 
+     SET status = 'attached', 
+         remarks = $1,
+         updated_at = NOW() 
+     WHERE id = $2`,
+    [remarksValue, id]
+  );
+
+  console.log(`[AideService] Aide request ${id} approved successfully`);
+  const result = await this.findAideById(id);
+  if (!result) {
+    throw new AppError(500, 'Failed to retrieve approved aide request');
+  }
+  return result;
+}
+
+  // ─── Aide Return ─────────────────────────────────────────────────────────────
+
+  /**
+   * Return an aide request to the requester (Super Admin only)
+   * Transitions status from 'in_progress' to 'rejected'
+   */
+static async returnAideRequest(
+  id: string,
+  reason: string
+): Promise<AideRequest> {
+  console.log(`[AideService] Returning aide request ${id}`);
+
+  // Check if exists and get current status
+  const existing = await this.findAideByIdOrThrow(id);
+
+  // Validate status transition
+  if (existing.status !== 'in_progress') {
+    throw new AideRequestInvalidStatusError(existing.status, 'rejected');
+  }
+
+  // Build the remarks update with the reason
+  let remarksValue: string;
+  if (existing.remarks) {
+    remarksValue = `${existing.remarks}\n[Returned] ${reason}`;
+  } else {
+    remarksValue = `[Returned] ${reason}`;
+  }
+
+  // Update the status to 'rejected'
+  await pool.query(
+    `UPDATE aide_requests 
+     SET status = 'rejected', 
+         remarks = $1,
+         updated_at = NOW() 
+     WHERE id = $2`,
+    [remarksValue, id]
+  );
+
+  console.log(`[AideService] Aide request ${id} returned successfully`);
+  const result = await this.findAideById(id);
+  if (!result) {
+    throw new AppError(500, 'Failed to retrieve returned aide request');
+  }
+  return result;
+}
 
   // ─── Aide Delete ────────────────────────────────────────────────────────────
 
@@ -625,6 +737,99 @@ export class AideService {
     const result = await this.findSentryById(id);
     if (!result) {
       throw new AppError(500, 'Failed to retrieve updated sentry request');
+    }
+    return result;
+  }
+
+  // ─── Sentry Approve ─────────────────────────────────────────────────────────
+
+  /**
+   * Approve a sentry request (Super Admin only)
+   * Transitions status from 'pending' to 'active'
+   */
+  // src/services/aide.service.ts - Fix for approveSentryRequest
+
+static async approveSentryRequest(
+  id: string,
+  comments?: string
+): Promise<SentryRequest> {
+  console.log(`[AideService] Approving sentry request ${id}`);
+
+  // Check if exists and get current status
+  const existing = await this.findSentryByIdOrThrow(id);
+
+  // Validate status transition
+  if (existing.status !== 'pending') {
+    throw new SentryRequestInvalidStatusError(existing.status, 'active');
+  }
+
+  // Build the remarks update based on whether comments are provided
+  let remarksValue: string | null;
+  if (comments) {
+    remarksValue = existing.remarks 
+      ? `${existing.remarks}\n[Approved] ${comments}`
+      : `[Approved] ${comments}`;
+  } else {
+    remarksValue = existing.remarks 
+      ? `${existing.remarks}\n[Approved]`
+      : '[Approved]';
+  }
+
+  // Update the status to 'active'
+  await pool.query(
+    `UPDATE sentry_requests 
+     SET status = 'active', 
+         remarks = $1,
+         updated_at = NOW() 
+     WHERE id = $2`,
+    [remarksValue, id]
+  );
+
+  console.log(`[AideService] Sentry request ${id} approved successfully`);
+  const result = await this.findSentryById(id);
+  if (!result) {
+    throw new AppError(500, 'Failed to retrieve approved sentry request');
+  }
+  return result;
+}
+
+  // ─── Sentry Return ──────────────────────────────────────────────────────────
+
+  /**
+   * Return a sentry request to the requester (Super Admin only)
+   * Transitions status from 'pending' to 'rejected'
+   */
+  static async returnSentryRequest(
+    id: string,
+    reason: string
+  ): Promise<SentryRequest> {
+    console.log(`[AideService] Returning sentry request ${id}`);
+
+    // Check if exists and get current status
+    const existing = await this.findSentryByIdOrThrow(id);
+
+    // Validate status transition
+    if (existing.status !== 'pending') {
+      throw new SentryRequestInvalidStatusError(existing.status, 'rejected');
+    }
+
+    // Update the status to 'rejected'
+    await pool.query(
+      `UPDATE sentry_requests 
+       SET status = 'rejected', 
+           remarks = CASE 
+             WHEN remarks IS NULL THEN $1
+             ELSE remarks || E'\n' || $1 
+           END,
+           updated_at = NOW() 
+       WHERE id = $2`,
+      [`[Returned] ${reason}`, id]
+    );
+
+    console.log(`[AideService] Sentry request ${id} returned successfully`);
+    const result = await this.findSentryById(id);
+    if (!result) {
+      throw new AppError(500, 'Failed to retrieve returned sentry request');
     }
     return result;
   }

@@ -137,6 +137,25 @@ export const getDocumentByIdSchema = z.object({
     }),
 });
 
+// ─── PATCH /api/helpdesk/documents/:id/file ──────────────────────────────────
+export const updateDocumentFileSchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Document ID must be a valid UUID'),
+    }),
+    body: z.object({
+        status: documentStatusEnum.optional(),
+        e_stamp_url: z.string().url().optional(),
+        e_stamp_public_id: z.string().optional(),
+        e_stamp_status: z.enum(['pending', 'stamped', 'failed']).optional(),
+        approved_by: z.string().uuid().optional(),
+        approved_by_name: z.string().max(100).optional(),
+        comments: z.string().max(500).optional(),
+        rejection_reason: z.string().max(500).optional(),
+        returned_by: z.string().uuid().optional(),
+        returned_by_name: z.string().max(100).optional(),
+    }),
+});
+
 // ─── PUT /api/helpdesk/documents/:id/status ─────────────────────────────────
 export const updateDocumentStatusSchema = z.object({
     params: z.object({
@@ -400,6 +419,7 @@ export type BulkLinkDocumentsBody = z.infer<typeof bulkLinkDocumentsSchema>['bod
 export type BulkUpdateStatusBody = z.infer<typeof bulkUpdateStatusSchema>['body'];
 export type BatchUploadBody = z.infer<typeof batchUploadSchema>['body'];
 export type DeleteCommentParams = z.infer<typeof deleteCommentSchema>['params'];
+export type UpdateDocumentFileBody = z.infer<typeof updateDocumentFileSchema>['body'];
 
 // Export enums for use in routes
 export {

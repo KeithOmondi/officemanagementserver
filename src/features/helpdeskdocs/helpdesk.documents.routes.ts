@@ -7,6 +7,7 @@ import {
     uploadHelpdeskDocumentSchema,
     listHelpdeskDocumentsSchema,
     getDocumentByIdSchema,
+    updateDocumentFileSchema,  // ✅ Add this import
     submitDocumentForApprovalSchema,
     approveDocumentSchema,
     rejectDocumentSchema,
@@ -45,6 +46,25 @@ router.post(
     upload.array('files', 20),
     validate(batchUploadSchema),
     HelpdeskDocumentsController.batchUpload
+);
+
+// ── Update Document File ────────────────────────────────────────────────────
+
+/**
+ * @route   PATCH /api/v1/helpdesk/documents/:id/file
+ * @desc    Update an existing document's file and metadata
+ * @access  Super Admin only (for approval workflow)
+ * 
+ * This endpoint updates the file of an existing document instead of
+ * creating a new one, preventing document duplication.
+ * Used when Super Admin approves a document and stamps it.
+ */
+router.patch(
+    '/:id/file',
+    requireRole('super_admin'),  // Only Super Admin can update document files
+    upload.single('file'),
+    validate(updateDocumentFileSchema),
+    HelpdeskDocumentsController.updateDocumentFile
 );
 
 // ── Document CRUD ─────────────────────────────────────────────────────────────
@@ -91,7 +111,7 @@ router.post(
     HelpdeskDocumentsController.returnDocument
 );
 
-// ─── E-Stamp ──────────────────────────────────────────────────────────────────
+// ── E-Stamp ──────────────────────────────────────────────────────────────────
 
 router.post(
     '/:id/estampt',
@@ -100,7 +120,7 @@ router.post(
     HelpdeskDocumentsController.updateEStamp
 );
 
-// ─── Comments ─────────────────────────────────────────────────────────────────
+// ── Comments ─────────────────────────────────────────────────────────────────
 
 router.post(
     '/:id/comments',
@@ -114,7 +134,7 @@ router.delete(
     HelpdeskDocumentsController.deleteComment
 );
 
-// ─── Linking ──────────────────────────────────────────────────────────────────
+// ── Linking ──────────────────────────────────────────────────────────────────
 
 router.patch(
     '/:id/link',
@@ -130,7 +150,7 @@ router.post(
     HelpdeskDocumentsController.bulkLink
 );
 
-// ─── Bulk Operations ──────────────────────────────────────────────────────────
+// ── Bulk Operations ──────────────────────────────────────────────────────────
 
 router.post(
     '/bulk/status',
@@ -139,7 +159,7 @@ router.post(
     HelpdeskDocumentsController.bulkUpdateStatus
 );
 
-// ─── Stats & Summary ──────────────────────────────────────────────────────────
+// ── Stats & Summary ──────────────────────────────────────────────────────────
 
 router.get(
     '/stats',
@@ -151,7 +171,7 @@ router.get(
     HelpdeskDocumentsController.getSummary
 );
 
-// ─── Entity Routes ────────────────────────────────────────────────────────────
+// ── Entity Routes ────────────────────────────────────────────────────────────
 
 router.get(
     '/entity/:entityType/:entityId',
@@ -159,7 +179,7 @@ router.get(
     HelpdeskDocumentsController.getByEntity
 );
 
-// ─── Delete Routes ────────────────────────────────────────────────────────────
+// ── Delete Routes ────────────────────────────────────────────────────────────
 
 router.delete(
     '/:id',

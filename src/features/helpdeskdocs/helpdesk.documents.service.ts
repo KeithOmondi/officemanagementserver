@@ -15,6 +15,7 @@ import type {
     DocumentFormat,
     DocumentStatus,
     EStampStatus,
+    UpdateDocumentFileInput,
 } from './helpdesk.documents.types';
 
 const FOLDER = 'orhc/helpdesk-documents';
@@ -49,11 +50,9 @@ function cleanInput(input: CreateHelpdeskDocumentInput): CreateHelpdeskDocumentI
         ref: input.ref?.trim() || '',
         subject: input.subject?.trim() || '',
         entity_type: input.entity_type,
-        // ✅ Convert null to undefined for entity_id
         entity_id: input.entity_id === null ? undefined : input.entity_id?.trim() || undefined,
         format: input.format,
         status: input.status || 'draft',
-        // ✅ Convert null to undefined for optional fields
         request_type: input.request_type === null ? undefined : input.request_type?.trim() || undefined,
         judge_name: input.judge_name === null ? undefined : input.judge_name?.trim() || undefined,
         rank: input.rank === null ? undefined : input.rank?.trim() || undefined,
@@ -116,7 +115,7 @@ export class HelpdeskDocumentsService {
                     cleaned.ref.trim(),
                     cleaned.subject.trim(),
                     cleaned.entity_type,
-                    cleaned.entity_id || null,  // Convert undefined to null for DB
+                    cleaned.entity_id || null,
                     cleaned.format,
                     result.secure_url,
                     result.public_id,
@@ -147,6 +146,180 @@ export class HelpdeskDocumentsService {
             console.error('Database insert failed, cleaning up Cloudinary upload:', err);
             await deleteFromCloudinary(result.public_id, 'raw').catch(() => null);
             throw err;
+        }
+    }
+
+    // ─── Update Document File ─────────────────────────────────────────────────
+
+    static async updateDocumentFile(
+        id: string,
+        file: Express.Multer.File,
+        input: UpdateDocumentFileInput,
+        userId?: string
+    ): Promise<HelpdeskDocument> {
+        const doc = await this.findById(id);
+        if (!doc) {
+            throw new AppError(404, 'Document not found');
+        }
+
+        // Upload new file to Cloudinary
+        const result = await uploadToCloudinary(file, FOLDER);
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            const updates: string[] = [];
+            const values: unknown[] = [];
+            let p = 1;
+
+            // Update file fields
+            updates.push(`file_url = $${p}`);
+            values.push(result.secure_url);
+            p++;
+
+            updates.push(`public_id = $${p}`);
+            values.push(result.public_id);
+            p++;
+
+            updates.push(`file_size = $${p}`);
+            values.push(result.bytes ?? null);
+            p++;
+
+            // Update status if provided
+            if (input.status) {
+                updates.push(`status = $${p}`);
+                values.push(input.status);
+                p++;
+            }
+
+            // Update e-stamp fields if provided
+            if (input.e_stamp_url !== undefined) {
+                updates.push(`e_stamp_url = $${p}`);
+                values.push(input.e_stamp_url);
+                p++;
+            }
+
+            if (input.e_stamp_public_id !== undefined) {
+                updates.push(`e_stamp_public_id = $${p}`);
+                values.push(input.e_stamp_public_id);
+                p++;
+            }
+
+            if (input.e_stamp_status !== undefined) {
+                updates.push(`e_stamp_status = $${p}`);
+                values.push(input.e_stamp_status);
+                p++;
+            }
+
+            // Update approval fields if provided
+            if (input.approved_by !== undefined) {
+                updates.push(`approved_by = $${p}`);
+                values.push(input.approved_by);
+                p++;
+            }
+
+            if (input.approved_by_name !== undefined) {
+                updates.push(`approved_by_name = $${p}`);
+                values.push(input.approved_by_name);
+                p++;
+            }
+
+            // Update return fields if provided
+            if (input.returned_by !== undefined) {
+                updates.push(`returned_by = $${p}`);
+                values.push(input.returned_by);
+                p++;
+            }
+
+            if (input.returned_by_name !== undefined) {
+                updates.push(`returned_by_name = $${p}`);
+                values.push(input.returned_by_name);
+                p++;
+            }
+
+            // Update rejection reason if provided
+            if (input.rejection_reason !== undefined) {
+                updates.push(`rejection_reason = $${p}`);
+                values.push(input.rejection_reason);
+                p++;
+            }
+
+            // Add timestamp
+            updates.push(`updated_at = NOW()`);
+
+            // Set approved_at if status is 'approved'
+            if (input.status === 'approved') {
+                updates.push(`approved_at = NOW()`);
+            }
+
+            // Set returned_at if status is 'returned'
+            if (input.status === 'returned') {
+                updates.push(`returned_at = NOW()`);
+            }
+
+            values.push(id);
+
+            await client.query(
+                `UPDATE helpdesk_documents
+                 SET ${updates.join(', ')}
+                 WHERE id = $${p} AND is_active = true`,
+                values
+            );
+
+            // Add to approval history if status changed
+            if (input.status && input.status !== doc.status) {
+                let action: 'submitted' | 'approved' | 'rejected' | 'returned';
+                switch (input.status) {
+                    case 'approved':
+                        action = 'approved';
+                        break;
+                    case 'rejected':
+                        action = 'rejected';
+                        break;
+                    case 'returned':
+                        action = 'returned';
+                        break;
+                    default:
+                        action = 'submitted';
+                        break;
+                }
+
+                await this.addApprovalHistory(
+                    id,
+                    userId || 'system',
+                    action,
+                    doc.uploaded_by || undefined,
+                    input.comments || `Document updated to ${input.status}`
+                );
+            }
+
+            await client.query('COMMIT');
+
+            // Delete old file from Cloudinary after transaction succeeds
+            if (doc.public_id) {
+                try {
+                    await deleteFromCloudinary(doc.public_id, 'raw');
+                } catch (error) {
+                    console.error('Failed to delete old file from Cloudinary:', error);
+                }
+            }
+
+            const updatedDoc = await this.findById(id);
+            if (!updatedDoc) throw new AppError(500, 'Failed to retrieve updated document');
+            return updatedDoc;
+
+        } catch (err) {
+            await client.query('ROLLBACK');
+            // Clean up the newly uploaded file if transaction failed
+            try {
+                await deleteFromCloudinary(result.public_id, 'raw');
+            } catch (cleanupError) {
+                console.error('Failed to clean up Cloudinary upload:', cleanupError);
+            }
+            throw err;
+        } finally {
+            client.release();
         }
     }
 
@@ -297,10 +470,7 @@ export class HelpdeskDocumentsService {
             p++;
         }
 
-        // Pending my approval filter
         if (filters.pending_my_approval && filters.uploaded_by) {
-            // This would need to check the approval workflow
-            // For now, we'll just filter by status
             query += ` AND d.status = 'pending_approval'`;
         }
 
@@ -403,12 +573,10 @@ export class HelpdeskDocumentsService {
             p++;
         }
 
-        // Total
         const totalQuery = `SELECT COUNT(*) as total FROM helpdesk_documents d ${whereClause}`;
         const { rows: totalRows } = await pool.query(totalQuery, params);
         const total = Number(totalRows[0]?.total) || 0;
 
-        // Status breakdown
         const statusQuery = `SELECT d.status, COUNT(*) as count FROM helpdesk_documents d ${whereClause} GROUP BY d.status`;
         const { rows: statusRows } = await pool.query(statusQuery, params);
         const statusCounts: Record<string, number> = {};
@@ -416,7 +584,6 @@ export class HelpdeskDocumentsService {
             statusCounts[row.status] = Number(row.count);
         });
 
-        // By entity
         const entityQuery = `
             SELECT d.entity_type, COUNT(*) as count, 
                    COUNT(CASE WHEN d.status = 'pending_approval' THEN 1 END) as pending,
@@ -426,7 +593,6 @@ export class HelpdeskDocumentsService {
         `;
         const { rows: entityRows } = await pool.query(entityQuery, params);
 
-        // Recent activity
         const activityQuery = `
             SELECT d.id, d.ref, d.subject, 'submitted' as action, u.full_name as user_name, d.created_at
             FROM helpdesk_documents d
@@ -488,7 +654,6 @@ export class HelpdeskDocumentsService {
         const { rows } = await pool.query(summaryQuery, params);
         const summary = rows[0];
 
-        // By status
         const statusQuery = `SELECT d.status, COUNT(*) as count FROM helpdesk_documents d ${whereClause} GROUP BY d.status`;
         const { rows: statusRows } = await pool.query(statusQuery, params);
         const byStatus: Record<string, number> = {};
@@ -496,7 +661,6 @@ export class HelpdeskDocumentsService {
             byStatus[row.status] = Number(row.count);
         });
 
-        // By entity type
         const entityQuery = `SELECT d.entity_type, COUNT(*) as count FROM helpdesk_documents d ${whereClause} GROUP BY d.entity_type`;
         const { rows: entityRows } = await pool.query(entityQuery, params);
         const byEntityType: Record<string, number> = {};
@@ -504,7 +668,6 @@ export class HelpdeskDocumentsService {
             byEntityType[row.entity_type] = Number(row.count);
         });
 
-        // By format
         const formatQuery = `SELECT d.format, COUNT(*) as count FROM helpdesk_documents d ${whereClause} GROUP BY d.format`;
         const { rows: formatRows } = await pool.query(formatQuery, params);
         const byFormat: Record<string, number> = {};
@@ -599,7 +762,6 @@ export class HelpdeskDocumentsService {
         try {
             await client.query('BEGIN');
 
-            // Generate e-stamp
             const eStamp = await this.generateEStamp(doc);
 
             await client.query(
@@ -795,8 +957,6 @@ export class HelpdeskDocumentsService {
     // ─── Generate E-Stamp ────────────────────────────────────────────────────
 
     private static async generateEStamp(doc: HelpdeskDocument): Promise<{ secure_url: string; public_id: string }> {
-        // In a real implementation, this would generate an e-stamp PDF
-        // For now, we'll return a placeholder
         return {
             secure_url: doc.file_url,
             public_id: doc.public_id || 'estampt-placeholder',
@@ -1016,7 +1176,6 @@ export class HelpdeskDocumentsService {
                         continue;
                     }
 
-                    // Validate status transition
                     const validTransitions: Record<DocumentStatus, DocumentStatus[]> = {
                         draft: ['pending_approval'],
                         pending_approval: ['approved', 'rejected', 'returned'],
@@ -1038,7 +1197,6 @@ export class HelpdeskDocumentsService {
                         [status, id]
                     );
 
-                    // Map DocumentStatus to approval history action
                     let action: 'approved' | 'rejected' | 'returned' | 'submitted';
                     switch (status) {
                         case 'approved':
@@ -1055,7 +1213,6 @@ export class HelpdeskDocumentsService {
                             break;
                     }
 
-                    // Add to history
                     await this.addApprovalHistory(
                         id,
                         'system',
@@ -1198,7 +1355,6 @@ export class HelpdeskDocumentsService {
             throw new AppError(400, 'Document is already deleted');
         }
 
-        // Prevent deleting approved documents (unless forced)
         if (doc.status === 'approved') {
             throw new AppError(400, 'Cannot delete approved documents. Return them first.');
         }
@@ -1207,7 +1363,6 @@ export class HelpdeskDocumentsService {
         try {
             await client.query('BEGIN');
 
-            // Soft delete the document
             const { rowCount } = await client.query(
                 `UPDATE helpdesk_documents 
                  SET is_active = false, 
@@ -1220,7 +1375,6 @@ export class HelpdeskDocumentsService {
                 throw new AppError(404, 'Document not found or already deleted');
             }
 
-            // Soft delete related comments (keep for audit trail)
             await client.query(
                 `UPDATE helpdesk_document_comments
                  SET is_active = false
@@ -1230,7 +1384,6 @@ export class HelpdeskDocumentsService {
 
             await client.query('COMMIT');
 
-            // Delete from Cloudinary after DB transaction succeeds
             if (doc.public_id) {
                 try {
                     await deleteFromCloudinary(doc.public_id, 'raw');
@@ -1267,19 +1420,16 @@ export class HelpdeskDocumentsService {
         try {
             await client.query('BEGIN');
 
-            // Delete comments
             await client.query(
                 `DELETE FROM helpdesk_document_comments WHERE document_id = $1`,
                 [id]
             );
 
-            // Delete approval history
             await client.query(
                 `DELETE FROM helpdesk_document_approval_history WHERE document_id = $1`,
                 [id]
             );
 
-            // Delete the document
             const { rowCount } = await client.query(
                 `DELETE FROM helpdesk_documents WHERE id = $1`,
                 [id]
@@ -1291,7 +1441,6 @@ export class HelpdeskDocumentsService {
 
             await client.query('COMMIT');
 
-            // Delete from Cloudinary
             if (doc.public_id) {
                 try {
                     await deleteFromCloudinary(doc.public_id, 'raw');

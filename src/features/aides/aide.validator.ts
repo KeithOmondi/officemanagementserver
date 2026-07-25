@@ -153,6 +153,7 @@ const baseSentryFields = {
 
 /**
  * Create Aide Request
+ * POST /api/v1/aide
  */
 export const createAideRequestSchema = z.object({
   body: z.object({
@@ -163,6 +164,7 @@ export const createAideRequestSchema = z.object({
 
 /**
  * Update Aide Request
+ * PUT /api/v1/aide/:id
  */
 export const updateAideRequestSchema = z.object({
   params: idParamSchema,
@@ -186,7 +188,36 @@ export const updateAideRequestSchema = z.object({
 });
 
 /**
+ * Approve Aide Request (Super Admin only)
+ * PUT /api/v1/aide/:id/approve
+ */
+export const approveAideRequestSchema = z.object({
+  params: idParamSchema,
+  body: z.object({
+    comments: z.string()
+      .max(1000, 'Comments must not exceed 1000 characters')
+      .trim()
+      .optional(),
+  }),
+});
+
+/**
+ * Return Aide Request to Requester (Super Admin only)
+ * PUT /api/v1/aide/:id/return
+ */
+export const returnAideRequestSchema = z.object({
+  params: idParamSchema,
+  body: z.object({
+    reason: z.string()
+      .min(5, 'Reason must be at least 5 characters')
+      .max(1000, 'Reason must not exceed 1000 characters')
+      .trim(),
+  }),
+});
+
+/**
  * Get Aide Request by ID
+ * GET /api/v1/aide/:id
  */
 export const getAideRequestSchema = z.object({
   params: idParamSchema,
@@ -194,6 +225,7 @@ export const getAideRequestSchema = z.object({
 
 /**
  * List Aide Requests
+ * GET /api/v1/aide
  */
 export const listAideRequestsSchema = z.object({
   query: z.object({
@@ -207,6 +239,7 @@ export const listAideRequestsSchema = z.object({
 
 /**
  * Delete Aide Request
+ * DELETE /api/v1/aide/:id
  */
 export const deleteAideRequestSchema = z.object({
   params: idParamSchema,
@@ -214,6 +247,7 @@ export const deleteAideRequestSchema = z.object({
 
 /**
  * Get Aide Request Stats
+ * GET /api/v1/aide/stats
  */
 export const getAideStatsSchema = z.object({
   query: z.object({
@@ -227,6 +261,7 @@ export const getAideStatsSchema = z.object({
 
 /**
  * Create Sentry Request
+ * POST /api/v1/sentry
  */
 export const createSentryRequestSchema = z.object({
   body: z.object({
@@ -236,6 +271,7 @@ export const createSentryRequestSchema = z.object({
 
 /**
  * Update Sentry Request
+ * PUT /api/v1/sentry/:id
  */
 export const updateSentryRequestSchema = z.object({
   params: idParamSchema,
@@ -253,7 +289,36 @@ export const updateSentryRequestSchema = z.object({
 });
 
 /**
+ * Approve Sentry Request (Super Admin only)
+ * PUT /api/v1/sentry/:id/approve
+ */
+export const approveSentryRequestSchema = z.object({
+  params: idParamSchema,
+  body: z.object({
+    comments: z.string()
+      .max(1000, 'Comments must not exceed 1000 characters')
+      .trim()
+      .optional(),
+  }),
+});
+
+/**
+ * Return Sentry Request to Requester (Super Admin only)
+ * PUT /api/v1/sentry/:id/return
+ */
+export const returnSentryRequestSchema = z.object({
+  params: idParamSchema,
+  body: z.object({
+    reason: z.string()
+      .min(5, 'Reason must be at least 5 characters')
+      .max(1000, 'Reason must not exceed 1000 characters')
+      .trim(),
+  }),
+});
+
+/**
  * Get Sentry Request by ID
+ * GET /api/v1/sentry/:id
  */
 export const getSentryRequestSchema = z.object({
   params: idParamSchema,
@@ -261,6 +326,7 @@ export const getSentryRequestSchema = z.object({
 
 /**
  * List Sentry Requests
+ * GET /api/v1/sentry
  */
 export const listSentryRequestsSchema = z.object({
   query: z.object({
@@ -273,6 +339,7 @@ export const listSentryRequestsSchema = z.object({
 
 /**
  * Delete Sentry Request
+ * DELETE /api/v1/sentry/:id
  */
 export const deleteSentryRequestSchema = z.object({
   params: idParamSchema,
@@ -280,6 +347,7 @@ export const deleteSentryRequestSchema = z.object({
 
 /**
  * Get Sentry Request Stats
+ * GET /api/v1/sentry/stats
  */
 export const getSentryStatsSchema = z.object({
   query: z.object({
@@ -294,6 +362,8 @@ export const getSentryStatsSchema = z.object({
 // Aide types
 export type CreateAideRequestSchema = z.infer<typeof createAideRequestSchema>;
 export type UpdateAideRequestSchema = z.infer<typeof updateAideRequestSchema>;
+export type ApproveAideRequestSchema = z.infer<typeof approveAideRequestSchema>;
+export type ReturnAideRequestSchema = z.infer<typeof returnAideRequestSchema>;
 export type GetAideRequestSchema = z.infer<typeof getAideRequestSchema>;
 export type ListAideRequestsSchema = z.infer<typeof listAideRequestsSchema>;
 export type DeleteAideRequestSchema = z.infer<typeof deleteAideRequestSchema>;
@@ -302,6 +372,8 @@ export type GetAideStatsSchema = z.infer<typeof getAideStatsSchema>;
 // Sentry types
 export type CreateSentryRequestSchema = z.infer<typeof createSentryRequestSchema>;
 export type UpdateSentryRequestSchema = z.infer<typeof updateSentryRequestSchema>;
+export type ApproveSentryRequestSchema = z.infer<typeof approveSentryRequestSchema>;
+export type ReturnSentryRequestSchema = z.infer<typeof returnSentryRequestSchema>;
 export type GetSentryRequestSchema = z.infer<typeof getSentryRequestSchema>;
 export type ListSentryRequestsSchema = z.infer<typeof listSentryRequestsSchema>;
 export type DeleteSentryRequestSchema = z.infer<typeof deleteSentryRequestSchema>;

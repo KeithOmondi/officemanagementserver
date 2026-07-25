@@ -11,12 +11,16 @@ import {
   listAideRequestsSchema,
   deleteAideRequestSchema,
   getAideStatsSchema,
+  approveAideRequestSchema,
+  returnAideRequestSchema,
   createSentryRequestSchema,
   updateSentryRequestSchema,
   getSentryRequestSchema,
   listSentryRequestsSchema,
   deleteSentryRequestSchema,
   getSentryStatsSchema,
+  approveSentryRequestSchema,
+  returnSentryRequestSchema,
 } from './aide.validator';
 import type {
   AideRequestFilters,
@@ -174,6 +178,48 @@ export const aideController = {
   }),
 
   /**
+   * Approve Aide Request (Super Admin only)
+   * Transitions status from 'in_progress' to 'attached'
+   */
+  approveAideRequest: asyncHandler(async (req: Request, res: Response) => {
+    logRequest('Approve aide request', req.body, req.user);
+
+    const validated = validateRequest<{ params: any; body: any }>(
+      approveAideRequestSchema,
+      { params: req.params, body: req.body },
+      'Invalid approval data'
+    );
+
+    const updated = await AideService.approveAideRequest(
+      validated.params.id,
+      validated.body.comments
+    );
+
+    return sendSuccess(res, updated, 'Aide request approved successfully');
+  }),
+
+  /**
+   * Return Aide Request to Requester (Super Admin only)
+   * Transitions status from 'in_progress' to 'rejected'
+   */
+  returnAideRequest: asyncHandler(async (req: Request, res: Response) => {
+    logRequest('Return aide request', req.body, req.user);
+
+    const validated = validateRequest<{ params: any; body: any }>(
+      returnAideRequestSchema,
+      { params: req.params, body: req.body },
+      'Invalid return data'
+    );
+
+    const updated = await AideService.returnAideRequest(
+      validated.params.id,
+      validated.body.reason
+    );
+
+    return sendSuccess(res, updated, 'Aide request returned successfully');
+  }),
+
+  /**
    * Delete Aide Request
    */
   deleteAideRequest: asyncHandler(async (req: Request, res: Response) => {
@@ -282,6 +328,48 @@ export const aideController = {
     );
 
     return sendSuccess(res, updated, 'Sentry request updated successfully');
+  }),
+
+  /**
+   * Approve Sentry Request (Super Admin only)
+   * Transitions status from 'pending' to 'active'
+   */
+  approveSentryRequest: asyncHandler(async (req: Request, res: Response) => {
+    logRequest('Approve sentry request', req.body, req.user);
+
+    const validated = validateRequest<{ params: any; body: any }>(
+      approveSentryRequestSchema,
+      { params: req.params, body: req.body },
+      'Invalid approval data'
+    );
+
+    const updated = await AideService.approveSentryRequest(
+      validated.params.id,
+      validated.body.comments
+    );
+
+    return sendSuccess(res, updated, 'Sentry request approved successfully');
+  }),
+
+  /**
+   * Return Sentry Request to Requester (Super Admin only)
+   * Transitions status from 'pending' to 'rejected'
+   */
+  returnSentryRequest: asyncHandler(async (req: Request, res: Response) => {
+    logRequest('Return sentry request', req.body, req.user);
+
+    const validated = validateRequest<{ params: any; body: any }>(
+      returnSentryRequestSchema,
+      { params: req.params, body: req.body },
+      'Invalid return data'
+    );
+
+    const updated = await AideService.returnSentryRequest(
+      validated.params.id,
+      validated.body.reason
+    );
+
+    return sendSuccess(res, updated, 'Sentry request returned successfully');
   }),
 
   /**

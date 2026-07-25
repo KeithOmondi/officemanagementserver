@@ -17,12 +17,16 @@ import {
   listAideRequestsSchema,
   deleteAideRequestSchema,
   getAideStatsSchema,
+  approveAideRequestSchema,
+  returnAideRequestSchema,
   createSentryRequestSchema,
   updateSentryRequestSchema,
   getSentryRequestSchema,
   listSentryRequestsSchema,
   deleteSentryRequestSchema,
   getSentryStatsSchema,
+  approveSentryRequestSchema,
+  returnSentryRequestSchema,
 } from './aide.validator';
 import { validate } from '../../middleware/validate.middleware';
 
@@ -97,6 +101,32 @@ router.put(
   requireRole('super_admin', 'dept_head'),
   validate(updateAideRequestSchema),
   aideController.updateAideRequest
+);
+
+// ── Approve & Return (Super Admin only) ──────────────────────────────────────
+
+/**
+ * @route   PUT /api/v1/aide/:id/approve
+ * @desc    Approve an aide request (transitions to 'attached')
+ * @access  Super Admin only
+ */
+router.put(
+  '/aide/:id/approve',
+  requireRole('super_admin'),
+  validate(approveAideRequestSchema),
+  aideController.approveAideRequest
+);
+
+/**
+ * @route   PUT /api/v1/aide/:id/return
+ * @desc    Return an aide request to requester (transitions to 'rejected')
+ * @access  Super Admin only
+ */
+router.put(
+  '/aide/:id/return',
+  requireRole('super_admin'),
+  validate(returnAideRequestSchema),
+  aideController.returnAideRequest
 );
 
 // ── Delete ────────────────────────────────────────────────────────────────────
@@ -179,6 +209,32 @@ router.put(
   requireRole('super_admin', 'dept_head'),
   validate(updateSentryRequestSchema),
   aideController.updateSentryRequest
+);
+
+// ── Approve & Return (Super Admin only) ──────────────────────────────────────
+
+/**
+ * @route   PUT /api/v1/sentry/:id/approve
+ * @desc    Approve a sentry request (transitions to 'active')
+ * @access  Super Admin only
+ */
+router.put(
+  '/sentry/:id/approve',
+  requireRole('super_admin'),
+  validate(approveSentryRequestSchema),
+  aideController.approveSentryRequest
+);
+
+/**
+ * @route   PUT /api/v1/sentry/:id/return
+ * @desc    Return a sentry request to requester (transitions to 'rejected')
+ * @access  Super Admin only
+ */
+router.put(
+  '/sentry/:id/return',
+  requireRole('super_admin'),
+  validate(returnSentryRequestSchema),
+  aideController.returnSentryRequest
 );
 
 // ── Delete ────────────────────────────────────────────────────────────────────

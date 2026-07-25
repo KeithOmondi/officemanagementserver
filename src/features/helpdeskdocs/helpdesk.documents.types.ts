@@ -133,6 +133,19 @@ export interface UpdateDocumentStatusInput {
     approved_by_name?: string;
 }
 
+export interface UpdateDocumentFileInput {
+    status?: DocumentStatus;
+    e_stamp_url?: string;
+    e_stamp_public_id?: string;
+    e_stamp_status?: EStampStatus;
+    approved_by?: string;
+    approved_by_name?: string;
+    comments?: string;
+    rejection_reason?: string;
+    returned_by?: string;
+    returned_by_name?: string;
+}
+
 export interface HelpdeskDocumentFilters {
     entity_type?: DocumentEntityType;
     entity_id?: string;

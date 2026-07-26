@@ -165,6 +165,30 @@ export function getCertificateHTML(data: CertificateData): string {
           font-size: 12pt;
         }
 
+        /* Groups the anchor with the signatory block so page-break-inside:
+           avoid keeps them atomically together on the same page — mirrors
+           Letter/Memo's .signature-section wrapper.
+
+           WITHOUT this wrapper: .signature-anchor and .signatory-block are
+           independent siblings, and only .signatory-block carries
+           page-break-inside: avoid. If the block doesn't fit in the
+           remaining space on a page (which depends on exact body/font
+           layout — longer certificate bodies, or even font-metric
+           differences between environments, push this over the edge), the
+           pagination engine pushes .signatory-block WHOLE onto the next
+           page while the anchor — having no such protection — is left
+           behind on the page it was already placed on. embedSignature.ts's
+           Pass 0 then can't find a "next line" on the anchor's page,
+           falls back to an unmeasured/unclamped placement, and the
+           signature can bleed into the footer. This was the root cause of
+           certificate signatures overlapping the footer in production
+           while letter/memo (which already group anchor+signature under
+           one wrapper) were unaffected. */
+        .signature-block-wrapper {
+          page-break-inside: avoid;
+          break-inside: avoid;
+        }
+
         /* Invisible marker: real text on the page (so PDF text-extraction
            can locate it), but zero visual footprint. Kept centered inline
            so its detected x-coordinate lands near the page's horizontal
@@ -282,11 +306,13 @@ export function getCertificateHTML(data: CertificateData): string {
 
         <div class="dated-line">${escapeHtml(datedLine)}</div>
 
-        <div class="signature-anchor" aria-hidden="true">${SIGNATURE_ANCHOR_TEXT}</div>
+        <div class="signature-block-wrapper">
+          <div class="signature-anchor" aria-hidden="true">${SIGNATURE_ANCHOR_TEXT}</div>
 
-        <div class="signatory-block">
-          ${signatoryLines.map((line) => `<p>${escapeHtml(line)}</p>`).join('')}
-          ${draftedByInitials ? `<div class="drafted-by">rhc/${escapeHtml(draftedByInitials)}</div>` : ''}
+          <div class="signatory-block">
+            ${signatoryLines.map((line) => `<p>${escapeHtml(line)}</p>`).join('')}
+            ${draftedByInitials ? `<div class="drafted-by">rhc/${escapeHtml(draftedByInitials)}</div>` : ''}
+          </div>
         </div>
 
         <div class="footer">

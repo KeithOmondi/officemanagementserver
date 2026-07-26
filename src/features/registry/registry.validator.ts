@@ -1,13 +1,36 @@
 // src/features/registry/registry.validator.ts
 import { z } from 'zod';
 
+// ── Enums ──────────────────────────────────────────────────────────────────────
+
 export const registryPriorityEnum = z.enum([
   'normal', 'urgent', 'confidential', 'for_information_only',
 ]);
 
+// Simplified status - only 'active' and 'returned'
 export const registryStatusEnum = z.enum([
-  'in_transit', 'received', 'filed', 'returned',
+  'active', 'returned',
 ]);
+
+export const folderCategoryEnum = z.enum([
+  'court', 'registry', 'administrative', 'other',
+]);
+
+export const folderStatusEnum = z.enum([
+  'active', 'archived',
+]);
+
+// ── Court Reference Number Validation ──────────────────────────────────────
+
+/**
+ * Validates a court reference number in the format: RHC/[CODE]/[NUMBER]
+ * Examples: RHC/MSB/22, RHC/KAB/23, RHC/GRN/24
+ */
+export const courtReferenceSchema = z.string()
+  .regex(/^RHC\/[A-Z]{2,4}\/\d{1,3}$/, 
+    'Reference must be in format: RHC/[CODE]/[NUMBER] (e.g., RHC/MSB/22)')
+  .min(8, 'Reference number is too short')
+  .max(15, 'Reference number is too long');
 
 // ── Route a document to a station ────────────────────────────────────────────
 
@@ -23,12 +46,6 @@ export const routeFileSchema = z.object({
 // ── Receive (station acknowledges the file arrived) ──────────────────────────
 
 export const receiveFileSchema = z.object({
-  body: z.object({}).strict(),
-});
-
-// ── Mark filed (closed out at the station) ───────────────────────────────────
-
-export const markFiledSchema = z.object({
   body: z.object({}).strict(),
 });
 
@@ -55,6 +72,81 @@ export const registryFiltersSchema = z.object({
   }),
 });
 
+// ── Folder/Court Record Validation ─────────────────────────────────────────
+
+export const createFolderSchema = z.object({
+  body: z.object({
+    ref_no:          courtReferenceSchema,
+    name:            z.string().min(2, 'Name must be at least 2 characters').max(100, 'Name is too long'),
+    category:        folderCategoryEnum.default('court'),
+    description:     z.string().max(500).trim().optional(),
+    parent_folder_id: z.string().uuid('Parent folder ID must be a valid UUID').optional(),
+    status:          folderStatusEnum.default('active'),
+  }).strict(),
+});
+
+export const updateFolderSchema = z.object({
+  body: z.object({
+    name:        z.string().min(2, 'Name must be at least 2 characters').max(100, 'Name is too long').optional(),
+    description: z.string().max(500).trim().optional(),
+    status:      folderStatusEnum.optional(),
+    // Note: ref_no is NOT allowed to be updated - it's the unique identifier
+  }).strict(),
+  params: z.object({
+    id: z.string().uuid('Folder ID must be a valid UUID'),
+  }),
+});
+
+export const folderIdParamSchema = z.object({
+  params: z.object({
+    id: z.string().uuid('Folder ID must be a valid UUID'),
+  }),
+});
+
+// ── Move Folder ────────────────────────────────────────────────────────────────
+
+export const moveFolderSchema = z.object({
+  body: z.object({
+    parent_folder_id: z.string().uuid('Parent folder ID must be a valid UUID').nullable().optional(),
+  }).strict(),
+  params: z.object({
+    id: z.string().uuid('Folder ID must be a valid UUID'),
+  }),
+});
+
+// ── Add Document to Folder ─────────────────────────────────────────────────────
+
+export const addDocumentToFolderSchema = z.object({
+  body: z.object({
+    document_id: z.string().uuid('Must be a valid document ID'),
+  }).strict(),
+  params: z.object({
+    id: z.string().uuid('Folder ID must be a valid UUID'),
+  }),
+});
+
+// ── Bulk Add Documents to Folder ──────────────────────────────────────────────
+
+export const bulkAddDocumentsSchema = z.object({
+  body: z.object({
+    document_ids: z.array(z.string().uuid('Must be a valid document ID'))
+      .min(1, 'At least one document ID is required')
+      .max(100, 'Cannot add more than 100 documents at once'),
+  }).strict(),
+  params: z.object({
+    id: z.string().uuid('Folder ID must be a valid UUID'),
+  }),
+});
+
+// ── Remove Document from Folder ───────────────────────────────────────────────
+
+export const removeDocumentFromFolderSchema = z.object({
+  params: z.object({
+    id: z.string().uuid('Folder ID must be a valid UUID'),
+    documentId: z.string().uuid('Document ID must be a valid UUID'),
+  }),
+});
+
 // ── ID params ─────────────────────────────────────────────────────────────────
 
 export const registryIdSchema = z.object({
@@ -69,8 +161,34 @@ export const documentIdParamSchema = z.object({
   }),
 });
 
+// ── Folder Query Filters ──────────────────────────────────────────────────────
+
+export const folderFiltersSchema = z.object({
+  query: z.object({
+    category:           folderCategoryEnum.optional(),
+    status:             folderStatusEnum.optional(),
+    search:             z.string().min(2, 'Search query must be at least 2 characters').optional(),
+    include_sub_folders: z.string().transform(val => val === 'true').optional(),
+  }),
+});
+
+// ── Search Query ──────────────────────────────────────────────────────────────
+
+export const searchQuerySchema = z.object({
+  query: z.object({
+    q: z.string().min(2, 'Search query must be at least 2 characters'),
+  }),
+});
+
 // ── Inferred types ────────────────────────────────────────────────────────────
 
-export type RouteFileInput   = z.infer<typeof routeFileSchema>['body'];
-export type ReturnFileInput  = z.infer<typeof returnFileSchema>['body'];
-export type RegistryFilters  = z.infer<typeof registryFiltersSchema>['query'];
+export type RouteFileInput           = z.infer<typeof routeFileSchema>['body'];
+export type ReturnFileInput          = z.infer<typeof returnFileSchema>['body'];
+export type RegistryFilters          = z.infer<typeof registryFiltersSchema>['query'];
+export type CreateFolderInput        = z.infer<typeof createFolderSchema>['body'];
+export type UpdateFolderInput        = z.infer<typeof updateFolderSchema>['body'];
+export type MoveFolderInput          = z.infer<typeof moveFolderSchema>['body'];
+export type AddDocumentToFolderInput = z.infer<typeof addDocumentToFolderSchema>['body'];
+export type BulkAddDocumentsInput    = z.infer<typeof bulkAddDocumentsSchema>['body'];
+export type FolderFilters            = z.infer<typeof folderFiltersSchema>['query'];
+export type SearchQuery              = z.infer<typeof searchQuerySchema>['query'];

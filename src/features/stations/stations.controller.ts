@@ -10,6 +10,12 @@ import {
   stationIdSchema,
 } from './stations.validator';
 
+
+const getParamString = (param: string | string[] | undefined): string => {
+  if (!param) throw new AppError(400, 'Parameter is required');
+  return Array.isArray(param) ? param[0] : param;
+};
+
 export const stationController = {
 
   // ── Create ────────────────────────────────────────────────────────────────────
@@ -37,6 +43,31 @@ export const stationController = {
     if (!station) throw new AppError(404, 'Station not found');
     return sendSuccess(res, station, 'Station retrieved successfully');
   }),
+
+ getByRefNo: asyncHandler(async (req: Request, res: Response) => {
+  const refNo = getParamString(req.params.refNo);
+  const station = await StationService.findByRefNo(refNo);
+  if (!station) throw new AppError(404, 'Station not found');
+  return sendSuccess(res, station, 'Station retrieved successfully');
+}),
+
+  getActiveStations: asyncHandler(async (req: Request, res: Response) => {
+    const stations = await StationService.getActiveStationsWithCounts();
+    return sendSuccess(res, stations, 'Active stations retrieved successfully');
+  }),
+
+  getCourtStations: asyncHandler(async (req: Request, res: Response) => {
+    const stations = await StationService.getCourtStations();
+    return sendSuccess(res, stations, 'Court stations retrieved successfully');
+  }),
+
+ getByType: asyncHandler(async (req: Request, res: Response) => {
+  const type = getParamString(req.params.type);
+  const stations = await StationService.findByType(type);
+  return sendSuccess(res, stations, 'Stations retrieved successfully');
+}),
+
+  
 
   // ── Update ────────────────────────────────────────────────────────────────────
 

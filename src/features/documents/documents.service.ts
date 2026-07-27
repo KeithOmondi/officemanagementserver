@@ -16,7 +16,7 @@ import type {
   FollowUpComment,
   FollowUpWithComments,
   FollowUpPaginationResponse,
-  FollowUpReminder,
+  //FollowUpReminder,
   DocumentRequestDetails,
   RoutePriority,
   DocumentStatus,
@@ -1204,12 +1204,34 @@ export class DocumentService {
         }
       : null;
 
+    // Certificate's signatory block, by design, has NO name line — the
+    // signer's actual name lives only in the body's "I, <NAME>,
+    // Registrar..." opening line (see CertificateTemplate.ts). That means
+    // fuzzy name/title matching in embedSignatureIntoPDF/HTML is unsafe for
+    // certificates: it will happily match that intro-paragraph mention and
+    // place the signature near the top of the page instead of above
+    // "REGISTRAR,". So certificates must be restricted to the explicit
+    // RHC-SIGNATURE-ANCHOR marker (anchorOnly=true) — if the anchor isn't
+    // found, embedSignatureIntoPDF/HTML correctly return the document
+    // unchanged rather than guessing. Letter and Memo keep the previous
+    // (default) behaviour, since their signatory block DOES include a name
+    // line and their signer's name doesn't otherwise appear in the body, so
+    // fuzzy matching has always resolved correctly for them.
+    const isCertificate = doc.type === 'certificate';
+    // Certificate's real anchor-to-name gap (~32pt) is tighter than
+    // Letter/Memo's (~46pt) — see the ANCHOR_DEFAULT_MAX_HEIGHT comment in
+    // embedSignature.ts. Passing 35 here (instead of leaving the function's
+    // 65pt default) keeps the no-next-line fallback from computing a y low
+    // enough to land on the footer for certificates specifically.
+    const certificateAnchorMaxHeight = 35;
+
     // ── HTML document (no file) ─────────────────────────────────────────────
     if (doc.body && !doc.file_url) {
       const signedBody = embedSignatureIntoHTML(
         doc.body,
         signer.signature_url,
-        signatoryName
+        signatoryName,
+        isCertificate
       );
 
       await pool.query(
@@ -1273,7 +1295,9 @@ export class DocumentService {
         originalPdf,
         signer.signature_url,
         position,
-        signatoryName
+        signatoryName,
+        isCertificate,
+        isCertificate ? certificateAnchorMaxHeight : undefined
       );
 
       if (doc.file_public_id) {

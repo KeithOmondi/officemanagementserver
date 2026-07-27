@@ -330,7 +330,8 @@ function findSignatureBlockPosition(
       return {
         y: anchorLine.y,
         pageIndex,
-        x: anchorItem.x || 60,
+        // Use the page width to center the signature instead of the anchor's x position
+        x: -1, // Signal that we want to center it
         belowAnchor: true,
         nextLineY: nextLine?.y,
       };
@@ -572,7 +573,7 @@ export async function embedSignatureIntoPDF(
     const widthCap = Math.min(170, width * 0.30);
 
     let sigDims: { width: number; height: number };
-    let x = detected.x || 60;
+    let x: number;
     let y: number;
 
     if (detected.belowAnchor) {
@@ -623,6 +624,13 @@ export async function embedSignatureIntoPDF(
       }
       sigDims = sigImage.scaleToFit(widthCap, heightCap);
 
+      // CENTER THE SIGNATURE HORIZONTALLY
+      // Calculate x to center the signature on the page
+      x = (width - sigDims.width) / 2;
+      
+      // Ensure x is within page bounds
+      x = Math.max(10, Math.min(x, width - sigDims.width - 10));
+
       y = detected.nextLineY !== undefined
         // Anchor bottom edge just above the next line's actual ink — the
         // next line's baseline PLUS its estimated cap-height, plus the
@@ -640,16 +648,27 @@ export async function embedSignatureIntoPDF(
       // image's bottom, sitting just above the printed name — unchanged
       // from before.
       sigDims = sigImage.scaleToFit(widthCap, ANCHOR_DEFAULT_MAX_HEIGHT);
+      
+      // For non-anchor detection, we need to check if x is -1 (center signal)
+      if (detected.x === -1) {
+        // Center the signature
+        x = (width - sigDims.width) / 2;
+        x = Math.max(10, Math.min(x, width - sigDims.width - 10));
+      } else {
+        x = detected.x || 60;
+        // Clamp to page bounds
+        x = Math.max(10, Math.min(x, width - sigDims.width - 10));
+      }
+      
       y = detected.y;
     }
 
-    // Clamp to page bounds
-    x = Math.max(10, Math.min(x, width - sigDims.width - 10));
+    // Clamp y to page bounds
     y = Math.max(10, Math.min(y, height - sigDims.height - 10));
 
     console.log(
       `[embedSignature] Text-detected position on page ${detected.pageIndex + 1}: x=${x.toFixed(0)}, y=${y.toFixed(0)}, ` +
-      `belowAnchor=${!!detected.belowAnchor}, imgHeight=${sigDims.height.toFixed(1)}`
+      `belowAnchor=${!!detected.belowAnchor}, imgHeight=${sigDims.height.toFixed(1)}, centered=${detected.x === -1 || detected.belowAnchor}`
     );
 
     targetPage.drawImage(sigImage, {
@@ -694,7 +713,7 @@ export function embedSignatureIntoHTML(
 ): string {
   console.log(`[embedSignatureHTML] signer: ${signerName ?? '(none provided)'}, anchorOnly: ${anchorOnly}`);
 
-  const imgTag = `<img src="${signatureUrl}" alt="Official Signature" style="max-width:200px; max-height:80px; display:block;" />`;
+  const imgTag = `<img src="${signatureUrl}" alt="Official Signature" style="max-width:200px; max-height:80px; display:block; margin:0 auto;" />`;
   const wrapImg = (align: 'center' | 'left' | 'right') => {
     const justifyContent = align === 'left' ? 'flex-start' : align === 'right' ? 'flex-end' : 'center';
     return `<div style="display:flex; justify-content:${justifyContent}; margin:16px 0;">${imgTag}</div>`;
@@ -706,6 +725,7 @@ export function embedSignatureIntoHTML(
     console.log('[embedSignatureHTML] Found anchor marker, inserting at marker position');
     const before = htmlBody.slice(0, anchorIndex);
     const after = htmlBody.slice(anchorIndex);
+    // Always center the signature when anchor is found
     return before + wrapImg('center') + after;
   }
 
@@ -776,6 +796,7 @@ export function embedSignatureIntoHTML(
   if (bestMatch) {
     const before = htmlBody.slice(0, bestMatch.index);
     const after = htmlBody.slice(bestMatch.index);
+    // Always center the signature for certificates
     return before + wrapImg('center') + '<br/>' + after;
   }
 

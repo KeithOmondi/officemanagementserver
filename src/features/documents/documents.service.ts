@@ -3617,4 +3617,101 @@ export class DocumentService {
       totalPages: Math.ceil(total / limit),
     };
   }
+
+  // ── Update Document File (Replace file) ──────────────────────────────────────
+
+// ── Update Document File (Replace file) ──────────────────────────────────────
+
+static async updateDocumentFile(
+  documentId: string,
+  file: Express.Multer.File,
+  userId: string,
+  status?: string,
+  comments?: string
+): Promise<Document> {
+  // Get the document first to check if it exists
+  const doc = await this.findById(documentId);
+  if (!doc) {
+    throw new AppError(404, 'Document not found');
+  }
+
+  // Upload the new file to cloud storage
+  const uploaded = await uploadToCloudinary(file, 'registrar/documents');
+
+  // Build the update data
+  const updates: string[] = [];
+  const values: unknown[] = [];
+  let p = 1;
+
+  // File fields
+  updates.push(`file_url = $${p++}`);
+  values.push(uploaded.secure_url);
+  
+  updates.push(`file_public_id = $${p++}`);
+  values.push(uploaded.public_id);
+  
+  updates.push(`file_size_bytes = $${p++}`);
+  values.push(file.size);
+  
+  updates.push(`mime_type = $${p++}`);
+  values.push(file.mimetype);
+  
+  updates.push(`original_name = $${p++}`);
+  values.push(file.originalname);
+
+  // Status update
+  if (status) {
+    updates.push(`status = $${p++}`);
+    values.push(status);
+  }
+
+  // If status is 'released', also mark as signed
+  if (status === 'released') {
+    updates.push(`is_signed = $${p++}`);
+    values.push(true);
+    updates.push(`signed_by = $${p++}`);
+    values.push(userId);
+    updates.push(`signed_at = $${p++}`);
+    values.push(new Date());
+  }
+
+  // Always update timestamp
+  updates.push(`updated_at = NOW()`);
+
+  // Add document ID as the last parameter
+  values.push(documentId);
+
+  // Execute the update
+  await pool.query(
+    `UPDATE documents SET ${updates.join(', ')} WHERE id = $${p}`,
+    values
+  );
+
+  // Add to flow history
+  const client = await pool.connect();
+  try {
+    await this.logFlow(
+      client,
+      documentId,
+      'updated',
+      userId,
+      null,
+      comments || `File updated. Status: ${status || 'unchanged'}`
+    );
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  // Delete old file from cloudinary if it exists
+  if (doc.file_public_id) {
+    await deleteFromCloudinary(doc.file_public_id).catch(console.error);
+  }
+
+  return (await this.findById(documentId))!;
+}
+
 }

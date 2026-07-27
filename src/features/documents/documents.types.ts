@@ -183,7 +183,11 @@ export type DocumentFlowAction =
   | 'follow_up_completed'
   | 'follow_up_cancelled'
   | 'follow_up_comment_added'
-  | 'follow_up_filed_away';
+  | 'follow_up_filed_away'
+  | 'pdf_regenerated'
+  | 'bring_up_set'
+  | 'bring_up_updated'
+  | 'bring_up_completed';
 
 // ─── Bring Up Types ────────────────────────────────────────────────────────────
 
@@ -545,7 +549,6 @@ export interface DocumentListItem {
   department_name: string | null;
   response_count: number;
   active_mark: DocumentMark | null;
-  // NEW: Bring up fields for list view
   bring_up_date: string | null;
   bring_up_status: BringUpStatus | null;
   bring_up_set_by_name: string | null;
@@ -643,4 +646,128 @@ export interface ComposeCertificateInput {
   signatureTitle?: string;    // Maps to signature_title
   department_id?: string;
   reference_no?: string;
+}
+
+// ─── Compose Input Types (Memo, Letter) ──────────────────────────────────────
+
+export interface ComposeMemoInput {
+  title: string;
+  to: string;
+  date?: string;
+  body: string;
+  from?: string;
+  signatureName?: string;
+  signatureTitle?: string;
+  department_id?: string;
+  reference_no?: string;
+  fromFirst?: boolean;
+  request_details?: Partial<DocumentRequestDetails>;
+}
+
+export interface ComposeLetterInput {
+  title: string;
+  to: string;
+  date?: string;
+  body: string;
+  from?: string;
+  signatureName?: string;
+  signatureTitle?: string;
+  department_id?: string;
+  reference_no?: string;
+  cc?: string;
+  enclosures?: string;
+  request_details?: Partial<DocumentRequestDetails>;
+}
+
+// ─── Create Document Inputs ──────────────────────────────────────────────────
+
+export interface CreateComposedDocumentInput {
+  title: string;
+  type: 'judgment' | 'ruling' | 'order';
+  category?: DocumentCategory;
+  reference_no?: string;
+  body: string;
+  assigned_to?: string;
+  department_id?: string;
+  request_details?: Partial<DocumentRequestDetails>;
+}
+
+export interface CreateUploadDocumentInput {
+  title: string;
+  type: Exclude<DocumentType, 'memo' | 'letter'>;
+  category?: DocumentCategory;
+  reference_no?: string;
+  ref_type: RefType;
+  ref_other_description?: string;
+  assigned_to?: string;
+  department_id?: string;
+  is_draft?: boolean;
+  priority?: RoutePriority;
+  request_details?: Partial<DocumentRequestDetails>;
+}
+
+// ─── Update Document Input ───────────────────────────────────────────────────
+
+export interface UpdateDocumentInput {
+  title?: string;
+  category?: DocumentCategory | null;
+  reference_no?: string | null;
+  body?: string;
+  status?: DocumentStatus;
+  assigned_to?: string | null;
+  department_id?: string | null;
+  priority?: RoutePriority;
+  to_recipient?: string | null;
+  from_sender?: string | null;
+  document_date?: string | null;
+  subject?: string | null;
+  cc?: string | null;
+  enclosures?: string | null;
+  signature_name?: string | null;
+  signature_title?: string | null;
+  signature_position_x?: number | null;
+  signature_position_y?: number | null;
+  signature_position_width?: number | null;
+  signature_position_height?: number | null;
+  request_details?: Partial<DocumentRequestDetails> | null;
+}
+
+// ─── Mark / Annotation Inputs ─────────────────────────────────────────────────
+
+export interface MarkDocumentInput {
+  department_id: string;
+  assigned_to?: string;
+  instructions?: string;
+  priority?: RoutePriority;
+}
+
+export interface UpdateMarkInput {
+  instructions?: string;
+}
+
+export interface CreateAnnotationInput {
+  comment: string;
+  is_urgent?: boolean;
+  visible_in_summary?: boolean;
+}
+
+// ─── Draft / Flow Inputs ────────────────────────────────────────────────────
+
+export interface FinalizeDraftInput {
+  assigned_to?: string;
+  send_to_super_admin?: boolean;
+}
+
+export interface ReturnDocumentInput {
+  note: string;
+  requires_more_docs?: boolean;
+}
+
+export interface RespondToDocumentInput {
+  note: string;
+}
+
+export interface SendToUserInput {
+  recipient_id: string;
+  note?: string;
 }

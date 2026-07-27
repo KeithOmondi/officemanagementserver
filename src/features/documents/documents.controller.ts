@@ -1084,4 +1084,40 @@ export const documentController = {
     const comments = await DocumentService.getFollowUpComments(result.data.params.followUpId);
     return sendSuccess(res, comments, 'Comments retrieved successfully');
   }),
+
+  // ── Update Document File (Replace file) ──────────────────────────────────────
+
+updateDocumentFile: asyncHandler(async (req: Request, res: Response) => {
+  const paramsResult = documentIdSchema.safeParse({ params: req.params });
+  if (!paramsResult.success) {
+    throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid document ID');
+  }
+
+  const file = req.file;
+  if (!file) {
+    throw new AppError(400, 'A file is required');
+  }
+
+  const status = req.body?.status as string | undefined;
+  const comments = req.body?.comments as string | undefined;
+
+  // Check if document exists
+  const doc = await DocumentService.findById(paramsResult.data.params.id);
+  if (!doc) {
+    throw new AppError(404, 'Document not found');
+  }
+
+  // Update the document with the new file
+  const updated = await DocumentService.updateDocumentFile(
+    paramsResult.data.params.id,
+    file,
+    req.user!.id,
+    status,
+    comments
+  );
+
+  safeDocumentUpdated(req, updated);
+
+  return sendSuccess(res, updated, 'Document file updated successfully');
+}),
 };

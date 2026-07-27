@@ -28,14 +28,13 @@ export const documentStatusEnum = z.enum([
   'draft',
   'uploaded',
   'pending_review',
-  'dept_assigned',   // Super Admin assigned to department
-  'user_assigned',   // Dept Head assigned to a specific user
+  'dept_assigned',
+  'user_assigned',
   'in_progress',
   'completed',
   'filed',
   'ready_to_release',
   'released',
-  // Legacy – kept for compatibility; new code should use `dept_assigned`
   'marked',
 ]);
 
@@ -64,7 +63,7 @@ export const followUpStatusEnum = z.enum([
   'in_progress',
   'completed',
   'cancelled',
-  'filed_away',     // ✅ New: filed away with no future date
+  'filed_away',
 ]);
 
 export const followUpPriorityEnum = z.enum([
@@ -82,25 +81,55 @@ export const bringUpStatusEnum = z.enum([
   'all',
 ]);
 
-// ── Create composed document ────────────────────────────────────────────────
+// ── Date transformer helper ────────────────────────────────────────────────
 
-export const createComposedDocumentSchema = z.object({
-  body: z
-    .object({
-      title: z.string().min(1, 'Title is required').max(255).trim(),
-      type: z.enum(['judgment', 'ruling', 'order']),
-      category: documentCategoryEnum.optional(),
-      reference_no: z.string().max(100).trim().optional(),
-      body: z.string().min(1, 'Document body is required'),
-      assigned_to: z.string().uuid().optional(),
-      department_id: z.string().uuid().optional(),
-    })
-    .strict(),
-});
+/**
+ * Transforms a date string to ISO datetime format.
+ * Accepts:
+ * - ISO datetime strings: "2026-07-23T00:00:00.000Z"
+ * - Date-only strings: "2026-07-23"
+ * - Date objects
+ * - null
+ */
+const transformBringUpDate = (val: unknown): string | null => {
+  if (val === null || val === undefined) {
+    return null;
+  }
+  if (val instanceof Date) {
+    return val.toISOString();
+  }
+  if (typeof val === 'string') {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(val)) {
+      return new Date(val + 'T00:00:00.000Z').toISOString();
+    }
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(val)) {
+      return val;
+    }
+    const parsed = new Date(val);
+    if (!isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+  }
+  return val as string;
+};
 
-// ─── Create upload document ─────────────────────────────────────────────────
+/**
+ * Zod schema that accepts:
+ * - Date strings (YYYY-MM-DD or ISO)
+ * - Date objects
+ * - null
+ * And transforms them to ISO datetime format or null.
+ */
+const bringUpDateSchema = z
+  .union([
+    z.string().min(1, 'Bring up date is required'),
+    z.date(),
+    z.null(),
+  ])
+  .transform(transformBringUpDate);
 
-// ✅ Add request details schema
+// ── Request Details Schema ─────────────────────────────────────────────────
+
 export const documentRequestDetailsSchema = z
   .object({
     request_type: z.enum(['driver', 'bodyguard', 'firearm', 'current_station', 'force_number', 'residence_security', 'sentry']).nullable().optional(),
@@ -148,6 +177,24 @@ export const documentRequestDetailsSchema = z
   })
   .strict();
 
+// ─── Create composed document ────────────────────────────────────────────────
+
+export const createComposedDocumentSchema = z.object({
+  body: z
+    .object({
+      title: z.string().min(1, 'Title is required').max(255).trim(),
+      type: z.enum(['judgment', 'ruling', 'order']),
+      category: documentCategoryEnum.optional(),
+      reference_no: z.string().max(100).trim().optional(),
+      body: z.string().min(1, 'Document body is required'),
+      assigned_to: z.string().uuid().optional(),
+      department_id: z.string().uuid().optional(),
+    })
+    .strict(),
+});
+
+// ─── Create upload document ─────────────────────────────────────────────────
+
 export const createUploadDocumentSchema = z.object({
   body: z
     .object({
@@ -161,7 +208,6 @@ export const createUploadDocumentSchema = z.object({
       assigned_to: z.string().uuid().optional(),
       department_id: z.string().uuid().optional(),
       is_draft: z.coerce.boolean().default(false),
-      // ✅ Add request_details field
       request_details: documentRequestDetailsSchema.optional(),
     })
     .strict()
@@ -186,7 +232,6 @@ export const updateDocumentSchema = z.object({
       status: documentStatusEnum.optional(),
       assigned_to: z.string().uuid().nullable().optional(),
       department_id: z.string().uuid().nullable().optional(),
-      // Memo/Letter specific fields (editable by super admin)
       to_recipient: z.string().max(500).trim().optional(),
       from_sender: z.string().max(500).trim().optional(),
       document_date: z.string().optional(),
@@ -195,13 +240,11 @@ export const updateDocumentSchema = z.object({
       enclosures: z.string().max(500).trim().optional(),
       signature_name: z.string().max(255).trim().optional(),
       signature_title: z.string().max(255).trim().optional(),
-      from_first: z.boolean().optional(),   // controls TO/FROM field order in the memo header
-      // Custom signature position (draggable) – absolute positioning
+      from_first: z.boolean().optional(),
       signature_position_x: z.number().nullable().optional(),
       signature_position_y: z.number().nullable().optional(),
       signature_position_width: z.number().nullable().optional(),
       signature_position_height: z.number().nullable().optional(),
-      // ✅ Add request_details to update as well
       request_details: documentRequestDetailsSchema.nullable().optional(),
     })
     .strict()
@@ -246,7 +289,6 @@ export const documentFiltersSchema = z.object({
       .enum(['true', 'false'])
       .transform((v) => v === 'true')
       .optional(),
-    // ─── Bring Up Filters ─────────────────────────────────────────────────────
     has_bring_up_date: z
       .enum(['true', 'false'])
       .transform((v) => v === 'true')
@@ -303,13 +345,6 @@ export const followUpIdSchema = z.object({
   }),
 });
 
-export const documentFollowUpIdSchema = z.object({
-  params: z.object({
-    id: z.string().uuid('Document ID must be a valid UUID'),
-    followUpId: z.string().uuid('Follow-up ID must be a valid UUID'),
-  }),
-});
-
 // ─── Annotation ─────────────────────────────────────────────────────────────
 
 export const createAnnotationSchema = z.object({
@@ -322,7 +357,7 @@ export const createAnnotationSchema = z.object({
     .strict(),
 });
 
-// ─── Response (threaded reply to a return/action request) ───────────────────
+// ─── Response ───────────────────────────────────────────────────────────────
 
 export const respondToDocumentSchema = z.object({
   body: z
@@ -380,7 +415,7 @@ const baseComposeSchema = z.object({
   from: z.string().optional(),
   signatureName: z.string().optional(),
   signatureTitle: z.string().optional(),
-  fromFirst: z.boolean().default(false),   // controls TO/FROM field order in the memo header
+  fromFirst: z.boolean().default(false),
   department_id: z.string().uuid().optional(),
   reference_no: z.string().max(100).trim().optional(),
 });
@@ -395,10 +430,6 @@ export const composeLetterSchema = z.object({
     enclosures: z.string().optional(),
   }),
 });
-
-// ─── Certificate composition schema ─────────────────────────────────────────
-
-// src/features/documents/documents.validator.ts
 
 export const composeCertificateSchema = z.object({
   body: z
@@ -416,11 +447,10 @@ export const composeCertificateSchema = z.object({
       footerAddress: z.string().max(500).trim().optional(),
       footerContact: z.string().max(500).trim().optional(),
       footerTagline: z.string().max(200).trim().optional(),
-      // ─── Fields for document storage ──────────────────────────────────────
-      from: z.string().max(255).trim().optional(),           // Maps to from_sender
-      to: z.string().max(500).trim().optional(),             // Maps to to_recipient
-      signatureName: z.string().max(255).trim().optional(),  // Maps to signature_name
-      signatureTitle: z.string().max(255).trim().optional(), // Maps to signature_title
+      from: z.string().max(255).trim().optional(),
+      to: z.string().max(500).trim().optional(),
+      signatureName: z.string().max(255).trim().optional(),
+      signatureTitle: z.string().max(255).trim().optional(),
       department_id: z.string().uuid().optional(),
       reference_no: z.string().max(100).trim().optional(),
     })
@@ -428,7 +458,7 @@ export const composeCertificateSchema = z.object({
 });
 
 // ════════════════════════════════════════════════════════════════════════
-//  Update Mark (UPDATED - Removed bring_up_date)
+//  Update Mark
 // ════════════════════════════════════════════════════════════════════════
 
 export const updateMarkSchema = z.object({
@@ -438,7 +468,6 @@ export const updateMarkSchema = z.object({
   body: z
     .object({
       instructions: z.string().max(2000).trim().optional(),
-      // REMOVED: bring_up_date: z.string().nullable().optional(),
     })
     .strict()
     .refine((b) => b.instructions !== undefined, {
@@ -447,61 +476,8 @@ export const updateMarkSchema = z.object({
 });
 
 // ════════════════════════════════════════════════════════════════════════
-//  BRING UP SCHEMAS (NEW)
+//  BRING UP SCHEMAS
 // ════════════════════════════════════════════════════════════════════════
-
-// ─── Date transformer helper ────────────────────────────────────────────────
-
-/**
- * Transforms a date string to ISO datetime format.
- * Accepts:
- * - ISO datetime strings: "2026-07-23T00:00:00.000Z"
- * - Date-only strings: "2026-07-23"
- * - Date objects
- * - null
- */
-const transformBringUpDate = (val: unknown): string | null => {
-  if (val === null || val === undefined) {
-    return null;
-  }
-  if (val instanceof Date) {
-    return val.toISOString();
-  }
-  if (typeof val === 'string') {
-    // If it's a date-only string (YYYY-MM-DD), convert to ISO datetime
-    if (/^\d{4}-\d{2}-\d{2}$/.test(val)) {
-      return new Date(val + 'T00:00:00.000Z').toISOString();
-    }
-    // If it's already an ISO datetime, return as-is
-    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(val)) {
-      return val;
-    }
-    // If it's a date string like "2026-07-23T00:00:00", ensure it's valid
-    const parsed = new Date(val);
-    if (!isNaN(parsed.getTime())) {
-      return parsed.toISOString();
-    }
-  }
-  // If it's not a string or Date, let Zod handle the error
-  return val as string;
-};
-
-/**
- * Zod schema that accepts:
- * - Date strings (YYYY-MM-DD or ISO)
- * - Date objects
- * - null
- * And transforms them to ISO datetime format or null.
- */
-const bringUpDateSchema = z
-  .union([
-    z.string().min(1, 'Bring up date is required'),
-    z.date(),
-    z.null(),
-  ])
-  .transform(transformBringUpDate);
-
-// ─── Set Bring Up Schema ─────────────────────────────────────────────────────
 
 export const setBringUpSchema = z.object({
   body: z
@@ -515,8 +491,6 @@ export const setBringUpSchema = z.object({
     .strict(),
 });
 
-// ─── Update Bring Up Schema ─────────────────────────────────────────────────
-
 export const updateBringUpSchema = z.object({
   body: z
     .object({
@@ -528,8 +502,6 @@ export const updateBringUpSchema = z.object({
     .strict(),
 });
 
-// ─── Complete Bring Up Schema ───────────────────────────────────────────────
-
 export const completeBringUpSchema = z.object({
   body: z
     .object({
@@ -537,8 +509,6 @@ export const completeBringUpSchema = z.object({
     })
     .strict(),
 });
-
-// ─── Bring Up Filters Schema ────────────────────────────────────────────────
 
 export const bringUpFiltersSchema = z.object({
   query: z.object({
@@ -572,19 +542,9 @@ export const bringUpFiltersSchema = z.object({
 });
 
 // ════════════════════════════════════════════════════════════════════════
-//  FOLLOW-UP SCHEMAS (UPDATED - SIMPLIFIED)
+//  FOLLOW-UP SCHEMAS
 // ════════════════════════════════════════════════════════════════════════
 
-// ─── Date transformer helper ────────────────────────────────────────────────
-
-/**
- * Transforms a date string to ISO datetime format.
- * Accepts:
- * - ISO datetime strings: "2026-07-23T00:00:00.000Z"
- * - Date-only strings: "2026-07-23"
- * - Date objects
- * - null (for filed away items)
- */
 const transformDate = (val: unknown): string | null => {
   if (val === null || val === undefined) {
     return null;
@@ -593,31 +553,20 @@ const transformDate = (val: unknown): string | null => {
     return val.toISOString();
   }
   if (typeof val === 'string') {
-    // If it's a date-only string (YYYY-MM-DD), convert to ISO datetime
     if (/^\d{4}-\d{2}-\d{2}$/.test(val)) {
       return new Date(val + 'T00:00:00.000Z').toISOString();
     }
-    // If it's already an ISO datetime, return as-is
     if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(val)) {
       return val;
     }
-    // If it's a date string like "2026-07-23T00:00:00", ensure it's valid
     const parsed = new Date(val);
     if (!isNaN(parsed.getTime())) {
       return parsed.toISOString();
     }
   }
-  // If it's not a string or Date, let Zod handle the error
   return val as string;
 };
 
-/**
- * Zod schema that accepts:
- * - Date strings (YYYY-MM-DD or ISO)
- * - Date objects
- * - null (for filed away)
- * And transforms them to ISO datetime format or null.
- */
 const optionalDateSchema = z
   .union([
     z.string().datetime({ message: 'Invalid due date format' }).optional(),
@@ -627,15 +576,6 @@ const optionalDateSchema = z
   ])
   .transform(transformDate);
 
-// ─── Create Follow-Up Schema (Simplified) ──────────────────────────────────
-
-/**
- * Simplified follow-up creation:
- * - notes: Required - what was done or needs to be done (replaces title + description)
- * - due_date: Optional - if not provided, follow-up is "filed away"
- * - mark_id: Optional - may not always be linked to a mark
- * - title: Removed - auto-generated from document title
- */
 export const createFollowUpSchema = z.object({
   body: z
     .object({
@@ -649,7 +589,6 @@ export const createFollowUpSchema = z.object({
     .strict()
     .refine(
       (data) => {
-        // If due_date is provided, it must be a valid date string
         if (data.due_date === null || data.due_date === undefined) {
           return true;
         }
@@ -663,11 +602,6 @@ export const createFollowUpSchema = z.object({
     ),
 });
 
-// ─── File Away Schema (New) ────────────────────────────────────────────────
-
-/**
- * Quick action to file away a follow-up with no future date
- */
 export const fileAwayFollowUpSchema = z.object({
   body: z
     .object({
@@ -678,8 +612,6 @@ export const fileAwayFollowUpSchema = z.object({
     })
     .strict(),
 });
-
-// ─── Update Follow-Up Schema (Simplified) ──────────────────────────────────
 
 export const updateFollowUpSchema = z.object({
   params: z.object({
@@ -701,8 +633,6 @@ export const updateFollowUpSchema = z.object({
     }),
 });
 
-// ─── Complete Follow-Up Schema ─────────────────────────────────────────────
-
 export const completeFollowUpSchema = z.object({
   body: z
     .object({
@@ -711,8 +641,6 @@ export const completeFollowUpSchema = z.object({
     .strict(),
 });
 
-// ─── Cancel Follow-Up Schema ───────────────────────────────────────────────
-
 export const cancelFollowUpSchema = z.object({
   body: z
     .object({
@@ -720,8 +648,6 @@ export const cancelFollowUpSchema = z.object({
     })
     .strict(),
 });
-
-// ─── Add Follow-Up Comment Schema ─────────────────────────────────────────
 
 export const addFollowUpCommentSchema = z.object({
   params: z.object({
@@ -734,8 +660,6 @@ export const addFollowUpCommentSchema = z.object({
     .strict(),
 });
 
-// ─── Follow-Up Filters Schema (Updated) ────────────────────────────────────
-
 export const followUpFiltersSchema = z.object({
   query: z.object({
     document_id: z.string().uuid('Document ID must be a valid UUID').optional(),
@@ -745,7 +669,6 @@ export const followUpFiltersSchema = z.object({
     due_from: optionalDateSchema.optional(),
     due_to: optionalDateSchema.optional(),
     search: z.string().trim().max(100).optional(),
-    // ✅ New filters
     active_only: z
       .enum(['true', 'false'])
       .transform((v) => v === 'true')
@@ -781,7 +704,6 @@ export const signDocumentSchema = z.object({
   }),
   body: z.object({
     otp: z.string().length(6, 'OTP must be exactly 6 digits').regex(/^\d{6}$/, 'OTP must contain only digits'),
-    // Custom signature position (sent from frontend when user places the box)
     position_x: z.number().optional(),
     position_y: z.number().optional(),
     position_width: z.number().optional(),
@@ -879,20 +801,14 @@ export type ComposeCertificateInput = z.infer<typeof composeCertificateSchema>['
 
 export type UpdateMarkInput = z.infer<typeof updateMarkSchema>['body'];
 
-// ── Bring Up types ──────────────────────────────────────────────────────────
-
 export type SetBringUpInput = z.infer<typeof setBringUpSchema>['body'];
 export type UpdateBringUpInput = z.infer<typeof updateBringUpSchema>['body'];
 export type CompleteBringUpInput = z.infer<typeof completeBringUpSchema>['body'];
 export type BringUpFilters = z.infer<typeof bringUpFiltersSchema>['query'];
 
-// ── Folder types ──────────────────────────────────────────────────────────
-
 export type RedirectToFolderInput = z.infer<typeof redirectToFolderSchema>['body'];
 export type RemoveFromFolderInput = z.infer<typeof removeFromFolderSchema>['body'];
 export type GetFolderDocumentsQuery = z.infer<typeof getFolderDocumentsSchema>['query'];
-
-// ── Follow-up types (Updated) ─────────────────────────────────────────────
 
 export type CreateFollowUpInput = z.infer<typeof createFollowUpSchema>['body'];
 export type FileAwayFollowUpInput = z.infer<typeof fileAwayFollowUpSchema>['body'];

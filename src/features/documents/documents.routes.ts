@@ -544,4 +544,23 @@ router.get(
   documentController.getDocumentsByFolder
 );
 
+// ════════════════════════════════════════════════════════════════════════════
+//  4. FILE UPLOAD FOR EXISTING DOCUMENT (ADD THIS)
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * @route   PUT /api/documents/:id/file
+ * @desc    Replace/update the file of an existing document
+ * @access  Super Admin only
+ * @body    multipart/form-data with 'file' field
+ * @query   status - optional status to update (e.g., 'released', 'completed')
+ * @query   comments - optional comments
+ */
+router.put(
+  '/:id/file',
+  requireRole('super_admin'),
+  upload.single('file'),
+  documentController.updateDocumentFile
+);
+
 export default router;

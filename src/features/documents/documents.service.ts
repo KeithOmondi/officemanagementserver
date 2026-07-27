@@ -1269,12 +1269,24 @@ export class DocumentService {
       const response = await axios.get<ArrayBuffer>(doc.file_url, { responseType: 'arraybuffer' });
       const originalPdf = Buffer.from(response.data);
 
-      const signedPdf = await embedSignatureIntoPDF(
-        originalPdf,
-        signer.signature_url,
-        position,
-        signatoryName
-      );
+      const isCertificate = doc.type === 'certificate';
+
+const signedPdf = await embedSignatureIntoPDF(
+  originalPdf,
+  signer.signature_url,
+  position,
+  signatoryName,
+  isCertificate,                   // anchorOnly — certificates must never
+                                    // fall back to fuzzy name/title matching,
+                                    // since the signer's name legitimately
+                                    // appears earlier in the body ("I, CLARA
+                                    // OTIENO-OMONDI, Registrar...") — which is
+                                    // exactly what was getting matched here.
+  isCertificate ? 35 : undefined   // anchorMaxHeight — tighter cap matching
+                                    // the certificate's ~32pt signatory gap;
+                                    // undefined preserves memo/letter's
+                                    // existing 65pt default unchanged.
+);
 
       if (doc.file_public_id) {
         await deleteFromCloudinary(doc.file_public_id).catch(console.error);

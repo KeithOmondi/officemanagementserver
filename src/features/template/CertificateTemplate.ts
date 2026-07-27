@@ -169,13 +169,29 @@ export function getCertificateHTML(data: CertificateData): string {
            can locate it), but zero visual footprint. Kept centered inline
            so its detected x-coordinate lands near the page's horizontal
            center, matching this template's centered signatory block —
-           unlike Letter/Memo's left-margin anchor. */
+           unlike Letter/Memo's left-margin anchor.
+
+           NOTE: this used to be font-size:1px / line-height:1px / height:1px
+           with color:transparent + overflow:hidden. That rendered fine
+           locally but was silently dropped from the PDF's text layer in
+           production — some Chromium builds collapse a near-zero-size,
+           overflow-hidden line box out of the layout/text-render tree
+           entirely, so pdf.js never sees a text item for it at all. When
+           that happened, Pass 0 (the anchor search) failed, and the
+           certificate's signature fell through to fuzzy name matching,
+           which grabbed the signer's name from the "I, <NAME>, Registrar…"
+           opening line instead — placing the signature near the top of the
+           page instead of above the signatory block.
+
+           Using a small-but-real 4pt line, hidden via color:white against
+           the page's white background instead of transparent+clipping,
+           keeps the glyph's layout box intact so it reliably survives
+           PDF text extraction, while still being visually invisible. */
         .signature-anchor {
-          font-size: 1px;
-          line-height: 1px;
-          height: 1px;
-          color: transparent;
-          overflow: hidden;
+          font-size: 4pt;
+          line-height: 4pt;
+          height: 4pt;
+          color: #ffffff;
           user-select: none;
           text-align: center;
         }

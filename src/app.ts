@@ -31,6 +31,7 @@ import stampRoutes from "./features/e-stamp/e-stamp.routes"
 import aiReportsRoutes from './features/reports/ai-reports.routes';
 import aidesRoutes from './features/aides/aide.routes';
 import dashboardRoutes from "./features/dashboard/dashboard.routes"
+import projectsRoutes from './features/projects/projects.routes';
 
 // ── Middleware ────────────────────────────────────────────────────────────
 import { errorMiddleware } from './middleware/error.middleware';
@@ -93,6 +94,7 @@ app.use('/api/v1/orhc-folders', registryorhcRoutes);
 app.use('/api/v1/e-stamp', stampRoutes);
 app.use('/api/v1/reports', aiReportsRoutes);
 app.use('/api/v1/dashboard', dashboardRoutes);
+app.use('/api/v1/projects', projectsRoutes);
 // aidesRoutes defines its own '/aide/*' and '/sentry/*' sub-paths internally,
 // so it must be mounted at the '/api/v1' root — not '/api/v1/aide' — or
 // requests to /api/v1/aide and /api/v1/sentry will 404.

@@ -17,7 +17,6 @@ type TextItem = {
   x: number;
   y: number;
   pageIndex: number;
-  fontSize: number;
 };
 
 async function extractTextItems(pdfBytes: Uint8Array): Promise<{
@@ -41,21 +40,18 @@ async function extractTextItems(pdfBytes: Uint8Array): Promise<{
     const items: TextItem[] = textContent.items
       .filter((it: any) => typeof it.str === 'string' && it.str.trim().length > 0)
       .map((it: any) => {
-        const [, , , d, x, y] = it.transform;
+        const [, , , , x, y] = it.transform;
         return {
           str: it.str as string,
           x: x as number,
           y: y as number,
           pageIndex: i - 1,
-          fontSize: Math.abs(d as number) || 12,
         };
       });
 
     console.log(`[extractTextItems] Page ${i} extracted ${items.length} items`);
     items.slice(0, 10).forEach((item, idx) => {
-      console.log(
-        `  [${idx}] "${item.str.trim()}" at x:${item.x.toFixed(0)}, y:${item.y.toFixed(0)}, fontSize:${item.fontSize.toFixed(1)}`
-      );
+      console.log(`  [${idx}] "${item.str.trim()}" at x:${item.x.toFixed(0)}, y:${item.y.toFixed(0)}`);
     });
 
     allItems.push(...items);
@@ -107,92 +103,35 @@ const DEFAULT_NAME_PATTERN =
 // detection logic itself. In PDF coordinates, y grows UPWARD, so a
 // SMALLER SIGNATURE_Y_OFFSET moves the signature DOWN (closer to the
 // name); a NEGATIVE SIGNATURE_X_OFFSET shifts it LEFT relative to the
-// name's left edge. Used only by the left-aligned Memo/Letter passes
-// (Pass 1 / Pass 2).
+// name's left edge.
 const SIGNATURE_Y_OFFSET = 12;
 const SIGNATURE_X_OFFSET = -10;
 
-// Separate horizontal nudge for the CENTERED anchor case (Certificate-style
-// templates). Positive = shift right. Needed because centerX is computed
-// from the "HIGH COURT SUPPORT OFFICE" text line, and small measurement
-// artifacts (kerning, glyph-width rounding) can leave the image sitting a
-// touch left of the block's true visual center — this is a pure cosmetic
-// tuning knob, independent of SIGNATURE_X_OFFSET above.
-const CENTERED_X_NUDGE = 18;
+// ── Anchor-based placement (Pass 0) tuning ──────────────────────────────────
+// Padding kept clear above the next line (the title/name line right below
+// the anchor) and below the anchor line itself. The image's height is then
+// capped to whatever fits inside the MEASURED gap between those two lines —
+// not a flat assumption — because different templates (Certificate vs.
+// Letter/Memo) leave very different amounts of space there. A fixed max
+// height that looked right on one template overlapped badly on another.
+const ANCHOR_TOP_GAP = 6;     // clearance below the anchor line
+const ANCHOR_BOTTOM_GAP = 4;  // clearance above the next line (title/name)
+const ANCHOR_DEFAULT_MAX_HEIGHT = 65; // default cap — matches Letter/Memo's spacious ~46pt anchor-to-name gap; DO NOT lower this, it's what keeps their existing (working) placement unchanged
+const ANCHOR_MIN_HEIGHT = 20; // never shrink the signature below this, even if the gap is tighter
 
-// ── Gap-measurement tuning (shared by ALL detection passes) ────────────────
-// The image's height is capped to whatever fits inside the MEASURED gap
-// between the line above the signature and the reference line below it —
-// not a flat assumption — because different templates leave very different
-// amounts of space there. Clearances are derived from the ACTUAL font size
-// of each boundary line (via TextItem.fontSize) rather than fixed point
-// values: a fixed 4pt buffer above a 14pt line's baseline sits inside the
-// letters' ascent, which is what caused the memo/letter overlap. These
-// multipliers are typical ascent/descent ratios for common fonts.
-const ASCENT_RATIO = 0.82;   // fraction of font size that sits above the baseline
-const DESCENT_RATIO = 0.22;  // fraction of font size that sits below the baseline
-const MIN_CLEARANCE = 4;     // absolute floor, even for tiny fonts
-
-const DEFAULT_MAX_HEIGHT = 100;   // ceiling only — still clamped by the measured gap
-const MIN_SIGNATURE_HEIGHT = 26;  // never shrink below this — a smaller image just looks like a stamp/artifact, not a signature
-
-/**
- * Clearance needed below a line so an image sitting above it doesn't clip
- * that line's ascenders (the tall parts of letters like "h", "l", capitals).
- */
-function ascentClearance(fontSize: number): number {
-  return Math.max(MIN_CLEARANCE, fontSize * ASCENT_RATIO);
-}
-
-/**
- * Clearance needed above a line so an image sitting below it doesn't clip
- * that line's descenders (the parts of letters like "g", "y" that dip below
- * the baseline) — smaller than ascent clearance since descenders are shallower.
- */
-function descentClearance(fontSize: number): number {
-  return Math.max(MIN_CLEARANCE, fontSize * DESCENT_RATIO);
-}
-
-/**
- * Given the y of the reference line the signature must clear (referenceY,
- * with its font size — this is the line spatially BELOW the image) and, if
- * known, the y/fontSize of the line spatially ABOVE the image (larger y,
- * since PDF y increases upward), compute a height cap that fits inside the
- * real measured gap. Falls back to DEFAULT_MAX_HEIGHT when there's no line
- * above to measure against (e.g. reference line is the topmost line on the
- * page).
- *
- * IMPORTANT: `above.y` must be > `referenceY`. Passing these two swapped
- * silently produces a negative "gap" that clamps to MIN_SIGNATURE_HEIGHT —
- * this was the cause of a real bug where anchor-based (Certificate-style)
- * signatures rendered tiny despite large visible whitespace, because the
- * anchor line (above) and signatory block (below/reference) were passed in
- * reverse. See the belowAnchor branch in embedSignatureIntoPDF.
- */
-function computeHeightCap(
-  referenceY: number,
-  referenceFontSize: number,
-  above: { y: number; fontSize: number } | undefined
-): number {
-  if (above === undefined) {
-    return DEFAULT_MAX_HEIGHT;
-  }
-  const topClearance = descentClearance(above.fontSize);
-  const bottomClearance = ascentClearance(referenceFontSize);
-  const availableGap = above.y - referenceY - topClearance - bottomClearance;
-  const heightCap = Math.max(MIN_SIGNATURE_HEIGHT, Math.min(DEFAULT_MAX_HEIGHT, availableGap));
-  if (availableGap < MIN_SIGNATURE_HEIGHT) {
-    console.warn(
-      `[embedSignature] Measured gap (${availableGap.toFixed(1)}pt, using ascent/descent-aware clearances) is ` +
-        `smaller than MIN_SIGNATURE_HEIGHT (${MIN_SIGNATURE_HEIGHT}pt) — signature will be clamped to the ` +
-        `minimum and MAY STILL OVERLAP adjacent text, because the template itself doesn't leave enough blank ` +
-        `space around the signatory block. This can only be fixed by adding vertical space (a blank paragraph ` +
-        `or spacer) in the template between "Yours sincerely," and the signatory name/title — no amount of ` +
-        `image scaling can create room that isn't in the source document.`
-    );
-  }
-  return heightCap;
-}
+// pdf.js reports a text item's y as its BASELINE, not its visible top.
+// For bold uppercase text (the signatory block's styling on every
+// template), the glyphs themselves rise roughly this far above that
+// baseline. Treating the full anchor-to-baseline distance as free space
+// (as the gap math previously did) let the signature image's bottom edge
+// get sized/placed down into the glyphs of the next line, cutting through
+// it. Subtracting this estimate from the available gap — and adding it
+// back when computing where the image's bottom edge should sit — keeps
+// the image above the next line's actual ink, not just its baseline.
+// ~0.72 of a 12pt bold-caps font ≈ 8.5pt; this is an estimate, not a
+// per-glyph measurement, but it comfortably covers the cap-height of the
+// bold uppercase signatory lines used across Letter/Memo/Certificate.
+const NEXT_LINE_CAP_HEIGHT_ESTIMATE = 8.5;
 
 /**
  * Build a set of case-insensitive regexes that match a signer's name.
@@ -208,14 +147,17 @@ function buildNamePatterns(fullName?: string | null): RegExp[] {
     const words = cleaned.split(/\s+/).filter(Boolean);
     if (words.length > 0) {
       const patterns: RegExp[] = [];
+      // Full name with flexible whitespace/hyphens
       const fullPattern = words.map((w) => escapeRegex(w)).join('\\s*[-–—\\s]*\\s*');
       const suffix = '(?:,?\\s*(?:OGW|CBS|MBS|EBS|HSC|EGH)\\.?)?';
       patterns.push(new RegExp(fullPattern + suffix, 'i'));
       patterns.push(new RegExp(`HON\\.?\\s*${fullPattern}${suffix}`, 'i'));
+      // Last name alone
       if (words.length > 1) {
         const last = escapeRegex(words[words.length - 1]);
         patterns.push(new RegExp(`\\b${last}\\b${suffix}`, 'i'));
       }
+      // Also try each word (e.g., first name alone)
       for (const w of words) {
         patterns.push(new RegExp(`\\b${escapeRegex(w)}\\b`, 'i'));
       }
@@ -227,14 +169,9 @@ function buildNamePatterns(fullName?: string | null): RegExp[] {
 
 /**
  * Group text items by visual line (same y within tolerance) and concatenate
- * their strings in left-to-right order. Also tracks the max font size on
- * the line, and the line's horizontal midpoint (centerX) — used to center
- * images on centered layouts like CertificateTemplate.
+ * their strings in left-to-right order.
  */
-function groupItemsByLine(
-  items: TextItem[],
-  tolerance = 3
-): { y: number; text: string; items: TextItem[]; fontSize: number; centerX: number }[] {
+function groupItemsByLine(items: TextItem[], tolerance = 3): { y: number; text: string; items: TextItem[] }[] {
   const groups: { y: number; items: TextItem[] }[] = [];
   for (const item of items) {
     let found = false;
@@ -249,45 +186,49 @@ function groupItemsByLine(
       groups.push({ y: item.y, items: [item] });
     }
   }
+  // Sort each group's items by x ascending
   for (const g of groups) {
     g.items.sort((a, b) => a.x - b.x);
   }
-  return groups.map((g) => {
-    const xs = g.items.map((it) => it.x);
-    return {
-      y: g.y,
-      text: g.items.map((it) => it.str).join(' ').trim(),
-      items: g.items,
-      fontSize: Math.max(...g.items.map((it) => it.fontSize)),
-      centerX: (Math.min(...xs) + Math.max(...xs)) / 2,
-    };
-  });
+  // Concatenate and compute average y
+  return groups.map((g) => ({
+    y: g.y,
+    text: g.items.map((it) => it.str).join(' ').trim(),
+    items: g.items,
+  }));
 }
 
 interface DetectedPosition {
   y: number;
   pageIndex: number;
   x: number;
-  fontSize: number;
   // True only for the Pass-0 anchor-marker result. The image must be drawn
-  // BELOW this y (not above it, like the name/title passes), which —
-  // because drawImage extends upward from (x, y) — requires knowing the
-  // image's height. See embedSignatureIntoPDF.
+  // BELOW this y (not above it, like the name/title passes), which — because
+  // drawImage extends upward from (x, y) — requires knowing the image's
+  // height. See embedSignatureIntoPDF.
   belowAnchor?: boolean;
-  // The line immediately below the anchor (typically the first line of the
-  // signatory block). Used to MEASURE the actual available gap, and — via
-  // centerX — to horizontally center the image on centered layouts.
-  nextLine?: { y: number; fontSize: number; centerX: number };
-  // The line immediately ABOVE the detected reference line (spatially),
-  // used by the name/title passes (1 & 2) to measure the gap the same way
-  // nextLine does for the anchor pass.
-  aboveLine?: { y: number; fontSize: number };
+  // The y of the line immediately below the anchor (typically the first
+  // line of the signatory block, e.g. "REGISTRAR, HIGH COURT" or the
+  // printed name), when one exists on the same page. Used to MEASURE the
+  // actual available gap so the image is sized to fit it, rather than
+  // assuming a fixed height that may be wrong for a given template. NOTE:
+  // this is a BASELINE y, not the line's visible top — see
+  // NEXT_LINE_CAP_HEIGHT_ESTIMATE above for why that distinction matters.
+  nextLineY?: number;
 }
 
 /**
  * @param anchorOnly - When true, ONLY the explicit SIGNATURE_ANCHOR_TEXT
  *   marker (Pass 0) is trusted. If no anchor is found, this returns null
  *   immediately instead of falling through to the fuzzy name/title passes.
+ *   Use this for templates where the signatory's name may legitimately
+ *   appear earlier in the body text (e.g. "I, CLARA OTIENO-OMONDI,
+ *   Registrar of the High Court...") and/or where the closing signature
+ *   block contains no name line at all — both true of CertificateTemplate,
+ *   neither true of Letter/Memo. Without this flag, Pass 1/2 could latch
+ *   onto that earlier body mention, or mis-locate the block entirely,
+ *   silently placing the signature image in the wrong spot on a legal
+ *   document.
  */
 function findSignatureBlockPosition(
   items: TextItem[],
@@ -311,6 +252,7 @@ function findSignatureBlockPosition(
   const pageIndices = Object.keys(itemsByPage).map(Number).sort((a, b) => b - a);
   console.log('[findSignatureBlockPosition] Pages:', pageIndices);
 
+  // Build name and title patterns
   const namePatterns = buildNamePatterns(signerName);
   const titlePatterns = [
     /REGISTRAR\s*,\s*HIGH\s*COURT/i,
@@ -325,63 +267,61 @@ function findSignatureBlockPosition(
   for (const pageIndex of pageIndices) {
     const pageItems = itemsByPage[pageIndex];
     const lines = groupItemsByLine(pageItems);
+    // Sort top-to-bottom (descending y, since PDF y grows upward) so we can
+    // find whatever line comes immediately AFTER the anchor in reading order.
     const linesTopToBottom = [...lines].sort((a, b) => b.y - a.y);
     const anchorIdx = linesTopToBottom.findIndex((l) => l.text.includes(SIGNATURE_ANCHOR_TEXT));
 
     if (anchorIdx !== -1) {
       const anchorLine = linesTopToBottom[anchorIdx];
       const anchorItem = anchorLine.items[0];
-      const nextLine = linesTopToBottom[anchorIdx + 1];
+      const nextLine = linesTopToBottom[anchorIdx + 1]; // may be undefined if anchor is the last line
       console.log(
         `[findSignatureBlockPosition] Found anchor marker (line: "${anchorLine.text}") at y=${anchorLine.y}` +
-          (nextLine
-            ? `, next line: "${nextLine.text}" at y=${nextLine.y}, fontSize=${nextLine.fontSize.toFixed(
-                1
-              )}, centerX=${nextLine.centerX.toFixed(0)}`
-            : ', no next line found on this page') +
-          `, page=${pageIndex + 1}`
+        (nextLine ? `, next line: "${nextLine.text}" at y=${nextLine.y}` : ', no next line found on this page') +
+        `, page=${pageIndex + 1}`
       );
       return {
         y: anchorLine.y,
         pageIndex,
         x: anchorItem.x || 60,
-        fontSize: anchorLine.fontSize,
         belowAnchor: true,
-        nextLine: nextLine
-          ? { y: nextLine.y, fontSize: nextLine.fontSize, centerX: nextLine.centerX }
-          : undefined,
+        nextLineY: nextLine?.y,
       };
     }
   }
 
+  // ── anchorOnly guard: refuse to guess ───────────────────────────────────
+  // If the caller told us this template can't be trusted with fuzzy
+  // matching (name appears elsewhere in the body, and/or the sign-off
+  // block has no name line), stop here rather than risk a wrong placement.
   if (anchorOnly) {
-    console.warn(
-      '[findSignatureBlockPosition] anchorOnly=true and no anchor marker found — refusing to fall back to fuzzy matching. Returning null.'
-    );
+    console.warn('[findSignatureBlockPosition] anchorOnly=true and no anchor marker found — refusing to fall back to fuzzy matching. Returning null.');
     return null;
   }
 
   console.log('[findSignatureBlockPosition] No anchor marker found, falling back to fuzzy matching');
 
+  // ── Prepare lines per page ──────────────────────────────────────────────────
+  // We'll process pages from last to first.
   for (const pageIndex of pageIndices) {
     const pageItems = itemsByPage[pageIndex];
     const lines = groupItemsByLine(pageItems);
-    // Ascending y = index 0 is BOTTOM of page, index length-1 is TOP.
+    // Sort lines from bottom to top (lower y first) because PDF y increases upward.
     lines.sort((a, b) => a.y - b.y);
 
     console.log(`[findSignatureBlockPosition] Page ${pageIndex + 1} has ${lines.length} lines`);
 
-    // ── Pass 1: Direct name match (bottom-most occurrence) ──────────────────
+    // ── Pass 1: Direct name match (prefer bottom-most occurrence) ─────────────
     console.log('[findSignatureBlockPosition] Pass 1: Searching directly for signer name in lines...');
-    let nameLine: { y: number; text: string; items: TextItem[]; fontSize: number; centerX: number } | null = null;
-    let nameLineIdx = -1;
-    for (let i = 0; i < lines.length; i++) {
+    let nameLine: { y: number; text: string; items: TextItem[] } | null = null;
+    // Iterate from bottom to top (since we want the last occurrence)
+    for (let i = lines.length - 1; i >= 0; i--) {
       const line = lines[i];
-      if (isExcludedLine(line.text)) continue;
+      if (isExcludedLine(line.text)) continue; // skip "Yours sincerely," etc.
       for (const pattern of namePatterns) {
         if (pattern.test(line.text)) {
           nameLine = line;
-          nameLineIdx = i;
           console.log(`[findSignatureBlockPosition] Found name in line: "${line.text}" at y: ${line.y}`);
           break;
         }
@@ -390,33 +330,23 @@ function findSignatureBlockPosition(
     }
 
     if (nameLine) {
+      // Place signature above the name line
       const signatureY = nameLine.y + SIGNATURE_Y_OFFSET;
-      const x = nameLine.items.length > 0 ? Math.min(...nameLine.items.map((it) => it.x)) : 60;
-      const aboveLine = lines[nameLineIdx + 1];
-      console.log(
-        `[findSignatureBlockPosition] RETURNING (name line): y=${signatureY}, x=${x + SIGNATURE_X_OFFSET}, page=${
-          pageIndex + 1
-        }${aboveLine ? `, aboveLine="${aboveLine.text}"` : ', no line above to measure gap'}`
-      );
-      return {
-        y: signatureY,
-        pageIndex,
-        x: Math.max(10, x + SIGNATURE_X_OFFSET),
-        fontSize: nameLine.fontSize,
-        aboveLine: aboveLine ? { y: aboveLine.y, fontSize: aboveLine.fontSize } : undefined,
-      };
+      // Use the leftmost x of the line items
+      const x = nameLine.items.length > 0 ? Math.min(...nameLine.items.map(it => it.x)) : 60;
+      console.log(`[findSignatureBlockPosition] RETURNING (name line): y=${signatureY}, x=${x + SIGNATURE_X_OFFSET}, page=${pageIndex + 1}`);
+      return { y: signatureY, pageIndex, x: Math.max(10, x + SIGNATURE_X_OFFSET) };
     }
 
-    // ── Pass 2: Title + name above title ────────────────────────────────────
+    // ── Pass 2: Title + name above title ──────────────────────────────────────
     console.log('[findSignatureBlockPosition] Pass 2: Searching for title + name above...');
-    let titleLine: { y: number; text: string; items: TextItem[]; fontSize: number; centerX: number } | null = null;
-    let titleIdx = -1;
-    for (let i = 0; i < lines.length; i++) {
+    let titleLine: { y: number; text: string; items: TextItem[] } | null = null;
+    // Find title (prefer bottom-most)
+    for (let i = lines.length - 1; i >= 0; i--) {
       const line = lines[i];
       for (const pattern of titlePatterns) {
         if (pattern.test(line.text)) {
           titleLine = line;
-          titleIdx = i;
           console.log(`[findSignatureBlockPosition] Found title line: "${line.text}" at y: ${line.y}`);
           break;
         }
@@ -425,15 +355,16 @@ function findSignatureBlockPosition(
     }
 
     if (titleLine) {
-      let nameAbove: { y: number; text: string; items: TextItem[]; fontSize: number; centerX: number } | null = null;
-      let nameAboveIdx = -1;
+      // Find the line immediately above the title (higher y) that matches a name pattern
+      const titleIdx = lines.indexOf(titleLine);
+      let nameAbove: { y: number; text: string; items: TextItem[] } | null = null;
+      // Look upwards from title (indices > titleIdx because sorted ascending y)
       for (let i = titleIdx + 1; i < lines.length; i++) {
         const line = lines[i];
-        if (isExcludedLine(line.text)) continue;
+        if (isExcludedLine(line.text)) continue; // skip "Yours sincerely," etc.
         for (const pattern of namePatterns) {
           if (pattern.test(line.text)) {
             nameAbove = line;
-            nameAboveIdx = i;
             console.log(`[findSignatureBlockPosition] Found name above title: "${line.text}" at y: ${line.y}`);
             break;
           }
@@ -443,36 +374,15 @@ function findSignatureBlockPosition(
 
       if (nameAbove) {
         const signatureY = nameAbove.y + SIGNATURE_Y_OFFSET;
-        const x = nameAbove.items.length > 0 ? Math.min(...nameAbove.items.map((it) => it.x)) : 60;
-        const aboveLine = lines[nameAboveIdx + 1];
-        console.log(
-          `[findSignatureBlockPosition] RETURNING (name above title): y=${signatureY}, x=${
-            x + SIGNATURE_X_OFFSET
-          }, page=${pageIndex + 1}`
-        );
-        return {
-          y: signatureY,
-          pageIndex,
-          x: Math.max(10, x + SIGNATURE_X_OFFSET),
-          fontSize: nameAbove.fontSize,
-          aboveLine: aboveLine ? { y: aboveLine.y, fontSize: aboveLine.fontSize } : undefined,
-        };
+        const x = nameAbove.items.length > 0 ? Math.min(...nameAbove.items.map(it => it.x)) : 60;
+        console.log(`[findSignatureBlockPosition] RETURNING (name above title): y=${signatureY}, x=${x + SIGNATURE_X_OFFSET}, page=${pageIndex + 1}`);
+        return { y: signatureY, pageIndex, x: Math.max(10, x + SIGNATURE_X_OFFSET) };
       } else {
+        // Fallback: place above the title line itself
         const signatureY = titleLine.y + SIGNATURE_Y_OFFSET;
-        const x = titleLine.items.length > 0 ? Math.min(...titleLine.items.map((it) => it.x)) : 60;
-        const aboveLine = lines[titleIdx + 1];
-        console.log(
-          `[findSignatureBlockPosition] RETURNING (title only): y=${signatureY}, x=${
-            x + SIGNATURE_X_OFFSET
-          }, page=${pageIndex + 1}`
-        );
-        return {
-          y: signatureY,
-          pageIndex,
-          x: Math.max(10, x + SIGNATURE_X_OFFSET),
-          fontSize: titleLine.fontSize,
-          aboveLine: aboveLine ? { y: aboveLine.y, fontSize: aboveLine.fontSize } : undefined,
-        };
+        const x = titleLine.items.length > 0 ? Math.min(...titleLine.items.map(it => it.x)) : 60;
+        console.log(`[findSignatureBlockPosition] RETURNING (title only): y=${signatureY}, x=${x + SIGNATURE_X_OFFSET}, page=${pageIndex + 1}`);
+        return { y: signatureY, pageIndex, x: Math.max(10, x + SIGNATURE_X_OFFSET) };
       }
     }
   }
@@ -487,7 +397,7 @@ function findSignatureBlockPosition(
     if (lastItem) {
       const signatureY = lastItem.y + 50;
       console.log(`[findSignatureBlockPosition] LAST RESORT: y=${signatureY}, page=${lastItem.pageIndex + 1}`);
-      return { y: signatureY, pageIndex: lastItem.pageIndex, x: lastItem.x || 60, fontSize: lastItem.fontSize };
+      return { y: signatureY, pageIndex: lastItem.pageIndex, x: lastItem.x || 60 };
     }
   }
 
@@ -497,15 +407,46 @@ function findSignatureBlockPosition(
 
 /**
  * Embed a signature image into a PDF.
+ * The signature is placed directly above the signatory block (name + title)
+ * by scanning the document text. No placement options are provided; the
+ * detection is automatic.
+ *
+ * @param pdfBuffer - The PDF buffer to embed the signature into
+ * @param signatureUrl - URL of the signature image
+ * @param position - Optional custom position { x, y, width, height }
+ *                   where x,y are from TOP of the document (frontend coordinates)
+ * @param signerName - Optional signer's full name; if provided, it is used to
+ *                     build name-matching patterns; otherwise a default pattern
+ *                     matching typical ORHC signatories is used.
+ * @param anchorOnly - When true, only the explicit SIGNATURE_ANCHOR_TEXT marker
+ *                     is trusted; if it's not found, no signature is embedded
+ *                     rather than guessing via fuzzy name/title matching. Pass
+ *                     true for templates (e.g. Certificate) where the signer's
+ *                     name may appear earlier in the body, or where the closing
+ *                     block has no name line for the fuzzy passes to anchor on.
+ * @param anchorMaxHeight - Only affects the anchor-marker path (belowAnchor).
+ *                     Caps how tall the signature image is allowed to be when
+ *                     placed below the anchor, both when a real gap was
+ *                     measured AND in the no-next-line-found fallback.
+ *                     Defaults to 65pt, which matches Letter/Memo's real,
+ *                     measured ~46pt anchor-to-name gap comfortably — leave
+ *                     this at the default for those. Pass a smaller value
+ *                     (e.g. ~35) for templates with a tighter traditional
+ *                     signature envelope, such as Certificate's ~32pt gap —
+ *                     otherwise the no-next-line fallback can compute a y
+ *                     so low it gets clamped to the page bottom, landing on
+ *                     top of the footer.
+ * @returns The modified PDF buffer, or the original if placement failed.
  */
 export async function embedSignatureIntoPDF(
   pdfBuffer: Buffer,
   signatureUrl: string,
   position?: { x: number; y: number; width: number; height: number } | null,
   signerName?: string | null,
-  anchorOnly: boolean = false
+  anchorOnly: boolean = false,
+  anchorMaxHeight: number = ANCHOR_DEFAULT_MAX_HEIGHT
 ): Promise<Buffer> {
-  console.log(`[embedSignature] signer: ${signerName ?? '(none provided)'}, anchorOnly: ${anchorOnly}`);
+  console.log(`[embedSignature] signer: ${signerName ?? '(none provided)'}, anchorOnly: ${anchorOnly}, anchorMaxHeight: ${anchorMaxHeight}`);
 
   const pdfDoc = await PDFDocument.load(pdfBuffer);
   const pages = pdfDoc.getPages();
@@ -520,9 +461,7 @@ export async function embedSignatureIntoPDF(
 
   // ── If custom position is provided ──────────────────────────────────────────
   if (position) {
-    console.log(
-      `[embedSignature] Using custom position: x=${position.x}, y=${position.y}, w=${position.width}, h=${position.height}`
-    );
+    console.log(`[embedSignature] Using custom position: x=${position.x}, y=${position.y}, w=${position.width}, h=${position.height}`);
 
     let targetPageIndex = 0;
     let yWithinPage = position.y;
@@ -562,7 +501,12 @@ export async function embedSignatureIntoPDF(
 
     console.log(`[embedSignature] Page ${targetPageIndex + 1}: x=${x.toFixed(0)}, y=${y.toFixed(0)}`);
 
-    targetPage.drawImage(sigImage, { x, y, width: sigDims.width, height: sigDims.height });
+    targetPage.drawImage(sigImage, {
+      x,
+      y,
+      width: sigDims.width,
+      height: sigDims.height,
+    });
 
     return Buffer.from(await pdfDoc.save());
   }
@@ -579,64 +523,94 @@ export async function embedSignatureIntoPDF(
   if (detected) {
     const targetPage = pages[detected.pageIndex] ?? pages[pages.length - 1];
     const { width, height } = targetPage.getSize();
-    const widthCap = Math.min(220, width * 0.32);
+    const widthCap = Math.min(170, width * 0.30);
 
     let sigDims: { width: number; height: number };
-    let x: number;
+    let x = detected.x || 60;
     let y: number;
 
     if (detected.belowAnchor) {
-      // Reference line is the signatory block below the image (nextLine);
-      // the line above the image is the anchor itself (detected.y). See
-      // computeHeightCap's docstring for why this ordering matters.
-      const heightCap = detected.nextLine
-        ? computeHeightCap(detected.nextLine.y, detected.nextLine.fontSize, {
-            y: detected.y,
-            fontSize: detected.fontSize,
-          })
-        : DEFAULT_MAX_HEIGHT; // no line below the anchor on this page to measure against
+      // Measure the actual gap between the anchor and whatever line comes
+      // after it (the signatory block's first line), and size the image to
+      // fit inside it — rather than assuming a fixed max height, which
+      // works for a spacious template (e.g. Letter's measured ~46pt gap)
+      // but overlaps a tight one. anchorMaxHeight is also the ceiling here
+      // (not just ANCHOR_DEFAULT_MAX_HEIGHT), so a template with a smaller
+      // traditional envelope (e.g. Certificate's ~32pt) doesn't end up with
+      // an oversized signature even when a generous gap happens to measure
+      // larger than that template's authentic proportions.
+      //
+      // nextLineY is a BASELINE, not the line's visible top, so
+      // NEXT_LINE_CAP_HEIGHT_ESTIMATE is subtracted from the available gap
+      // here (and added back below when placing y) — otherwise the image
+      // is sized/placed as if the glyphs' cap-height were free space, and
+      // its bottom edge cuts through the top of the next line's text.
+      let heightCap = anchorMaxHeight;
+      if (detected.nextLineY !== undefined) {
+        const availableGap =
+          detected.y - detected.nextLineY - ANCHOR_TOP_GAP - ANCHOR_BOTTOM_GAP - NEXT_LINE_CAP_HEIGHT_ESTIMATE;
+        heightCap = Math.max(ANCHOR_MIN_HEIGHT, Math.min(anchorMaxHeight, availableGap));
+        if (availableGap < ANCHOR_MIN_HEIGHT) {
+          console.warn(
+            `[embedSignature] Anchor-to-next-line gap (${availableGap.toFixed(1)}pt, after accounting for ` +
+            `next-line cap-height) is smaller than ANCHOR_MIN_HEIGHT (${ANCHOR_MIN_HEIGHT}pt) — signature ` +
+            `will be clamped to the minimum and may still touch adjacent text. Consider adding more vertical ` +
+            `space in the template around the anchor.`
+          );
+        }
+      } else {
+        // No next line was found on the anchor's page — most likely the
+        // signatory block got paginated onto a different page than the
+        // anchor. This is the scenario that previously let the fallback
+        // compute a y low enough to clamp to the page bottom, landing on
+        // the footer. Capping to anchorMaxHeight here (35pt for
+        // certificates, passed from DocumentService.sign) instead of the
+        // old flat 65pt keeps this fallback from reaching nearly that far
+        // down in the first place.
+        console.warn(
+          '[embedSignature] No next line found below the anchor on its page — using the ' +
+          `no-next-line fallback with anchorMaxHeight=${anchorMaxHeight}pt. If this fires ` +
+          'regularly for a given template, its anchor and signatory block are likely being ' +
+          'split across pages; check that they are wrapped together with page-break-inside: avoid.'
+        );
+      }
       sigDims = sigImage.scaleToFit(widthCap, heightCap);
 
-      y =
-        detected.nextLine !== undefined
-          ? detected.nextLine.y + ascentClearance(detected.nextLine.fontSize)
-          : detected.y - descentClearance(detected.fontSize) - sigDims.height;
-
-      // Center the image on the signatory block's actual text midpoint
-      // (nextLine.centerX) rather than the anchor's own x — the anchor is
-      // a near-zero-width invisible marker whose x doesn't reflect where a
-      // much wider image should start from on a CENTERED layout (unlike
-      // Memo/Letter, which are left-aligned). CENTERED_X_NUDGE applies a
-      // small cosmetic correction on top of the measured center. Falls back
-      // to the anchor's x (old behavior) only if there's no next line to
-      // measure — e.g. anchor is the last line on the page.
-      x = detected.nextLine
-        ? detected.nextLine.centerX - sigDims.width / 2 + CENTERED_X_NUDGE
-        : detected.x || 60;
-        console.log(`[embedSignature] CENTERED path: nextLine.centerX=${detected.nextLine?.centerX}, sigDims.width=${sigDims.width}, CENTERED_X_NUDGE=${CENTERED_X_NUDGE}, computed x=${x}`);
+      y = detected.nextLineY !== undefined
+        // Anchor bottom edge just above the next line's actual ink — the
+        // next line's baseline PLUS its estimated cap-height, plus the
+        // usual clearance gap. Without the cap-height term this sits at
+        // the baseline, i.e. underneath the glyphs, which let the image's
+        // bottom edge (sized above using the un-corrected gap) overlap the
+        // top of "HIGH COURT SUPPORT OFFICE"-style bold caps lines.
+        ? detected.nextLineY + ANCHOR_BOTTOM_GAP + NEXT_LINE_CAP_HEIGHT_ESTIMATE
+        // No next line was found (anchor was the last line on the page) —
+        // fall back to placing it a fixed gap below the anchor, using the
+        // (now correctly capped) sigDims.height computed above.
+        : detected.y - ANCHOR_TOP_GAP - sigDims.height;
     } else {
-      // detected.y already sits SIGNATURE_Y_OFFSET above the name/title
-      // baseline; treat detected.y - SIGNATURE_Y_OFFSET as that baseline
-      // for gap measurement purposes.
-      const referenceBaselineY = detected.y - SIGNATURE_Y_OFFSET;
-      const heightCap = computeHeightCap(referenceBaselineY, detected.fontSize, detected.aboveLine);
-      sigDims = sigImage.scaleToFit(widthCap, heightCap);
+      // Name/title-based passes (1 & 2): y is already meant to be the
+      // image's bottom, sitting just above the printed name — unchanged
+      // from before.
+      sigDims = sigImage.scaleToFit(widthCap, ANCHOR_DEFAULT_MAX_HEIGHT);
       y = detected.y;
-      x = detected.x || 60;
     }
 
+    // Clamp to page bounds
     x = Math.max(10, Math.min(x, width - sigDims.width - 10));
     y = Math.max(10, Math.min(y, height - sigDims.height - 10));
 
     console.log(
-      `[embedSignature] Text-detected position on page ${detected.pageIndex + 1}: x=${x.toFixed(0)}, y=${y.toFixed(
-        0
-      )}, belowAnchor=${!!detected.belowAnchor}, imgHeight=${sigDims.height.toFixed(1)}, imgWidth=${sigDims.width.toFixed(
-        1
-      )}`
+      `[embedSignature] Text-detected position on page ${detected.pageIndex + 1}: x=${x.toFixed(0)}, y=${y.toFixed(0)}, ` +
+      `belowAnchor=${!!detected.belowAnchor}, imgHeight=${sigDims.height.toFixed(1)}`
     );
 
-    targetPage.drawImage(sigImage, { x, y, width: sigDims.width, height: sigDims.height });
+    targetPage.drawImage(sigImage, {
+      x,
+      y,
+      width: sigDims.width,
+      height: sigDims.height,
+    });
 
     return Buffer.from(await pdfDoc.save());
   }
@@ -648,10 +622,22 @@ export async function embedSignatureIntoPDF(
 }
 
 /**
- * Embed a signature image into an HTML document. Unchanged from before —
- * this path relies on normal document flow (a block-level <div> pushes
- * subsequent content down), so it doesn't have the same baseline-overlap
- * risk the PDF path does; there's nothing here that needed the gap fix.
+ * Embed a signature image into an HTML document.
+ * The signature is placed directly above the signatory block (name + title)
+ * by scanning the HTML text. No placement options are provided.
+ *
+ * @param htmlBody - The HTML body content (as a string)
+ * @param signatureUrl - URL of the signature image
+ * @param signerName - Optional signer's full name; if provided, it is used to
+ *                     build name-matching patterns; otherwise a default pattern
+ *                     matching typical ORHC signatories is used.
+ * @param anchorOnly - When true, only the explicit SIGNATURE_ANCHOR_TEXT marker
+ *                     is trusted; if it's not present in htmlBody, the HTML is
+ *                     returned unchanged rather than guessing via fuzzy
+ *                     name/title matching. Pass true for templates (e.g.
+ *                     Certificate) where the signer's name may legitimately
+ *                     appear earlier in the body.
+ * @returns The modified HTML string
  */
 export function embedSignatureIntoHTML(
   htmlBody: string,
@@ -678,9 +664,7 @@ export function embedSignatureIntoHTML(
 
   // ── anchorOnly guard: refuse to guess ───────────────────────────────────
   if (anchorOnly) {
-    console.warn(
-      '[embedSignatureHTML] anchorOnly=true and no anchor marker found — refusing to fall back to fuzzy matching. Returning HTML unchanged.'
-    );
+    console.warn('[embedSignatureHTML] anchorOnly=true and no anchor marker found — refusing to fall back to fuzzy matching. Returning HTML unchanged.');
     return htmlBody;
   }
 
@@ -697,6 +681,7 @@ export function embedSignatureIntoHTML(
 
   let bestMatch: { index: number; length: number } | null = null;
 
+  // Find title and then name below
   let titleMatch: RegExpExecArray | null = null;
   for (const pattern of titlePatterns) {
     const global = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : pattern.flags + 'g');

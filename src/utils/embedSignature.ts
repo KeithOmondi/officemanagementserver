@@ -170,8 +170,12 @@ function buildNamePatterns(fullName?: string | null): RegExp[] {
 /**
  * Group text items by visual line (same y within tolerance) and concatenate
  * their strings in left-to-right order.
+ * 
+ * INCREASED TOLERANCE: From 3 to 6 pixels to handle production PDF
+ * rendering variations where text items on the same line may have
+ * slightly different y-coordinates.
  */
-function groupItemsByLine(items: TextItem[], tolerance = 3): { y: number; text: string; items: TextItem[] }[] {
+function groupItemsByLine(items: TextItem[], tolerance = 6): { y: number; text: string; items: TextItem[] }[] {
   const groups: { y: number; items: TextItem[] }[] = [];
   for (const item of items) {
     let found = false;
@@ -218,17 +222,14 @@ interface DetectedPosition {
 }
 
 /**
- * @param anchorOnly - When true, ONLY the explicit SIGNATURE_ANCHOR_TEXT
- *   marker (Pass 0) is trusted. If no anchor is found, this returns null
- *   immediately instead of falling through to the fuzzy name/title passes.
- *   Use this for templates where the signatory's name may legitimately
- *   appear earlier in the body text (e.g. "I, CLARA OTIENO-OMONDI,
- *   Registrar of the High Court...") and/or where the closing signature
- *   block contains no name line at all — both true of CertificateTemplate,
- *   neither true of Letter/Memo. Without this flag, Pass 1/2 could latch
- *   onto that earlier body mention, or mis-locate the block entirely,
- *   silently placing the signature image in the wrong spot on a legal
- *   document.
+ * Find the anchor or signature block position in the PDF text.
+ * 
+ * Pass 0: Explicit SIGNATURE_ANCHOR_TEXT marker (most reliable)
+ *   - Handles split anchor text across multiple lines
+ *   - Uses increased tolerance for production PDF variations
+ * 
+ * Pass 1 & 2: Fuzzy matching (only used when anchorOnly=false)
+ *   - Falls back to name and title pattern matching
  */
 function findSignatureBlockPosition(
   items: TextItem[],
@@ -262,25 +263,70 @@ function findSignatureBlockPosition(
     /registrar/i,
   ];
 
-  // ── Pass 0: explicit anchor marker (line-based, robust to item splitting) ──
+  // ── Pass 0: explicit anchor marker (robust to item splitting) ──
   console.log('[findSignatureBlockPosition] Pass 0: Searching for explicit signature anchor...');
+  
   for (const pageIndex of pageIndices) {
     const pageItems = itemsByPage[pageIndex];
     const lines = groupItemsByLine(pageItems);
-    // Sort top-to-bottom (descending y, since PDF y grows upward) so we can
-    // find whatever line comes immediately AFTER the anchor in reading order.
+    // Sort top-to-bottom (descending y, since PDF y grows upward)
     const linesTopToBottom = [...lines].sort((a, b) => b.y - a.y);
-    const anchorIdx = linesTopToBottom.findIndex((l) => l.text.includes(SIGNATURE_ANCHOR_TEXT));
-
+    
+    // First, try to find the anchor in a single line
+    let anchorIdx = linesTopToBottom.findIndex((l) => l.text.includes(SIGNATURE_ANCHOR_TEXT));
+    
+    // If not found, check if the anchor text is split across adjacent lines
+    if (anchorIdx === -1) {
+      console.log('[findSignatureBlockPosition] Anchor not found in single line, checking for split anchor...');
+      
+      // Look for the anchor text parts across adjacent lines
+      for (let i = 0; i < linesTopToBottom.length - 1; i++) {
+        const currentLine = linesTopToBottom[i];
+        const nextLine = linesTopToBottom[i + 1];
+        
+        // Check if the combined text of current + next line contains the anchor
+        const combinedText = currentLine.text + ' ' + nextLine.text;
+        if (combinedText.includes(SIGNATURE_ANCHOR_TEXT)) {
+          // The anchor is split across these two lines
+          // Use the first line's y as the anchor position
+          anchorIdx = i;
+          console.log(`[findSignatureBlockPosition] Found split anchor across lines ${i} and ${i+1}`);
+          console.log(`  Line ${i}: "${currentLine.text}"`);
+          console.log(`  Line ${i+1}: "${nextLine.text}"`);
+          break;
+        }
+      }
+    }
+    
+    // If still not found, try checking three consecutive lines
+    if (anchorIdx === -1) {
+      console.log('[findSignatureBlockPosition] Checking for anchor across 3 consecutive lines...');
+      
+      for (let i = 0; i < linesTopToBottom.length - 2; i++) {
+        const combinedText = 
+          linesTopToBottom[i].text + ' ' + 
+          linesTopToBottom[i + 1].text + ' ' + 
+          linesTopToBottom[i + 2].text;
+        
+        if (combinedText.includes(SIGNATURE_ANCHOR_TEXT)) {
+          anchorIdx = i;
+          console.log(`[findSignatureBlockPosition] Found split anchor across lines ${i}, ${i+1}, ${i+2}`);
+          break;
+        }
+      }
+    }
+    
     if (anchorIdx !== -1) {
       const anchorLine = linesTopToBottom[anchorIdx];
       const anchorItem = anchorLine.items[0];
-      const nextLine = linesTopToBottom[anchorIdx + 1]; // may be undefined if anchor is the last line
+      const nextLine = linesTopToBottom[anchorIdx + 1];
+      
       console.log(
-        `[findSignatureBlockPosition] Found anchor marker (line: "${anchorLine.text}") at y=${anchorLine.y}` +
-        (nextLine ? `, next line: "${nextLine.text}" at y=${nextLine.y}` : ', no next line found on this page') +
+        `[findSignatureBlockPosition] Found anchor marker (line: "${anchorLine.text.substring(0, 50)}...") at y=${anchorLine.y}` +
+        (nextLine ? `, next line: "${nextLine.text.substring(0, 50)}..." at y=${nextLine.y}` : ', no next line found on this page') +
         `, page=${pageIndex + 1}`
       );
+      
       return {
         y: anchorLine.y,
         pageIndex,
@@ -573,6 +619,7 @@ export async function embedSignatureIntoPDF(
           'regularly for a given template, its anchor and signatory block are likely being ' +
           'split across pages; check that they are wrapped together with page-break-inside: avoid.'
         );
+        heightCap = anchorMaxHeight;
       }
       sigDims = sigImage.scaleToFit(widthCap, heightCap);
 

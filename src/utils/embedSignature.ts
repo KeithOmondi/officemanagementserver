@@ -12,6 +12,39 @@ async function fetchBuffer(url: string): Promise<Buffer> {
   return Buffer.from(res.data);
 }
 
+/**
+ * Trim transparent/blank padding from a signature image before embedding.
+ *
+ * Signature-pad exports and scanned signatures very commonly have a large
+ * transparent (or uniform white) margin around the actual ink. The
+ * placement math below anchors the image's BOUNDING BOX tightly above the
+ * name line, but if the visible strokes sit in the upper portion of that
+ * box, the box can be flush against the name while the ink still LOOKS
+ * like it's floating with a gap above it. Trimming here makes the bounding
+ * box match the visible ink, which is what actually controls the
+ * perceived gap in the final PDF.
+ *
+ * sharp's .trim() removes "boring" edges by comparing to the top-left
+ * pixel; for a PNG with real transparency this correctly strips the
+ * transparent border. threshold is kept low (10) so it only strips truly
+ * blank/near-blank edges and doesn't eat into faint pen strokes.
+ */
+async function trimSignatureImage(buffer: Buffer): Promise<Buffer> {
+  try {
+    const trimmed = await sharp(buffer)
+      .trim({ threshold: 10 })
+      .png()
+      .toBuffer();
+    console.log(
+      `[trimSignatureImage] Trimmed: ${buffer.length} -> ${trimmed.length} bytes`
+    );
+    return trimmed;
+  } catch (err) {
+    console.warn('[trimSignatureImage] Trim failed, using original image', err);
+    return buffer;
+  }
+}
+
 type TextItem = {
   str: string;
   x: number;
@@ -115,7 +148,14 @@ const SIGNATURE_X_OFFSET = -10;
 // Letter/Memo) leave very different amounts of space there. A fixed max
 // height that looked right on one template overlapped badly on another.
 const ANCHOR_TOP_GAP = 6;     // clearance below the anchor line
-const ANCHOR_BOTTOM_GAP = 4;  // clearance above the next line (title/name)
+// Tightened further (4 -> 2 -> 0): this is clearance between the image's
+// bounding box and the name line's ink. The prior 2pt value plus
+// NEXT_LINE_CAP_HEIGHT_ESTIMATE still left a visible gap in testing, so
+// this is now 0 — NEXT_LINE_CAP_HEIGHT_ESTIMATE alone provides the
+// clearance needed to avoid touching the glyphs. If the signature ever
+// starts touching the top of the name text, raise this back up in small
+// increments (2, then 4) rather than jumping back to the original value.
+const ANCHOR_BOTTOM_GAP = 0;  // clearance above the next line (title/name)
 const ANCHOR_DEFAULT_MAX_HEIGHT = 65; // default cap — matches Letter/Memo's spacious ~46pt anchor-to-name gap; DO NOT lower this, it's what keeps their existing (working) placement unchanged
 const ANCHOR_MIN_HEIGHT = 20; // never shrink the signature below this, even if the gap is tighter
 
@@ -170,7 +210,7 @@ function buildNamePatterns(fullName?: string | null): RegExp[] {
 /**
  * Group text items by visual line (same y within tolerance) and concatenate
  * their strings in left-to-right order.
- * 
+ *
  * INCREASED TOLERANCE: From 3 to 6 pixels to handle production PDF
  * rendering variations where text items on the same line may have
  * slightly different y-coordinates.
@@ -219,15 +259,21 @@ interface DetectedPosition {
   // this is a BASELINE y, not the line's visible top — see
   // NEXT_LINE_CAP_HEIGHT_ESTIMATE above for why that distinction matters.
   nextLineY?: number;
+  // Leftmost x of the line immediately below the anchor (the name line).
+  // Used to align the signature to where the name actually starts,
+  // instead of centering it across the full page width — page-centering
+  // put the signature well to the right of a left-margin-aligned name,
+  // which read as misaligned even once the vertical gap was fixed.
+  nextLineX?: number;
 }
 
 /**
  * Find the anchor or signature block position in the PDF text.
- * 
+ *
  * Pass 0: Explicit SIGNATURE_ANCHOR_TEXT marker (most reliable)
  *   - Handles split anchor text across multiple lines
  *   - Uses increased tolerance for production PDF variations
- * 
+ *
  * Pass 1 & 2: Fuzzy matching (only used when anchorOnly=false)
  *   - Falls back to name and title pattern matching
  */
@@ -265,25 +311,25 @@ function findSignatureBlockPosition(
 
   // ── Pass 0: explicit anchor marker (robust to item splitting) ──
   console.log('[findSignatureBlockPosition] Pass 0: Searching for explicit signature anchor...');
-  
+
   for (const pageIndex of pageIndices) {
     const pageItems = itemsByPage[pageIndex];
     const lines = groupItemsByLine(pageItems);
     // Sort top-to-bottom (descending y, since PDF y grows upward)
     const linesTopToBottom = [...lines].sort((a, b) => b.y - a.y);
-    
+
     // First, try to find the anchor in a single line
     let anchorIdx = linesTopToBottom.findIndex((l) => l.text.includes(SIGNATURE_ANCHOR_TEXT));
-    
+
     // If not found, check if the anchor text is split across adjacent lines
     if (anchorIdx === -1) {
       console.log('[findSignatureBlockPosition] Anchor not found in single line, checking for split anchor...');
-      
+
       // Look for the anchor text parts across adjacent lines
       for (let i = 0; i < linesTopToBottom.length - 1; i++) {
         const currentLine = linesTopToBottom[i];
         const nextLine = linesTopToBottom[i + 1];
-        
+
         // Check if the combined text of current + next line contains the anchor
         const combinedText = currentLine.text + ' ' + nextLine.text;
         if (combinedText.includes(SIGNATURE_ANCHOR_TEXT)) {
@@ -297,17 +343,17 @@ function findSignatureBlockPosition(
         }
       }
     }
-    
+
     // If still not found, try checking three consecutive lines
     if (anchorIdx === -1) {
       console.log('[findSignatureBlockPosition] Checking for anchor across 3 consecutive lines...');
-      
+
       for (let i = 0; i < linesTopToBottom.length - 2; i++) {
-        const combinedText = 
-          linesTopToBottom[i].text + ' ' + 
-          linesTopToBottom[i + 1].text + ' ' + 
+        const combinedText =
+          linesTopToBottom[i].text + ' ' +
+          linesTopToBottom[i + 1].text + ' ' +
           linesTopToBottom[i + 2].text;
-        
+
         if (combinedText.includes(SIGNATURE_ANCHOR_TEXT)) {
           anchorIdx = i;
           console.log(`[findSignatureBlockPosition] Found split anchor across lines ${i}, ${i+1}, ${i+2}`);
@@ -315,18 +361,23 @@ function findSignatureBlockPosition(
         }
       }
     }
-    
+
     if (anchorIdx !== -1) {
       const anchorLine = linesTopToBottom[anchorIdx];
       const anchorItem = anchorLine.items[0];
       const nextLine = linesTopToBottom[anchorIdx + 1];
-      
+
       console.log(
         `[findSignatureBlockPosition] Found anchor marker (line: "${anchorLine.text.substring(0, 50)}...") at y=${anchorLine.y}` +
         (nextLine ? `, next line: "${nextLine.text.substring(0, 50)}..." at y=${nextLine.y}` : ', no next line found on this page') +
         `, page=${pageIndex + 1}`
       );
-      
+
+      const nextLineX =
+        nextLine && nextLine.items.length > 0
+          ? Math.min(...nextLine.items.map((it) => it.x))
+          : undefined;
+
       return {
         y: anchorLine.y,
         pageIndex,
@@ -334,6 +385,7 @@ function findSignatureBlockPosition(
         x: -1, // Signal that we want to center it
         belowAnchor: true,
         nextLineY: nextLine?.y,
+        nextLineX,
       };
     }
   }
@@ -502,8 +554,13 @@ export async function embedSignatureIntoPDF(
     return pdfBuffer;
   }
 
-  const sigBuffer = await fetchBuffer(signatureUrl);
-  const sigPng = await sharp(sigBuffer).png().toBuffer();
+  const rawSigBuffer = await fetchBuffer(signatureUrl);
+  // Trim the signature image's own blank/transparent padding BEFORE
+  // scaling and placement math runs, so the bounding box we position
+  // matches the visible ink rather than an oversized, mostly-empty
+  // canvas. See trimSignatureImage() above for why this matters.
+  const trimmedSigBuffer = await trimSignatureImage(rawSigBuffer);
+  const sigPng = await sharp(trimmedSigBuffer).png().toBuffer();
   const sigImage = await pdfDoc.embedPng(sigPng);
 
   // ── If custom position is provided ──────────────────────────────────────────
@@ -624,10 +681,18 @@ export async function embedSignatureIntoPDF(
       }
       sigDims = sigImage.scaleToFit(widthCap, heightCap);
 
-      // CENTER THE SIGNATURE HORIZONTALLY
-      // Calculate x to center the signature on the page
-      x = (width - sigDims.width) / 2;
-      
+      // ALIGN TO THE NAME'S LEFT EDGE when we know it (nextLineX), matching
+      // where "CLARA OTIENO-OMONDI, OGW" / "REGISTRAR, HIGH COURT" actually
+      // starts on the page. Page-centering the signature independent of
+      // that left margin was what made it read as floating off to the
+      // right of the name. Only fall back to page-centering if no next
+      // line was found at all (nextLineX undefined).
+      if (detected.nextLineX !== undefined) {
+        x = detected.nextLineX + SIGNATURE_X_OFFSET;
+      } else {
+        x = (width - sigDims.width) / 2;
+      }
+
       // Ensure x is within page bounds
       x = Math.max(10, Math.min(x, width - sigDims.width - 10));
 
@@ -648,7 +713,7 @@ export async function embedSignatureIntoPDF(
       // image's bottom, sitting just above the printed name — unchanged
       // from before.
       sigDims = sigImage.scaleToFit(widthCap, ANCHOR_DEFAULT_MAX_HEIGHT);
-      
+
       // For non-anchor detection, we need to check if x is -1 (center signal)
       if (detected.x === -1) {
         // Center the signature
@@ -659,16 +724,19 @@ export async function embedSignatureIntoPDF(
         // Clamp to page bounds
         x = Math.max(10, Math.min(x, width - sigDims.width - 10));
       }
-      
+
       y = detected.y;
     }
 
     // Clamp y to page bounds
     y = Math.max(10, Math.min(y, height - sigDims.height - 10));
 
+    const xAlignment = detected.belowAnchor
+      ? (detected.nextLineX !== undefined ? 'left-aligned-to-name' : 'page-centered-fallback')
+      : (detected.x === -1 ? 'centered' : 'left-aligned');
     console.log(
       `[embedSignature] Text-detected position on page ${detected.pageIndex + 1}: x=${x.toFixed(0)}, y=${y.toFixed(0)}, ` +
-      `belowAnchor=${!!detected.belowAnchor}, imgHeight=${sigDims.height.toFixed(1)}, centered=${detected.x === -1 || detected.belowAnchor}`
+      `belowAnchor=${!!detected.belowAnchor}, imgHeight=${sigDims.height.toFixed(1)}, xAlignment=${xAlignment}`
     );
 
     targetPage.drawImage(sigImage, {

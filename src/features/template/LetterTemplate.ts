@@ -145,7 +145,7 @@ export function getLetterHTML(data: LetterData): string {
       <style>
         /* ========== Page & Print Setup ========== */
         @page {
-          margin: 1.5cm 1.5cm 2.5cm;  /* bottom margin reserves space for footer */
+          margin: 1.5cm 1.5cm 1.8cm;
           size: A4;
         }
 
@@ -160,13 +160,16 @@ export function getLetterHTML(data: LetterData): string {
           color: #000000;
           background: white;
           font-size: 12pt;
+          position: relative;
+          min-height: 100vh;
         }
 
         .page {
           max-width: 794px;
           margin: 0 auto;
-          padding: 50px 60px 0 60px;  /* bottom padding removed – @page margin handles it */
+          padding: 50px 60px 200px 60px;
           position: relative;
+          min-height: 100vh;
         }
 
         /* ========== Header ========== */
@@ -230,7 +233,6 @@ export function getLetterHTML(data: LetterData): string {
           text-align: justify;
         }
 
-        /* ---------- To block ---------- */
         .body-content .to-block {
           margin-bottom: 20px;
           page-break-inside: avoid;
@@ -256,7 +258,6 @@ export function getLetterHTML(data: LetterData): string {
           margin-top: 12px;
         }
 
-        /* ---------- Subject ---------- */
         .body-content .subject-line {
           font-weight: bold;
           text-decoration: underline;
@@ -267,12 +268,10 @@ export function getLetterHTML(data: LetterData): string {
           break-inside: avoid;
         }
 
-        /* ---------- Paragraphs ---------- */
         .body-content p {
           margin-bottom: 12px;
         }
 
-        /* ---------- Lists ---------- */
         .body-content ul {
           margin: 12px 0 20px 20px;
           list-style-type: none;
@@ -287,7 +286,7 @@ export function getLetterHTML(data: LetterData): string {
           content: "- ";
         }
 
-        /* ---------- Table (critical for pagination) ---------- */
+        /* ---------- Table ---------- */
         .body-content table {
           width: 100%;
           border-collapse: collapse;
@@ -316,7 +315,7 @@ export function getLetterHTML(data: LetterData): string {
         }
 
         .body-content thead {
-          display: table-header-group;  /* repeat header on each page */
+          display: table-header-group;
         }
 
         .body-content tbody {
@@ -328,9 +327,9 @@ export function getLetterHTML(data: LetterData): string {
           page-break-after: auto;
         }
 
-        /* ========== Signature (restored to original spacing) ========== */
+        /* ========== Signature ========== */
         .signature-section {
-          margin-top: 40px;
+          margin-top: 30px;
           page-break-inside: avoid;
           break-inside: avoid;
         }
@@ -342,20 +341,24 @@ export function getLetterHTML(data: LetterData): string {
           color: transparent;
           overflow: hidden;
           user-select: none;
+          display: block;          /* ensures the anchor is on its own line */
         }
 
-        /* Restore the original 85px margin-top – this is the gap between
-           the anchor and the printed name, which the signature image uses. */
+        /* Gap from the signature anchor to the printed name/title below.
+           Raised from 45px to 90px — the previous value left too little
+           room for embedSignature.ts's tightened anchor-to-name gap
+           constants (ANCHOR_BOTTOM_GAP now 0), which started overlapping
+           the signatory name/title on some signatures. Brought in line
+           with the Memo template's gap, which has been reliable. */
         .signature {
           font-size: 12pt;
-          margin-top: 85px;          /* ← back to original value */
+          margin-top: 90px;
         }
 
         .signature .name {
           font-weight: bold;
           text-transform: uppercase;
           margin-bottom: 2px;
-          /* no extra margin-top – original had none */
         }
 
         .signature .title {
@@ -425,68 +428,85 @@ export function getLetterHTML(data: LetterData): string {
           font-weight: bold;
         }
 
-        /* ========== Footer (normal flow – no overlap) ========== */
+        /* ==================================================
+           FOOTER – FIXED ON EVERY PAGE (table-based layout)
+           Table-based instead of flexbox so the emblem size,
+           bold weights, and green taglines render consistently
+           across HTML-to-PDF engines with partial flex support.
+           ================================================== */
         .footer {
+          position: fixed;
+          bottom: 20px;
+          left: 60px;
+          right: 60px;
           border-top: 1px solid #999;
           padding-top: 14px;
-          margin-top: 40px;
+          background: white;
           page-break-inside: avoid;
         }
 
-        .footer-top {
-          display: flex;
-          align-items: center;
-          gap: 18px;
+        .footer-table {
+          width: 100%;
+          border-collapse: collapse;
         }
 
-        .footer-emblem {
-          flex: 0 0 90px;
+        .footer-emblem-cell {
+          width: 90px;
+          vertical-align: middle;
+          padding-right: 18px;
         }
 
-        .footer-emblem img {
+        .footer-emblem-cell img {
           width: 90px;
           height: 90px;
           display: block;
           object-fit: contain;
         }
 
-        .footer-text {
-          flex: 1;
+        .footer-text-cell {
           text-align: right;
+          vertical-align: middle;
           font-size: 10pt;
           color: #1a1a1a;
-        }
-
-        .footer-text p {
-          margin: 2px 0;
           line-height: 1.5;
         }
 
-        .footer-tagline {
-          text-align: right;
-          font-size: 11pt;
+        .footer-tagline-top {
           font-weight: bold;
+          font-size: 11pt;
+          color: #1E4620;
+          margin-bottom: 4px;
+        }
+
+        .footer-text-cell p {
+          margin: 2px 0;
+        }
+
+        .footer-tagline-bottom {
+          text-align: right;
+          font-weight: bold;
+          font-size: 11pt;
           color: #1E4620;
           margin-top: 8px;
         }
 
         /* ========== Responsive ========== */
         @media (max-width: 600px) {
-          .page { padding: 30px 20px 0 20px; }
+          .page { padding: 30px 20px 200px 20px; }
           .header { flex-direction: column; text-align: center; }
           .logo-container { margin-right: 0; margin-bottom: 10px; }
           .ref-date { flex-direction: column; align-items: flex-start; gap: 5px; }
-          .footer-top { flex-direction: column; text-align: center; gap: 10px; }
-          .footer-text, .footer-tagline { text-align: center; }
+          .footer { left: 20px; right: 20px; }
           .cc-block { flex-direction: column; }
           .cc-block .cc-label { margin-bottom: 8px; }
         }
       </style>
     </head>
     <body>
+      <!-- ===== PAGE CONTENT ===== -->
       <div class="page">
 
-        <!-- ===== HEADER ===== -->
+        <!-- Header -->
         <div class="header">
           <div class="logo-container">
             <img src="${escapeHtml(logoUrl)}" alt="Republic of Kenya / Judiciary Crest" />
@@ -499,20 +519,20 @@ export function getLetterHTML(data: LetterData): string {
 
         <div class="header-rule"></div>
 
-        <!-- ===== REF / DATE ===== -->
+        <!-- Ref / Date -->
         <div class="ref-date">
           <span class="ref">Ref: ${escapeHtml(ref)}</span>
           <span class="date">${escapeHtml(date)}</span>
         </div>
 
-        <!-- ===== BODY ===== -->
+        <!-- Body -->
         <div class="body-content">
           ${to ? formatToBlock(to) : ''}
           ${subject ? `<div class="subject-line">RE: ${escapeHtml(subject)}</div>` : ''}
           ${formatBody(body)}
         </div>
 
-        <!-- ===== SIGNATURE ===== -->
+        <!-- Signature -->
         <div class="signature-section">
           <div class="signature-anchor" aria-hidden="true">${SIGNATURE_ANCHOR_TEXT}</div>
           <div class="signature">
@@ -521,31 +541,35 @@ export function getLetterHTML(data: LetterData): string {
           </div>
         </div>
 
-        <!-- ===== CC ===== -->
+        <!-- CC -->
         ${cc ? formatCC(cc) : ''}
 
-        <!-- ===== ENCLOSURES ===== -->
+        <!-- Enclosures -->
         ${enclosures ? `
           <div class="enclosures-block">
             <span class="label">Enclosures:</span> ${escapeHtml(enclosures)}
           </div>
         ` : ''}
 
-        <!-- ===== FOOTER ===== -->
-        <div class="footer">
-          <div class="footer-top">
-            <div class="footer-emblem">
-              <img src="${escapeHtml(footerEmblemUrl)}" alt="Social Transformation Emblem" />
-            </div>
-            <div class="footer-text">
+      </div><!-- end .page -->
+
+      <!-- ===== FOOTER (fixed on every page, with emblem) ===== -->
+      <div class="footer">
+        <table class="footer-table" cellpadding="0" cellspacing="0">
+          <tr>
+            <td class="footer-emblem-cell">
+              <img src="${escapeHtml(footerEmblemUrl)}" alt="Social Transformation Emblem" width="90" height="90" />
+            </td>
+            <td class="footer-text-cell">
+              <div class="footer-tagline-top">Social Transformation through Access to Justice</div>
               <p>Milimani Law Courts | 3rd Floor, Chamber 337 | P.O. Box 30041-00100 | Nairobi</p>
               <p>Tel. +254 0730 181478 | registrarhighcourt@court.go.ke | www.judiciary.go.ke</p>
-            </div>
-          </div>
-          <div class="footer-tagline">Justice Be Our Shield and Defender</div>
-        </div>
+              <div class="footer-tagline-bottom">Justice Be Our Shield and Defender</div>
+            </td>
+          </tr>
+        </table>
+      </div>
 
-      </div><!-- end .page -->
     </body>
     </html>
   `;

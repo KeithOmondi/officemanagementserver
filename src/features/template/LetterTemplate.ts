@@ -526,7 +526,7 @@ export function getLetterHTML(data: LetterData): string {
 
         <!-- ===== SIGNATURE ===== -->
         <div class="signature-section">
-          <p style="margin-bottom: 0;">Yours faithfully,</p>
+          
           <div class="signature-anchor" aria-hidden="true">${SIGNATURE_ANCHOR_TEXT}</div>
           <div class="signature">
             <div class="name">${escapeHtml(sender)}</div>

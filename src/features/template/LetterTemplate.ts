@@ -39,10 +39,6 @@ function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (m) => map[m]);
 }
 
-/**
- * Cleans up excessive line breaks and paragraphs
- * Leaves other HTML (tables, lists) intact.
- */
 function formatBody(html: string): string {
   if (!html || !html.trim()) return '<p>&nbsp;</p>';
 
@@ -52,11 +48,6 @@ function formatBody(html: string): string {
     .replace(/(?:<br\s*\/?>\s*){3,}/gi, '<br/><br/>');
 }
 
-/**
- * Formats the "To" block with location and salutation.
- * The last line is treated as salutation if it matches a regex.
- * The second‑last line becomes the location (underlined).
- */
 function formatToBlock(toText: string): string {
   if (!toText) return '';
   const lines = toText.split('\n').map((l) => l.trim()).filter(Boolean);
@@ -88,10 +79,6 @@ function formatToBlock(toText: string): string {
   return `<div class="to-block">${bodyHtml}${locationHtml}${salutationHtml}</div>`;
 }
 
-/**
- * Formats the CC block. Each entry is separated by a blank line.
- * If only one entry, the number is omitted.
- */
 function formatCC(cc: string): string {
   const entries = cc
     .split(/\n\s*\n/)
@@ -111,7 +98,6 @@ function formatCC(cc: string): string {
         ? `<p class="cc-location">${escapeHtml(locationLine)}</p>`
         : '';
 
-      // Show number only if more than one entry
       const numberHtml = entries.length > 1 ? `<span class="cc-number">${index + 1}.</span>` : '';
 
       return `
@@ -342,7 +328,7 @@ export function getLetterHTML(data: LetterData): string {
           page-break-after: auto;
         }
 
-        /* ========== Signature ========== */
+        /* ========== Signature (restored to original spacing) ========== */
         .signature-section {
           margin-top: 40px;
           page-break-inside: avoid;
@@ -358,16 +344,18 @@ export function getLetterHTML(data: LetterData): string {
           user-select: none;
         }
 
+        /* Restore the original 85px margin-top – this is the gap between
+           the anchor and the printed name, which the signature image uses. */
         .signature {
           font-size: 12pt;
-          margin-top: 30px;  /* space after "Yours faithfully," */
+          margin-top: 85px;          /* ← back to original value */
         }
 
         .signature .name {
           font-weight: bold;
           text-transform: uppercase;
           margin-bottom: 2px;
-          margin-top: 20px;  /* space for the signature line */
+          /* no extra margin-top – original had none */
         }
 
         .signature .title {
@@ -424,7 +412,7 @@ export function getLetterHTML(data: LetterData): string {
           text-transform: uppercase;
         }
 
-        /* ========== Enclosures (if used) ========== */
+        /* ========== Enclosures ========== */
         .enclosures-block {
           margin-top: 20px;
           font-size: 12pt;
@@ -437,11 +425,11 @@ export function getLetterHTML(data: LetterData): string {
           font-weight: bold;
         }
 
-        /* ========== Footer (Normal Flow) ========== */
+        /* ========== Footer (normal flow – no overlap) ========== */
         .footer {
           border-top: 1px solid #999;
           padding-top: 14px;
-          margin-top: 40px;   /* space from previous content */
+          margin-top: 40px;
           page-break-inside: avoid;
         }
 
@@ -526,7 +514,6 @@ export function getLetterHTML(data: LetterData): string {
 
         <!-- ===== SIGNATURE ===== -->
         <div class="signature-section">
-          
           <div class="signature-anchor" aria-hidden="true">${SIGNATURE_ANCHOR_TEXT}</div>
           <div class="signature">
             <div class="name">${escapeHtml(sender)}</div>
@@ -537,14 +524,14 @@ export function getLetterHTML(data: LetterData): string {
         <!-- ===== CC ===== -->
         ${cc ? formatCC(cc) : ''}
 
-        <!-- ===== ENCLOSURES (optional) ===== -->
+        <!-- ===== ENCLOSURES ===== -->
         ${enclosures ? `
           <div class="enclosures-block">
             <span class="label">Enclosures:</span> ${escapeHtml(enclosures)}
           </div>
         ` : ''}
 
-        <!-- ===== FOOTER (normal flow) ===== -->
+        <!-- ===== FOOTER ===== -->
         <div class="footer">
           <div class="footer-top">
             <div class="footer-emblem">
@@ -564,5 +551,4 @@ export function getLetterHTML(data: LetterData): string {
   `;
 }
 
-// Export as template function (if needed elsewhere)
 export const getLetterTemplate = getLetterHTML;

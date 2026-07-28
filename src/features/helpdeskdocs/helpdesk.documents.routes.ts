@@ -184,7 +184,7 @@ router.get(
 router.delete(
     '/:id',
     validate(documentIdSchema),
-    requireRole('super_admin', 'dept_head'),
+    requireRole('super_admin', 'dept_head', 'staff'),
     HelpdeskDocumentsController.remove
 );
 

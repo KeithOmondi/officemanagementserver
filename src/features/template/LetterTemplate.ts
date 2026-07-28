@@ -1,3 +1,7 @@
+// =====================================================
+// Interfaces & Constants
+// =====================================================
+
 export interface LetterData {
   ref: string;
   date: string;
@@ -19,6 +23,10 @@ const DEFAULT_FOOTER_EMBLEM_URL =
 
 export const SIGNATURE_ANCHOR_TEXT = 'RHC-SIGNATURE-ANCHOR';
 
+// =====================================================
+// Helper Functions
+// =====================================================
+
 function escapeHtml(text: string): string {
   if (!text) return '';
   const map: Record<string, string> = {
@@ -31,6 +39,10 @@ function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (m) => map[m]);
 }
 
+/**
+ * Cleans up excessive line breaks and paragraphs
+ * Leaves other HTML (tables, lists) intact.
+ */
 function formatBody(html: string): string {
   if (!html || !html.trim()) return '<p>&nbsp;</p>';
 
@@ -40,6 +52,11 @@ function formatBody(html: string): string {
     .replace(/(?:<br\s*\/?>\s*){3,}/gi, '<br/><br/>');
 }
 
+/**
+ * Formats the "To" block with location and salutation.
+ * The last line is treated as salutation if it matches a regex.
+ * The second‑last line becomes the location (underlined).
+ */
 function formatToBlock(toText: string): string {
   if (!toText) return '';
   const lines = toText.split('\n').map((l) => l.trim()).filter(Boolean);
@@ -71,6 +88,10 @@ function formatToBlock(toText: string): string {
   return `<div class="to-block">${bodyHtml}${locationHtml}${salutationHtml}</div>`;
 }
 
+/**
+ * Formats the CC block. Each entry is separated by a blank line.
+ * If only one entry, the number is omitted.
+ */
 function formatCC(cc: string): string {
   const entries = cc
     .split(/\n\s*\n/)
@@ -90,9 +111,12 @@ function formatCC(cc: string): string {
         ? `<p class="cc-location">${escapeHtml(locationLine)}</p>`
         : '';
 
+      // Show number only if more than one entry
+      const numberHtml = entries.length > 1 ? `<span class="cc-number">${index + 1}.</span>` : '';
+
       return `
         <div class="cc-entry">
-          <span class="cc-number">${index + 1}.</span>
+          ${numberHtml}
           <span class="cc-text">${bodyHtml}${locationHtml}</span>
         </div>
       `;
@@ -106,6 +130,10 @@ function formatCC(cc: string): string {
     </div>
   `;
 }
+
+// =====================================================
+// Main Letter Generation
+// =====================================================
 
 export function getLetterHTML(data: LetterData): string {
   const {
@@ -129,6 +157,12 @@ export function getLetterHTML(data: LetterData): string {
       <meta charset="UTF-8">
       <title>LETTER</title>
       <style>
+        /* ========== Page & Print Setup ========== */
+        @page {
+          margin: 1.5cm 1.5cm 2.5cm;  /* bottom margin reserves space for footer */
+          size: A4;
+        }
+
         * {
           margin: 0;
           padding: 0;
@@ -144,12 +178,12 @@ export function getLetterHTML(data: LetterData): string {
 
         .page {
           max-width: 794px;
-          min-height: 1123px;
           margin: 0 auto;
-          padding: 50px 60px 170px 60px;
+          padding: 50px 60px 0 60px;  /* bottom padding removed – @page margin handles it */
           position: relative;
         }
 
+        /* ========== Header ========== */
         .header {
           display: flex;
           align-items: center;
@@ -191,6 +225,7 @@ export function getLetterHTML(data: LetterData): string {
           margin-bottom: 24px;
         }
 
+        /* ========== Ref / Date ========== */
         .ref-date {
           display: flex;
           justify-content: space-between;
@@ -201,6 +236,7 @@ export function getLetterHTML(data: LetterData): string {
           break-inside: avoid;
         }
 
+        /* ========== Body Content ========== */
         .body-content {
           margin: 0 0 40px 0;
           font-size: 12pt;
@@ -208,6 +244,7 @@ export function getLetterHTML(data: LetterData): string {
           text-align: justify;
         }
 
+        /* ---------- To block ---------- */
         .body-content .to-block {
           margin-bottom: 20px;
           page-break-inside: avoid;
@@ -233,6 +270,7 @@ export function getLetterHTML(data: LetterData): string {
           margin-top: 12px;
         }
 
+        /* ---------- Subject ---------- */
         .body-content .subject-line {
           font-weight: bold;
           text-decoration: underline;
@@ -243,10 +281,68 @@ export function getLetterHTML(data: LetterData): string {
           break-inside: avoid;
         }
 
+        /* ---------- Paragraphs ---------- */
         .body-content p {
           margin-bottom: 12px;
         }
 
+        /* ---------- Lists ---------- */
+        .body-content ul {
+          margin: 12px 0 20px 20px;
+          list-style-type: none;
+          padding-left: 0;
+        }
+        .body-content ul li {
+          margin-bottom: 6px;
+          padding-left: 16px;
+          text-indent: -16px;
+        }
+        .body-content ul li::before {
+          content: "- ";
+        }
+
+        /* ---------- Table (critical for pagination) ---------- */
+        .body-content table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 11pt;
+          border: 1px solid #ccc;
+          page-break-inside: auto;
+          table-layout: fixed;
+          margin: 16px 0 24px 0;
+        }
+
+        .body-content th,
+        .body-content td {
+          border: 1px solid #ccc;
+          padding: 6px 8px;
+          text-align: left;
+          vertical-align: top;
+          word-wrap: break-word;
+          overflow-wrap: break-word;
+          max-width: 180px;
+          page-break-inside: avoid;
+        }
+
+        .body-content th {
+          background-color: #f5f5f5;
+          font-weight: bold;
+        }
+
+        .body-content thead {
+          display: table-header-group;  /* repeat header on each page */
+        }
+
+        .body-content tbody {
+          page-break-inside: auto;
+        }
+
+        .body-content tr {
+          page-break-inside: avoid;
+          page-break-after: auto;
+        }
+
+        /* ========== Signature ========== */
         .signature-section {
           margin-top: 40px;
           page-break-inside: avoid;
@@ -262,23 +358,16 @@ export function getLetterHTML(data: LetterData): string {
           user-select: none;
         }
 
-        /* Gap from the signature anchor to the printed name/title below,
-           in Puppeteer's 96dpi rendering (1px ≈ 0.75pt at print time).
-           This margin, plus signature-section's own margin-top, is the
-           room the embedded signature image has to sit in — kept in line
-           with Certificate's gap (which has proven reliable) rather than
-           the previous 45/60px values that were tight enough to overlap
-           the signatory block on some signatures. See embedSignature.ts's
-           ascent/descent clearance logic for how this space gets used. */
         .signature {
           font-size: 12pt;
-          margin-top: 85px;
+          margin-top: 30px;  /* space after "Yours faithfully," */
         }
 
         .signature .name {
           font-weight: bold;
           text-transform: uppercase;
           margin-bottom: 2px;
+          margin-top: 20px;  /* space for the signature line */
         }
 
         .signature .title {
@@ -287,6 +376,7 @@ export function getLetterHTML(data: LetterData): string {
           text-transform: uppercase;
         }
 
+        /* ========== CC Block ========== */
         .cc-block {
           margin-top: 30px;
           font-size: 12pt;
@@ -334,6 +424,7 @@ export function getLetterHTML(data: LetterData): string {
           text-transform: uppercase;
         }
 
+        /* ========== Enclosures (if used) ========== */
         .enclosures-block {
           margin-top: 20px;
           font-size: 12pt;
@@ -346,13 +437,12 @@ export function getLetterHTML(data: LetterData): string {
           font-weight: bold;
         }
 
+        /* ========== Footer (Normal Flow) ========== */
         .footer {
-          position: fixed;
-          bottom: 30px;
-          left: 60px;
-          right: 60px;
           border-top: 1px solid #999;
           padding-top: 14px;
+          margin-top: 40px;   /* space from previous content */
+          page-break-inside: avoid;
         }
 
         .footer-top {
@@ -392,12 +482,12 @@ export function getLetterHTML(data: LetterData): string {
           margin-top: 8px;
         }
 
+        /* ========== Responsive ========== */
         @media (max-width: 600px) {
-          .page { padding: 30px 20px 170px 20px; }
+          .page { padding: 30px 20px 0 20px; }
           .header { flex-direction: column; text-align: center; }
           .logo-container { margin-right: 0; margin-bottom: 10px; }
           .ref-date { flex-direction: column; align-items: flex-start; gap: 5px; }
-          .footer { left: 20px; right: 20px; }
           .footer-top { flex-direction: column; text-align: center; gap: 10px; }
           .footer-text, .footer-tagline { text-align: center; }
           .cc-block { flex-direction: column; }
@@ -407,6 +497,8 @@ export function getLetterHTML(data: LetterData): string {
     </head>
     <body>
       <div class="page">
+
+        <!-- ===== HEADER ===== -->
         <div class="header">
           <div class="logo-container">
             <img src="${escapeHtml(logoUrl)}" alt="Republic of Kenya / Judiciary Crest" />
@@ -419,33 +511,40 @@ export function getLetterHTML(data: LetterData): string {
 
         <div class="header-rule"></div>
 
+        <!-- ===== REF / DATE ===== -->
         <div class="ref-date">
           <span class="ref">Ref: ${escapeHtml(ref)}</span>
           <span class="date">${escapeHtml(date)}</span>
         </div>
 
+        <!-- ===== BODY ===== -->
         <div class="body-content">
           ${to ? formatToBlock(to) : ''}
           ${subject ? `<div class="subject-line">RE: ${escapeHtml(subject)}</div>` : ''}
           ${formatBody(body)}
         </div>
 
+        <!-- ===== SIGNATURE ===== -->
         <div class="signature-section">
+          <p style="margin-bottom: 0;">Yours faithfully,</p>
           <div class="signature-anchor" aria-hidden="true">${SIGNATURE_ANCHOR_TEXT}</div>
-
           <div class="signature">
             <div class="name">${escapeHtml(sender)}</div>
             <div class="title">${escapeHtml(senderTitle || 'Registrar, High Court')}</div>
           </div>
         </div>
 
+        <!-- ===== CC ===== -->
         ${cc ? formatCC(cc) : ''}
+
+        <!-- ===== ENCLOSURES (optional) ===== -->
         ${enclosures ? `
           <div class="enclosures-block">
             <span class="label">Enclosures:</span> ${escapeHtml(enclosures)}
           </div>
         ` : ''}
 
+        <!-- ===== FOOTER (normal flow) ===== -->
         <div class="footer">
           <div class="footer-top">
             <div class="footer-emblem">
@@ -458,10 +557,12 @@ export function getLetterHTML(data: LetterData): string {
           </div>
           <div class="footer-tagline">Justice Be Our Shield and Defender</div>
         </div>
-      </div>
+
+      </div><!-- end .page -->
     </body>
     </html>
   `;
 }
 
+// Export as template function (if needed elsewhere)
 export const getLetterTemplate = getLetterHTML;

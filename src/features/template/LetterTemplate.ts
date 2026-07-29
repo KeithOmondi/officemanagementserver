@@ -162,9 +162,9 @@ export function getLetterHTML(data: LetterData): string {
       <style>
         /* ========== Page & Print Setup ========== */
         @page {
-  margin: 2cm 2.34cm 1.9cm 2.25cm;  /* top right bottom left, matches Word */
-  size: A4;
-}
+          margin: 1.5cm 2.34cm 2.2cm 2.25cm;  /* Reduced top margin slightly */
+          size: A4;
+        }
 
         * {
           margin: 0;
@@ -173,25 +173,24 @@ export function getLetterHTML(data: LetterData): string {
         }
 
         body {
-  font-family: Arial, Helvetica, sans-serif;
-  font-size: 12pt;
-  color: #000;
-  background: white;
-  /* remove min-height: 100vh entirely — let content define page height */
-}
+          font-family: Arial, Helvetica, sans-serif;
+          font-size: 11pt;
+          color: #000;
+          background: white;
+        }
 
         .page {
-  max-width: 794px;
-  margin: 0 auto;
-  padding: 0 0 150px 0;   /* only reserve what the footer actually needs, no min-height */
-  position: relative;
-}
+          max-width: 794px;
+          margin: 0 auto;
+          padding: 0 0 90px 0;   /* Reduced padding reserved for footer */
+          position: relative;
+        }
 
         /* ========== Header ========== */
         .header {
           display: flex;
           align-items: center;
-          margin-bottom: 10px;
+          margin-bottom: 8px;
           page-break-inside: avoid;
           break-inside: avoid;
         }
@@ -202,39 +201,39 @@ export function getLetterHTML(data: LetterData): string {
         }
 
         .logo-container img {
-          width: 70px;
+          width: 65px;
           height: auto;
           display: block;
         }
 
         .header-text .judiciary {
-          font-size: 18px;
+          font-size: 16px;
           font-weight: bold;
           color: #000000;
-          line-height: 1.3;
+          line-height: 1.2;
           text-transform: uppercase;
         }
 
         .header-text .office-name {
-          font-size: 14px;
+          font-size: 13px;
           font-weight: bold;
           text-transform: uppercase;
           color: #000000;
           margin-top: 2px;
-          line-height: 1.3;
+          line-height: 1.2;
         }
 
         .header-rule {
           border-top: 1.5px solid #C29B38;
-          margin-bottom: 24px;
+          margin-bottom: 16px;
         }
 
         /* ========== Ref / Date ========== */
         .ref-date {
           display: flex;
           justify-content: space-between;
-          margin: 0 0 28px 0;
-          font-size: 12pt;
+          margin: 0 0 16px 0;
+          font-size: 11pt;
           font-weight: bold;
           page-break-inside: avoid;
           break-inside: avoid;
@@ -242,18 +241,18 @@ export function getLetterHTML(data: LetterData): string {
 
         /* ========== Body Content ========== */
         .body-content {
-  line-height: 1.15;      /* was 1.5 — matches Word's actual spacing */
-}
+          line-height: 1.25;
+        }
 
         .body-content .to-block {
-          margin-bottom: 20px;
+          margin-bottom: 12px;
           page-break-inside: avoid;
           break-inside: avoid;
         }
 
         .body-content .to-block p {
           margin: 0;
-          line-height: 1.4;
+          line-height: 1.3;
         }
 
         .body-content .to-block .to-location {
@@ -267,30 +266,30 @@ export function getLetterHTML(data: LetterData): string {
           font-weight: normal;
           text-decoration: none;
           text-transform: uppercase;
-          margin-top: 12px;
+          margin-top: 8px;
         }
 
         .body-content .subject-line {
           font-weight: bold;
           text-decoration: underline;
           text-transform: uppercase;
-          margin: 20px 0;
-          line-height: 1.4;
+          margin: 12px 0;
+          line-height: 1.3;
           page-break-inside: avoid;
           break-inside: avoid;
         }
 
         .body-content p {
-          margin-bottom: 12px;
+          margin-bottom: 8px;
         }
 
         .body-content ul {
-          margin: 12px 0 20px 20px;
+          margin: 8px 0 12px 20px;
           list-style-type: none;
           padding-left: 0;
         }
         .body-content ul li {
-          margin-bottom: 6px;
+          margin-bottom: 4px;
           padding-left: 16px;
           text-indent: -16px;
         }
@@ -302,17 +301,17 @@ export function getLetterHTML(data: LetterData): string {
         .body-content table {
           width: 100%;
           border-collapse: collapse;
-          font-size: 11pt;
+          font-size: 10.5pt;
           border: 1px solid #ccc;
           page-break-inside: auto;
           table-layout: fixed;
-          margin: 16px 0 24px 0;
+          margin: 12px 0 16px 0;
         }
 
         .body-content th,
         .body-content td {
           border: 1px solid #ccc;
-          padding: 6px 8px;
+          padding: 5px 6px;
           text-align: left;
           vertical-align: top;
           word-wrap: break-word;
@@ -341,7 +340,7 @@ export function getLetterHTML(data: LetterData): string {
 
         /* ========== Signature ========== */
         .signature-section {
-          margin-top: 30px;
+          margin-top: 12px;
           page-break-inside: avoid;
           break-inside: avoid;
         }
@@ -353,18 +352,13 @@ export function getLetterHTML(data: LetterData): string {
           color: transparent;
           overflow: hidden;
           user-select: none;
-          display: block;          /* ensures the anchor is on its own line */
+          display: block;
         }
 
-        /* Gap from the signature anchor to the printed name/title below.
-           Raised from 45px to 90px — the previous value left too little
-           room for embedSignature.ts's tightened anchor-to-name gap
-           constants (ANCHOR_BOTTOM_GAP now 0), which started overlapping
-           the signatory name/title on some signatures. Brought in line
-           with the Memo template's gap, which has been reliable. */
+        /* Preserves signature image overlay area while reducing total block height */
         .signature {
-          font-size: 12pt;
-          margin-top: 90px;
+          font-size: 11pt;
+          margin-top: 50px;
         }
 
         .signature .name {
@@ -381,9 +375,9 @@ export function getLetterHTML(data: LetterData): string {
 
         /* ========== CC Block ========== */
         .cc-block {
-          margin-top: 30px;
-          font-size: 12pt;
-          line-height: 1.5;
+          margin-top: 16px;
+          font-size: 11pt;
+          line-height: 1.3;
           display: flex;
           page-break-inside: avoid;
           break-inside: avoid;
@@ -402,7 +396,7 @@ export function getLetterHTML(data: LetterData): string {
 
         .cc-entry {
           display: flex;
-          margin-bottom: 12px;
+          margin-bottom: 8px;
           page-break-inside: avoid;
           break-inside: avoid;
         }
@@ -418,7 +412,7 @@ export function getLetterHTML(data: LetterData): string {
 
         .cc-entry .cc-text p {
           margin: 0;
-          line-height: 1.4;
+          line-height: 1.3;
         }
 
         .cc-entry .cc-text .cc-location {
@@ -429,9 +423,9 @@ export function getLetterHTML(data: LetterData): string {
 
         /* ========== Enclosures ========== */
         .enclosures-block {
-          margin-top: 20px;
-          font-size: 12pt;
-          line-height: 1.5;
+          margin-top: 12px;
+          font-size: 11pt;
+          line-height: 1.3;
           page-break-inside: avoid;
           break-inside: avoid;
         }
@@ -440,22 +434,17 @@ export function getLetterHTML(data: LetterData): string {
           font-weight: bold;
         }
 
-        /* ==================================================
-           FOOTER – FIXED ON EVERY PAGE (table-based layout)
-           Table-based instead of flexbox so the emblem size,
-           bold weights, and green taglines render consistently
-           across HTML-to-PDF engines with partial flex support.
-           ================================================== */
+        /* ========== Footer ========== */
         .footer {
-  position: fixed;
-  bottom: 12px;           /* was 20px */
-  left: 60px;
-  right: 60px;
-  border-top: 1px solid #999;
-  padding-top: 6px;       /* was 14px */
-  background: white;
-  page-break-inside: avoid;
-}
+          position: fixed;
+          bottom: 10px;
+          left: 60px;
+          right: 60px;
+          border-top: 1px solid #999;
+          padding-top: 6px;
+          background: white;
+          page-break-inside: avoid;
+        }
 
         .footer-table {
           width: 100%;
@@ -463,55 +452,54 @@ export function getLetterHTML(data: LetterData): string {
         }
 
         .footer-emblem-cell {
-  width: 60px;            /* was 90px */
-  vertical-align: middle;
-  padding-right: 10px;    /* was 18px */
-}
+          width: 50px;
+          vertical-align: middle;
+          padding-right: 10px;
+        }
 
-       .footer-emblem-cell img {
-  width: 60px;
-  height: auto;           /* stop forcing a square — let it stay proportional */
-  max-height: 40px;
-  object-fit: contain;
-}
+        .footer-emblem-cell img {
+          width: 50px;
+          height: auto;
+          max-height: 35px;
+          object-fit: contain;
+        }
 
         .footer-text-cell {
-  text-align: right;
-  vertical-align: middle;
-  font-size: 8.5pt;       /* was 10pt */
-  color: #1a1a1a;
-  line-height: 1.25;      /* was 1.5 */
-  font-stretch: condensed; /* nudges toward the Arial Narrow look where supported */
-}
+          text-align: right;
+          vertical-align: middle;
+          font-size: 8pt;
+          color: #1a1a1a;
+          line-height: 1.2;
+        }
 
         .footer-tagline-top {
-  font-weight: bold;
-  font-size: 9.5pt;       /* was 11pt */
-  color: #1E4620;
-  margin-bottom: 2px;     /* was 4px */
-}
+          font-weight: bold;
+          font-size: 9pt;
+          color: #1E4620;
+          margin-bottom: 2px;
+        }
 
-       .footer-text-cell p {
-  margin: 1px 0;          /* was 2px 0 */
-}
+        .footer-text-cell p {
+          margin: 1px 0;
+        }
 
         .footer-tagline-bottom {
-  text-align: right;
-  font-weight: bold;
-  font-size: 10pt;        /* was 11pt, closest to Word's 12pt bold-condensed look */
-  color: #1E4620;
-  margin-top: 4px;        /* was 8px */
-}
+          text-align: right;
+          font-weight: bold;
+          font-size: 9.5pt;
+          color: #1E4620;
+          margin-top: 3px;
+        }
 
         /* ========== Responsive ========== */
         @media (max-width: 600px) {
-          .page { padding: 30px 20px 200px 20px; }
+          .page { padding: 20px 15px 120px 15px; }
           .header { flex-direction: column; text-align: center; }
-          .logo-container { margin-right: 0; margin-bottom: 10px; }
-          .ref-date { flex-direction: column; align-items: flex-start; gap: 5px; }
-          .footer { left: 20px; right: 20px; }
+          .logo-container { margin-right: 0; margin-bottom: 8px; }
+          .ref-date { flex-direction: column; align-items: flex-start; gap: 4px; }
+          .footer { left: 15px; right: 15px; }
           .cc-block { flex-direction: column; }
-          .cc-block .cc-label { margin-bottom: 8px; }
+          .cc-block .cc-label { margin-bottom: 6px; }
         }
       </style>
     </head>

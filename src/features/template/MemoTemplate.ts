@@ -4,7 +4,7 @@ export interface MemoData {
   ref: string;
   date: string;
   subject: string;
-  body: string;
+  body: string; // Accepts raw plain text OR HTML string (including <table>)
   signatureName: string;
   signatureTitle: string;
   draftedByInitials?: string;
@@ -43,18 +43,23 @@ function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (ch) => replacements[ch]);
 }
 
+/**
+ * Safely formats the memo body.
+ * If rawBody already contains HTML tables or tags, it keeps them intact.
+ * If it is plain text, it converts line breaks to <br/>.
+ */
 function formatBodyHtml(rawBody: string): string {
   if (!rawBody || !rawBody.trim()) return "<p>&nbsp;</p>";
 
-  const parts = rawBody.split(/(<table[\s\S]*?<\/table>)/gi);
+  const isHtml = /<[a-z][\s\S]*>/i.test(rawBody);
 
-  return parts
-    .map((part) => {
-      if (/^<table[\s\S]*<\/table>$/i.test(part.trim())) {
-        return part.replace(/>\s*\n\s*</g, "><").trim();
-      }
-      return part.replace(/\n/g, "<br/>");
-    })
+  if (isHtml) {
+    return rawBody;
+  }
+
+  return rawBody
+    .split(/\n\n+/)
+    .map((p) => `<p>${escapeHtml(p.trim()).replace(/\n/g, "<br/>")}</p>`)
     .join("");
 }
 
@@ -111,46 +116,73 @@ export function getMemoHTML(data: MemoData): string {
   <meta charset="UTF-8">
   <title>MEMO</title>
   <style>
+    @page {
+      size: A4;
+      margin: 15mm 15mm 32mm 15mm; /* 32mm bottom margin leaves reserved space for fixed footer */
+    }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { 
       font-family: Tahoma, Geneva, Verdana, sans-serif; 
       color: #000; 
       background: #fff; 
     }
-    .page { max-width: 794px; min-height: 1123px; margin: 0 auto; padding: 50px 60px 170px; position: relative; }
-    .header { text-align: center; margin-bottom: 15px; }
-    .header img { height: 78px; width: auto; display: inline-block; }
+    .page { 
+      width: 100%; 
+      max-width: 794px; 
+      margin: 0 auto; 
+      padding-bottom: 110px; /* Reserves clear clearance above fixed footer */
+      position: relative; 
+    }
+    .header { text-align: center; margin-bottom: 12px; }
+    .header img { height: 70px; width: auto; display: inline-block; }
     
-    .title-block { text-align: center; margin: 18px 0 22px; font-family: Arial, Helvetica, sans-serif; }
-    .title-block .office-title { font-size: 18px; font-weight: bold; text-transform: uppercase; line-height: 1.3; }
-    .title-block .memo-title { font-size: 16px; font-weight: bold; text-transform: uppercase; line-height: 1.3; margin-top: 4px; }
+    .title-block { text-align: center; margin: 14px 0 16px; font-family: Arial, Helvetica, sans-serif; }
+    .title-block .office-title { font-size: 16px; font-weight: bold; text-transform: uppercase; line-height: 1.2; }
+    .title-block .memo-title { font-size: 14px; font-weight: bold; text-transform: uppercase; line-height: 1.2; margin-top: 3px; }
     
-    .top-rule { border-top: 2.5px solid #000; margin-bottom: 10px; }
-    .fields { margin: 10px 0 0; }
+    .top-rule { border-top: 2.5px solid #000; margin-bottom: 8px; }
+    .fields { margin: 6px 0 0; }
     
-    .field { display: flex; font-size: 12pt; font-weight: bold; line-height: 2; font-family: Tahoma, Geneva, Verdana, sans-serif; }
-    .field .label { width: 110px; flex-shrink: 0; text-transform: uppercase; }
-    .field .colon { width: 25px; flex-shrink: 0; }
+    .field { display: flex; font-size: 11pt; font-weight: bold; line-height: 1.6; font-family: Tahoma, Geneva, Verdana, sans-serif; }
+    .field .label { width: 100px; flex-shrink: 0; text-transform: uppercase; }
+    .field .colon { width: 20px; flex-shrink: 0; }
     .field .value { flex: 1; text-transform: uppercase; }
     
-    .bottom-rule { border-top: 2.5px solid #000; margin: 12px 0 30px; }
+    .bottom-rule { border-top: 2.5px solid #000; margin: 10px 0 16px; }
     
     .body-content { 
-      margin: 0 0 30px; 
-      font-size: 12pt; 
-      font-weight: bold; 
-      line-height: 1.8; 
+      margin: 0 0 16px; 
+      font-size: 11pt; 
+      line-height: 1.45; 
       text-align: justify; 
-      min-height: 120px; 
       font-family: Tahoma, Geneva, Verdana, sans-serif;
     }
-    .body-content p { margin-bottom: 12px; }
-    .body-content table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 11pt; page-break-inside: avoid; break-inside: avoid; }
-    .body-content table th, .body-content table td { border: 1px solid #333; padding: 6px 10px; text-align: left; vertical-align: top; }
-    .body-content table th { background: #f0ede4; font-weight: bold; text-transform: uppercase; font-size: 10pt; }
+    .body-content p { margin-bottom: 8px; }
+    
+    /* Styled Table Support */
+    .body-content table { 
+      width: 100%; 
+      border-collapse: collapse; 
+      margin: 12px 0; 
+      font-size: 10.5pt; 
+      page-break-inside: avoid; 
+      break-inside: avoid; 
+    }
+    .body-content table th, .body-content table td { 
+      border: 1px solid #333; 
+      padding: 6px 10px; 
+      text-align: left; 
+      vertical-align: top; 
+    }
+    .body-content table th { 
+      background: #f0ede4; 
+      font-weight: bold; 
+      text-transform: uppercase; 
+      font-size: 9.5pt; 
+    }
 
     .signature-section {
-      margin-top: 30px;
+      margin-top: 12px;
       page-break-inside: avoid;
       break-inside: avoid;
     }
@@ -164,19 +196,11 @@ export function getMemoHTML(data: MemoData): string {
       user-select: none;
     }
 
-    /* Gap from the signature anchor to the printed name/title below, in
-       Puppeteer's 96dpi rendering (1px ≈ 0.75pt at print time). This
-       margin, plus signature-section's own margin-top, is the room the
-       embedded signature image has to sit in. Raised from 45px to 90px —
-       the previous value left only ~56pt total gap, which after
-       ascent/descent clearance overhead (see embedSignature.ts) was tight
-       enough to overlap the signatory name/title on some signatures.
-       Brought in line with Certificate's gap, which has been reliable. */
     .signature {
-      font-size: 12pt;
+      font-size: 11pt;
       font-weight: bold;
       text-align: left;
-      margin-top: 90px;
+      margin-top: 45px;
       page-break-inside: avoid;
       break-inside: avoid;
       font-family: Tahoma, Geneva, Verdana, sans-serif;
@@ -184,33 +208,35 @@ export function getMemoHTML(data: MemoData): string {
     .signature .signatory-name { text-transform: uppercase; margin-bottom: 2px; }
     .signature .org-unit { text-transform: uppercase; }
     
-    .signature .enclosure { font-weight: normal; font-size: 12pt; margin-top: 8px; }
+    .signature .enclosure { font-weight: normal; font-size: 11pt; margin-top: 6px; }
     
     .signature .drafted-by { 
       font-weight: normal; 
       font-style: italic; 
       text-decoration: underline; 
       text-transform: lowercase; 
-      margin-top: 6px; 
-      font-size: 6pt; 
+      margin-top: 4px; 
+      font-size: 8pt; 
       color: #000; 
     }
 
-    .footer { position: fixed; bottom: 30px; left: 60px; right: 60px; border-top: 1px solid #999; padding-top: 14px; }
-    .footer-top { display: flex; align-items: center; gap: 18px; }
-    .footer-emblem { flex: 0 0 70px; }
-    .footer-emblem img { width: 70px; height: 70px; display: block; object-fit: contain; }
-    .footer-text { flex: 1; text-align: right; font-size: 10pt; color: #1a1a1a; }
-    .footer-text p { margin: 2px 0; line-height: 1.5; }
-    .footer-tagline { text-align: right; font-size: 11pt; font-weight: bold; color: #1E4620; margin-top: 8px; }
-
-    @media (max-width: 600px) {
-      .page { padding: 30px 20px 170px; }
-      .field .label { width: 80px; }
-      .footer { left: 20px; right: 20px; }
-      .footer-top { flex-direction: column; text-align: center; gap: 10px; }
-      .footer-text, .footer-tagline { text-align: center; }
+    /* Fixed Footer Setup to prevent overlapping and unwanted page pushes */
+    .footer { 
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      border-top: 1px solid #999; 
+      padding-top: 6px; 
+      background: #fff;
+      page-break-inside: avoid;
     }
+    .footer-top { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+    .footer-emblem { flex: 0 0 50px; }
+    .footer-emblem img { width: 50px; height: 50px; display: block; object-fit: contain; }
+    .footer-text { flex: 1; text-align: right; font-size: 8.5pt; color: #1a1a1a; }
+    .footer-text p { margin: 1px 0; line-height: 1.3; }
+    .footer-tagline { text-align: right; font-size: 9.5pt; font-weight: bold; color: #1E4620; margin-top: 4px; }
   </style>
 </head>
 <body>

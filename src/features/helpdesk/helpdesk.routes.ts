@@ -22,14 +22,14 @@ router.post('/utilities', requireRole('dept_head', 'super_admin', 'staff'), help
 router.post('/utilities/:id/items', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.addUtilityItem);
 router.put('/utilities/:id/items/:itemId', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateUtilityItem);
 router.delete('/utilities/:id/items/:itemId', requireRole('super_admin'), helpDeskController.deleteUtilityItem);
-router.delete('/utilities/:id', requireRole('super_admin', 'dept_head'), helpDeskController.deleteUtility);
+router.delete('/utilities/:id', requireRole('super_admin', 'dept_head', 'staff'), helpDeskController.deleteUtility);
 
 // ─── Club Membership ─────────────────────────────────────────────────────────
 router.get('/club', helpDeskController.getAllClubMemberships);
 router.get('/club/:id', helpDeskController.getClubMembershipById);
 router.post('/club', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.createClubMembership);
 router.put('/club/:id/status', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateClubMembershipStatus);
-router.delete('/club/:id', requireRole('super_admin', 'dept_head'), helpDeskController.deleteClubMembership);
+router.delete('/club/:id', requireRole('super_admin', 'dept_head', 'staff'), helpDeskController.deleteClubMembership);
 
 // ─── Circuits ────────────────────────────────────────────────────────────────
 router.get('/circuits', helpDeskController.getAllCircuits);
@@ -37,7 +37,7 @@ router.get('/circuits/:id', helpDeskController.getCircuitById);
 router.post('/circuits', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.createCircuit);
 router.put('/circuits/:id/status', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateCircuitStatus);
 router.put('/circuits/:id/dsa-details', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateCircuitDSADetails);
-router.delete('/circuits/:id', requireRole('super_admin', 'dept_head'), helpDeskController.deleteCircuit);
+router.delete('/circuits/:id', requireRole('super_admin', 'dept_head', 'staff'), helpDeskController.deleteCircuit);
 
 // ─── Special Benches ────────────────────────────────────────────────────────
 router.get('/benches', helpDeskController.getAllBenches);

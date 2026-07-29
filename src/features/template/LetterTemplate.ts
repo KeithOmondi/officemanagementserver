@@ -17,46 +17,53 @@ export interface LetterData {
 }
 
 const DEFAULT_LOGO_URL =
-  'https://res.cloudinary.com/do0yflasl/image/upload/v1784363826/ORHC_L_crclut.jpg';
+  "https://res.cloudinary.com/do0yflasl/image/upload/v1784363826/ORHC_L_crclut.jpg";
 const DEFAULT_FOOTER_EMBLEM_URL =
-  'https://res.cloudinary.com/do0yflasl/image/upload/v1784364354/ORHC_EMBLEM_wzmp94.jpg';
+  "https://res.cloudinary.com/do0yflasl/image/upload/v1784364354/ORHC_EMBLEM_wzmp94.jpg";
 
-export const SIGNATURE_ANCHOR_TEXT = 'RHC-SIGNATURE-ANCHOR';
+export const SIGNATURE_ANCHOR_TEXT = "RHC-SIGNATURE-ANCHOR";
 
 // =====================================================
 // Helper Functions
 // =====================================================
 
 function escapeHtml(text: string): string {
-  if (!text) return '';
+  if (!text) return "";
   const map: Record<string, string> = {
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#039;',
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;",
   };
   return text.replace(/[&<>"']/g, (m) => map[m]);
 }
 
 function formatBody(html: string): string {
-  if (!html || !html.trim()) return '<p>&nbsp;</p>';
+  if (!html || !html.trim()) return "<p>&nbsp;</p>";
 
   return html
-    .replace(/(?:<div>\s*(?:<br\s*\/?>)?\s*<\/div>\s*){2,}/gi, '<div><br></div>')
-    .replace(/(?:<p>\s*(?:<br\s*\/?>)?\s*<\/p>\s*){2,}/gi, '<p><br></p>')
-    .replace(/(?:<br\s*\/?>\s*){3,}/gi, '<br/><br/>');
+    .replace(
+      /(?:<div>\s*(?:<br\s*\/?>)?\s*<\/div>\s*){2,}/gi,
+      "<div><br></div>",
+    )
+    .replace(/(?:<p>\s*(?:<br\s*\/?>)?\s*<\/p>\s*){2,}/gi, "<p><br></p>")
+    .replace(/(?:<br\s*\/?>\s*){3,}/gi, "<br/><br/>");
 }
 
 function formatToBlock(toText: string): string {
-  if (!toText) return '';
-  const lines = toText.split('\n').map((l) => l.trim()).filter(Boolean);
-  if (lines.length === 0) return '';
+  if (!toText) return "";
+  const lines = toText
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return "";
 
-  const salutationRegex = /^(YOUR HONOR|DEAR SIR|DEAR MADAM|DEAR JUDGE|RESPECTED SIR|RESPECTED MADAM)[,. ]*$/i;
+  const salutationRegex =
+    /^(YOUR HONOR|DEAR SIR|DEAR MADAM|DEAR JUDGE|RESPECTED SIR|RESPECTED MADAM)[,. ]*$/i;
 
-  let salutationLine = '';
-  let locationLine = '';
+  let salutationLine = "";
+  let locationLine = "";
   let bodyLines = [...lines];
 
   if (lines.length > 0 && salutationRegex.test(lines[lines.length - 1])) {
@@ -68,13 +75,15 @@ function formatToBlock(toText: string): string {
     locationLine = bodyLines.pop()!;
   }
 
-  const bodyHtml = bodyLines.map((line) => `<p>${escapeHtml(line)}</p>`).join('');
+  const bodyHtml = bodyLines
+    .map((line) => `<p>${escapeHtml(line)}</p>`)
+    .join("");
   const locationHtml = locationLine
     ? `<p class="to-location">${escapeHtml(locationLine)}</p>`
-    : '';
+    : "";
   const salutationHtml = salutationLine
     ? `<p class="to-salutation">${escapeHtml(salutationLine)}</p>`
-    : '';
+    : "";
 
   return `<div class="to-block">${bodyHtml}${locationHtml}${salutationHtml}</div>`;
 }
@@ -85,20 +94,28 @@ function formatCC(cc: string): string {
     .map((entry) => entry.trim())
     .filter(Boolean);
 
-  if (entries.length === 0) return '';
+  if (entries.length === 0) return "";
 
   const entriesHtml = entries
     .map((entry, index) => {
-      const lines = entry.split('\n').map((line) => line.trim()).filter(Boolean);
-      const locationLine = lines[lines.length - 1] || '';
+      const lines = entry
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+      const locationLine = lines[lines.length - 1] || "";
       const bodyLines = lines.slice(0, -1);
 
-      const bodyHtml = bodyLines.map((line) => `<p>${escapeHtml(line)}</p>`).join('');
+      const bodyHtml = bodyLines
+        .map((line) => `<p>${escapeHtml(line)}</p>`)
+        .join("");
       const locationHtml = locationLine
         ? `<p class="cc-location">${escapeHtml(locationLine)}</p>`
-        : '';
+        : "";
 
-      const numberHtml = entries.length > 1 ? `<span class="cc-number">${index + 1}.</span>` : '';
+      const numberHtml =
+        entries.length > 1
+          ? `<span class="cc-number">${index + 1}.</span>`
+          : "";
 
       return `
         <div class="cc-entry">
@@ -107,7 +124,7 @@ function formatCC(cc: string): string {
         </div>
       `;
     })
-    .join('');
+    .join("");
 
   return `
     <div class="cc-block">
@@ -145,9 +162,9 @@ export function getLetterHTML(data: LetterData): string {
       <style>
         /* ========== Page & Print Setup ========== */
         @page {
-          margin: 1.5cm 1.5cm 1.8cm;
-          size: A4;
-        }
+  margin: 2cm 2.34cm 1.9cm 2.25cm;  /* top right bottom left, matches Word */
+  size: A4;
+}
 
         * {
           margin: 0;
@@ -156,21 +173,19 @@ export function getLetterHTML(data: LetterData): string {
         }
 
         body {
-          font-family: Arial, Helvetica, sans-serif;
-          color: #000000;
-          background: white;
-          font-size: 12pt;
-          position: relative;
-          min-height: 100vh;
-        }
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 12pt;
+  color: #000;
+  background: white;
+  /* remove min-height: 100vh entirely — let content define page height */
+}
 
         .page {
-          max-width: 794px;
-          margin: 0 auto;
-          padding: 50px 60px 200px 60px;
-          position: relative;
-          min-height: 100vh;
-        }
+  max-width: 794px;
+  margin: 0 auto;
+  padding: 0 0 150px 0;   /* only reserve what the footer actually needs, no min-height */
+  position: relative;
+}
 
         /* ========== Header ========== */
         .header {
@@ -227,11 +242,8 @@ export function getLetterHTML(data: LetterData): string {
 
         /* ========== Body Content ========== */
         .body-content {
-          margin: 0 0 40px 0;
-          font-size: 12pt;
-          line-height: 1.5;
-          text-align: justify;
-        }
+  line-height: 1.15;      /* was 1.5 — matches Word's actual spacing */
+}
 
         .body-content .to-block {
           margin-bottom: 20px;
@@ -435,15 +447,15 @@ export function getLetterHTML(data: LetterData): string {
            across HTML-to-PDF engines with partial flex support.
            ================================================== */
         .footer {
-          position: fixed;
-          bottom: 20px;
-          left: 60px;
-          right: 60px;
-          border-top: 1px solid #999;
-          padding-top: 14px;
-          background: white;
-          page-break-inside: avoid;
-        }
+  position: fixed;
+  bottom: 12px;           /* was 20px */
+  left: 60px;
+  right: 60px;
+  border-top: 1px solid #999;
+  padding-top: 6px;       /* was 14px */
+  background: white;
+  page-break-inside: avoid;
+}
 
         .footer-table {
           width: 100%;
@@ -451,44 +463,45 @@ export function getLetterHTML(data: LetterData): string {
         }
 
         .footer-emblem-cell {
-          width: 90px;
-          vertical-align: middle;
-          padding-right: 18px;
-        }
+  width: 60px;            /* was 90px */
+  vertical-align: middle;
+  padding-right: 10px;    /* was 18px */
+}
 
-        .footer-emblem-cell img {
-          width: 90px;
-          height: 90px;
-          display: block;
-          object-fit: contain;
-        }
+       .footer-emblem-cell img {
+  width: 60px;
+  height: auto;           /* stop forcing a square — let it stay proportional */
+  max-height: 40px;
+  object-fit: contain;
+}
 
         .footer-text-cell {
-          text-align: right;
-          vertical-align: middle;
-          font-size: 10pt;
-          color: #1a1a1a;
-          line-height: 1.5;
-        }
+  text-align: right;
+  vertical-align: middle;
+  font-size: 8.5pt;       /* was 10pt */
+  color: #1a1a1a;
+  line-height: 1.25;      /* was 1.5 */
+  font-stretch: condensed; /* nudges toward the Arial Narrow look where supported */
+}
 
         .footer-tagline-top {
-          font-weight: bold;
-          font-size: 11pt;
-          color: #1E4620;
-          margin-bottom: 4px;
-        }
+  font-weight: bold;
+  font-size: 9.5pt;       /* was 11pt */
+  color: #1E4620;
+  margin-bottom: 2px;     /* was 4px */
+}
 
-        .footer-text-cell p {
-          margin: 2px 0;
-        }
+       .footer-text-cell p {
+  margin: 1px 0;          /* was 2px 0 */
+}
 
         .footer-tagline-bottom {
-          text-align: right;
-          font-weight: bold;
-          font-size: 11pt;
-          color: #1E4620;
-          margin-top: 8px;
-        }
+  text-align: right;
+  font-weight: bold;
+  font-size: 10pt;        /* was 11pt, closest to Word's 12pt bold-condensed look */
+  color: #1E4620;
+  margin-top: 4px;        /* was 8px */
+}
 
         /* ========== Responsive ========== */
         @media (max-width: 600px) {
@@ -527,8 +540,8 @@ export function getLetterHTML(data: LetterData): string {
 
         <!-- Body -->
         <div class="body-content">
-          ${to ? formatToBlock(to) : ''}
-          ${subject ? `<div class="subject-line">RE: ${escapeHtml(subject)}</div>` : ''}
+          ${to ? formatToBlock(to) : ""}
+          ${subject ? `<div class="subject-line">RE: ${escapeHtml(subject)}</div>` : ""}
           ${formatBody(body)}
         </div>
 
@@ -537,19 +550,23 @@ export function getLetterHTML(data: LetterData): string {
           <div class="signature-anchor" aria-hidden="true">${SIGNATURE_ANCHOR_TEXT}</div>
           <div class="signature">
             <div class="name">${escapeHtml(sender)}</div>
-            <div class="title">${escapeHtml(senderTitle || 'Registrar, High Court')}</div>
+            <div class="title">${escapeHtml(senderTitle || "Registrar, High Court")}</div>
           </div>
         </div>
 
         <!-- CC -->
-        ${cc ? formatCC(cc) : ''}
+        ${cc ? formatCC(cc) : ""}
 
         <!-- Enclosures -->
-        ${enclosures ? `
+        ${
+          enclosures
+            ? `
           <div class="enclosures-block">
             <span class="label">Enclosures:</span> ${escapeHtml(enclosures)}
           </div>
-        ` : ''}
+        `
+            : ""
+        }
 
       </div><!-- end .page -->
 

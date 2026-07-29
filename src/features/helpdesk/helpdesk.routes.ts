@@ -53,21 +53,21 @@ router.get('/part-heards/:id', helpDeskController.getPartHeardById);
 router.post('/part-heards', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.createPartHeard);
 router.put('/part-heards/:id', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updatePartHeard);
 router.put('/part-heards/:id/status', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updatePartHeardStatus);
-router.delete('/part-heards/:id', requireRole('super_admin', 'dept_head'), helpDeskController.deletePartHeard);
+router.delete('/part-heards/:id', requireRole('super_admin', 'dept_head', 'staff'), helpDeskController.deletePartHeard);
 
 // ─── Service Weeks ──────────────────────────────────────────────────────────
 router.get('/service-weeks', helpDeskController.getAllServiceWeeks);
 router.get('/service-weeks/:id', helpDeskController.getServiceWeekById);
 router.post('/service-weeks', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.createServiceWeek);
 router.put('/service-weeks/:id/status', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateServiceWeekStatus);
-router.delete('/service-weeks/:id', requireRole('super_admin', 'dept_head'), helpDeskController.deleteServiceWeek);
+router.delete('/service-weeks/:id', requireRole('super_admin', 'dept_head', 'staff'), helpDeskController.deleteServiceWeek);
 
 // ─── Medical Expense Claims ──────────────────────────────────────────────────
 router.get('/medical-claims', helpDeskController.getAllMedicalClaims);
 router.get('/medical-claims/:id', helpDeskController.getMedicalClaimById);
 router.post('/medical-claims', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.createMedicalClaim);
 router.put('/medical-claims/:id/status', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateMedicalClaimStatus);
-router.delete('/medical-claims/:id', requireRole('super_admin', 'dept_head'), helpDeskController.deleteMedicalClaim);
+router.delete('/medical-claims/:id', requireRole('super_admin', 'dept_head', 'staff'), helpDeskController.deleteMedicalClaim);
 
 // ─── General Requests (Unified) ─────────────────────────────────────────────
 // Use /general to match controller methods

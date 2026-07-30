@@ -37,6 +37,8 @@ router.get('/circuits/:id', helpDeskController.getCircuitById);
 router.post('/circuits', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.createCircuit);
 router.put('/circuits/:id/status', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateCircuitStatus);
 router.put('/circuits/:id/dsa-details', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateCircuitDSADetails);
+// ─── NEW: Full update for circuits ──────────────────────────────────────────
+router.put('/circuits/:id', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateCircuit);
 router.delete('/circuits/:id', requireRole('super_admin', 'dept_head', 'staff'), helpDeskController.deleteCircuit);
 
 // ─── Special Benches ────────────────────────────────────────────────────────
@@ -45,7 +47,7 @@ router.get('/benches/:id', helpDeskController.getBenchById);
 router.post('/benches', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.createBench);
 router.put('/benches/:id', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateBench);
 router.put('/benches/:id/status', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateBenchStatus);
-router.delete('/benches/:id', requireRole('super_admin', 'dept_head'), helpDeskController.deleteBench);
+router.delete('/benches/:id', requireRole('super_admin', 'dept_head', 'staff'), helpDeskController.deleteBench);
 
 // ─── Part-Heards ─────────────────────────────────────────────────────────────
 router.get('/part-heards', helpDeskController.getAllPartHeards);
@@ -60,6 +62,8 @@ router.get('/service-weeks', helpDeskController.getAllServiceWeeks);
 router.get('/service-weeks/:id', helpDeskController.getServiceWeekById);
 router.post('/service-weeks', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.createServiceWeek);
 router.put('/service-weeks/:id/status', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateServiceWeekStatus);
+// ─── NEW: Full update for service weeks ─────────────────────────────────────
+router.put('/service-weeks/:id', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateServiceWeek);
 router.delete('/service-weeks/:id', requireRole('super_admin', 'dept_head', 'staff'), helpDeskController.deleteServiceWeek);
 
 // ─── Medical Expense Claims ──────────────────────────────────────────────────
@@ -70,7 +74,6 @@ router.put('/medical-claims/:id/status', requireRole('dept_head', 'super_admin',
 router.delete('/medical-claims/:id', requireRole('super_admin', 'dept_head', 'staff'), helpDeskController.deleteMedicalClaim);
 
 // ─── General Requests (Unified) ─────────────────────────────────────────────
-// Use /general to match controller methods
 router.get('/general', helpDeskController.getAllGeneralRequests);
 router.get('/general/:id', helpDeskController.getGeneralRequestById);
 router.get('/general/judge/:judgeName', helpDeskController.getGeneralRequestsByJudge);
@@ -84,7 +87,6 @@ router.delete('/general/:id', requireRole('super_admin', 'dept_head'), helpDeskC
 router.post('/general/:id/email', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.sendGeneralRequestEmail);
 
 // ─── Legacy Security Requests (Deprecated) ──────────────────────────────────
-// Keep for backward compatibility
 router.get('/security', helpDeskController.getAllSecurityRequests);
 router.get('/security/:id', helpDeskController.getSecurityRequestById);
 router.get('/security/judge/:judgeName', helpDeskController.getSecurityRequestsByJudge);
@@ -93,14 +95,14 @@ router.get('/security/stats', helpDeskController.getSecurityRequestStats);
 router.post('/security', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.createSecurityRequest);
 router.put('/security/:id', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateSecurityRequest);
 router.patch('/security/:id/status', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateSecurityRequestStatus);
-router.delete('/security/:id', requireRole('super_admin', 'dept_head'), helpDeskController.deleteSecurityRequest);
+router.delete('/security/:id', requireRole('super_admin', 'dept_head', 'staff'), helpDeskController.deleteSecurityRequest);
 
 // ─── Visa Support ────────────────────────────────────────────────────────────
 router.get('/visa', helpDeskController.getAllVisaRequests);
 router.get('/visa/:id', helpDeskController.getVisaRequestById);
 router.post('/visa', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.createVisaRequest);
 router.put('/visa/:id/status', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateVisaStatus);
-router.delete('/visa/:id', requireRole('super_admin', 'dept_head'), helpDeskController.deleteVisaRequest);
+router.delete('/visa/:id', requireRole('super_admin', 'dept_head', 'staff'), helpDeskController.deleteVisaRequest);
 
 // ─── Visa Document Tracking ─────────────────────────────────────────────────
 router.post('/visa/documents/:id/view', helpDeskController.markDocumentViewed);
@@ -111,7 +113,7 @@ router.get('/protocol', helpDeskController.getAllProtocolEvents);
 router.get('/protocol/:id', helpDeskController.getProtocolEventById);
 router.post('/protocol', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.createProtocolEvent);
 router.put('/protocol/:id/status', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateProtocolStatus);
-router.delete('/protocol/:id', requireRole('super_admin', 'dept_head'), helpDeskController.deleteProtocolEvent);
+router.delete('/protocol/:id', requireRole('super_admin', 'dept_head', 'staff'), helpDeskController.deleteProtocolEvent);
 
 // ─── Other Payments ──────────────────────────────────────────────────────────
 router.get('/other-payments', helpDeskController.getAllOtherPayments);
@@ -119,6 +121,8 @@ router.get('/other-payments/:id', helpDeskController.getOtherPaymentById);
 router.post('/other-payments', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.createOtherPayment);
 router.put('/other-payments/:id/status', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateOtherPaymentStatus);
 router.put('/other-payments/:id/dsa-details', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateOtherPaymentDSADetails);
-router.delete('/other-payments/:id', requireRole('super_admin', 'dept_head'), helpDeskController.deleteOtherPayment);
+// ─── NEW: Full update for other payments ─────────────────────────────────────
+router.put('/other-payments/:id', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateOtherPayment);
+router.delete('/other-payments/:id', requireRole('super_admin', 'dept_head', 'staff'), helpDeskController.deleteOtherPayment);
 
 export default router;

@@ -16,8 +16,8 @@ export interface LetterData {
   footerEmblemUrl?: string;
 }
 
-const DEFAULT_LOGO_URL =
-  "https://res.cloudinary.com/do0yflasl/image/upload/v1784363826/ORHC_L_crclut.jpg";
+const DEFAULT_HEADER_BANNER_URL =
+  "https://res.cloudinary.com/do0yflasl/image/upload/v1784363826/ORHC_HEADER_BANNER.jpg";
 const DEFAULT_FOOTER_EMBLEM_URL =
   "https://res.cloudinary.com/do0yflasl/image/upload/v1784364354/ORHC_EMBLEM_wzmp94.jpg";
 
@@ -60,10 +60,9 @@ function formatToBlock(toText: string): string {
   if (lines.length === 0) return "";
 
   const salutationRegex =
-    /^(YOUR HONOR|DEAR SIR|DEAR MADAM|DEAR JUDGE|RESPECTED SIR|RESPECTED MADAM)[,. ]*$/i;
+    /^(YOUR HONOR|YOUR HONOUR|DEAR SIR|DEAR MADAM|DEAR JUDGE|RESPECTED SIR|RESPECTED MADAM)[,. ]*$/i;
 
   let salutationLine = "";
-  let locationLine = "";
   let bodyLines = [...lines];
 
   if (lines.length > 0 && salutationRegex.test(lines[lines.length - 1])) {
@@ -71,21 +70,20 @@ function formatToBlock(toText: string): string {
     bodyLines = [...lines];
   }
 
-  if (bodyLines.length > 0) {
-    locationLine = bodyLines.pop()!;
-  }
-
   const bodyHtml = bodyLines
-    .map((line) => `<p>${escapeHtml(line)}</p>`)
+    .map((line) => `<p class="to-line">${escapeHtml(line)}</p>`)
     .join("");
-  const locationHtml = locationLine
-    ? `<p class="to-location">${escapeHtml(locationLine)}</p>`
-    : "";
+
   const salutationHtml = salutationLine
-    ? `<p class="to-salutation">${escapeHtml(salutationLine)}</p>`
+    ? `<div class="to-salutation">${escapeHtml(salutationLine)}</div>`
     : "";
 
-  return `<div class="to-block">${bodyHtml}${locationHtml}${salutationHtml}</div>`;
+  return `
+    <div class="to-block">
+      ${bodyHtml}
+    </div>
+    ${salutationHtml}
+  `;
 }
 
 function formatCC(cc: string): string {
@@ -102,25 +100,15 @@ function formatCC(cc: string): string {
         .split("\n")
         .map((line) => line.trim())
         .filter(Boolean);
-      const locationLine = lines[lines.length - 1] || "";
-      const bodyLines = lines.slice(0, -1);
 
-      const bodyHtml = bodyLines
+      const linesHtml = lines
         .map((line) => `<p>${escapeHtml(line)}</p>`)
         .join("");
-      const locationHtml = locationLine
-        ? `<p class="cc-location">${escapeHtml(locationLine)}</p>`
-        : "";
-
-      const numberHtml =
-        entries.length > 1
-          ? `<span class="cc-number">${index + 1}.</span>`
-          : "";
 
       return `
         <div class="cc-entry">
-          ${numberHtml}
-          <span class="cc-text">${bodyHtml}${locationHtml}</span>
+          <span class="cc-number">${index + 1}.</span>
+          <span class="cc-text">${linesHtml}</span>
         </div>
       `;
     })
@@ -149,7 +137,7 @@ export function getLetterHTML(data: LetterData): string {
     senderTitle,
     cc,
     enclosures,
-    logoUrl = DEFAULT_LOGO_URL,
+    logoUrl = DEFAULT_HEADER_BANNER_URL,
     footerEmblemUrl = DEFAULT_FOOTER_EMBLEM_URL,
   } = data;
 
@@ -160,10 +148,10 @@ export function getLetterHTML(data: LetterData): string {
       <meta charset="UTF-8">
       <title>LETTER</title>
       <style>
-        /* ========== Page & Print Setup ========== */
+        /* Bottom margin increased slightly (10mm) to push footer down off the raw edge */
         @page {
-          margin: 1.5cm 2.34cm 2.2cm 2.25cm;  /* Reduced top margin slightly */
           size: A4;
+          margin: 15mm 20mm 10mm 20mm;
         }
 
         * {
@@ -172,278 +160,84 @@ export function getLetterHTML(data: LetterData): string {
           box-sizing: border-box;
         }
 
-        body {
+        html, body {
+          background: white;
           font-family: Arial, Helvetica, sans-serif;
           font-size: 11pt;
           color: #000;
+        }
+
+        .page-table {
+          width: 100%;
+          border-collapse: collapse;
+        }
+
+        .page-header-space {
+          height: 155px;
+        }
+
+        /* Spacer enlarged slightly to match the extra footer breathing room */
+        .page-footer-space {
+          height: 100px;
+        }
+
+        /* Fixed Header */
+        .header-wrapper {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
           background: white;
+          z-index: 1000;
+          padding-top: 10px;
         }
 
-        .page {
-          max-width: 794px;
-          margin: 0 auto;
-          padding: 0 0 90px 0;   /* Reduced padding reserved for footer */
-          position: relative;
-        }
-
-        /* ========== Header ========== */
-        .header {
+        .header-banner {
           display: flex;
+          justify-content: center;
           align-items: center;
           margin-bottom: 8px;
-          page-break-inside: avoid;
-          break-inside: avoid;
         }
 
-        .logo-container {
-          flex: 0 0 75px;
-          margin-right: 16px;
+        .header-banner img {
+          max-height: 80px;
+          width: auto;
         }
 
-        .logo-container img {
-          width: 65px;
-          height: auto;
-          display: block;
+        .header-text {
+          text-align: center;
+          margin-bottom: 6px;
         }
 
         .header-text .judiciary {
-          font-size: 16px;
+          font-size: 14pt;
           font-weight: bold;
-          color: #000000;
-          line-height: 1.2;
           text-transform: uppercase;
+          letter-spacing: 0.5px;
         }
 
         .header-text .office-name {
-          font-size: 13px;
-          font-weight: bold;
-          text-transform: uppercase;
-          color: #000000;
-          margin-top: 2px;
-          line-height: 1.2;
-        }
-
-        .header-rule {
-          border-top: 1.5px solid #C29B38;
-          margin-bottom: 16px;
-        }
-
-        /* ========== Ref / Date ========== */
-        .ref-date {
-          display: flex;
-          justify-content: space-between;
-          margin: 0 0 16px 0;
           font-size: 11pt;
-          font-weight: bold;
-          page-break-inside: avoid;
-          break-inside: avoid;
-        }
-
-        /* ========== Body Content ========== */
-        .body-content {
-          line-height: 1.25;
-        }
-
-        .body-content .to-block {
-          margin-bottom: 12px;
-          page-break-inside: avoid;
-          break-inside: avoid;
-        }
-
-        .body-content .to-block p {
-          margin: 0;
-          line-height: 1.3;
-        }
-
-        .body-content .to-block .to-location {
-          font-weight: bold;
-          text-decoration: underline;
-          text-transform: uppercase;
-          margin-top: 2px;
-        }
-
-        .body-content .to-block .to-salutation {
-          font-weight: normal;
-          text-decoration: none;
-          text-transform: uppercase;
-          margin-top: 8px;
-        }
-
-        .body-content .subject-line {
-          font-weight: bold;
-          text-decoration: underline;
-          text-transform: uppercase;
-          margin: 12px 0;
-          line-height: 1.3;
-          page-break-inside: avoid;
-          break-inside: avoid;
-        }
-
-        .body-content p {
-          margin-bottom: 8px;
-        }
-
-        .body-content ul {
-          margin: 8px 0 12px 20px;
-          list-style-type: none;
-          padding-left: 0;
-        }
-        .body-content ul li {
-          margin-bottom: 4px;
-          padding-left: 16px;
-          text-indent: -16px;
-        }
-        .body-content ul li::before {
-          content: "- ";
-        }
-
-        /* ---------- Table ---------- */
-        .body-content table {
-          width: 100%;
-          border-collapse: collapse;
-          font-size: 10.5pt;
-          border: 1px solid #ccc;
-          page-break-inside: auto;
-          table-layout: fixed;
-          margin: 12px 0 16px 0;
-        }
-
-        .body-content th,
-        .body-content td {
-          border: 1px solid #ccc;
-          padding: 5px 6px;
-          text-align: left;
-          vertical-align: top;
-          word-wrap: break-word;
-          overflow-wrap: break-word;
-          max-width: 180px;
-          page-break-inside: avoid;
-        }
-
-        .body-content th {
-          background-color: #f5f5f5;
-          font-weight: bold;
-        }
-
-        .body-content thead {
-          display: table-header-group;
-        }
-
-        .body-content tbody {
-          page-break-inside: auto;
-        }
-
-        .body-content tr {
-          page-break-inside: avoid;
-          page-break-after: auto;
-        }
-
-        /* ========== Signature ========== */
-        .signature-section {
-          margin-top: 12px;
-          page-break-inside: avoid;
-          break-inside: avoid;
-        }
-
-        .signature-anchor {
-          font-size: 1px;
-          line-height: 1px;
-          height: 1px;
-          color: transparent;
-          overflow: hidden;
-          user-select: none;
-          display: block;
-        }
-
-        /* Preserves signature image overlay area while reducing total block height */
-        .signature {
-          font-size: 11pt;
-          margin-top: 50px;
-        }
-
-        .signature .name {
-          font-weight: bold;
-          text-transform: uppercase;
-          margin-bottom: 2px;
-        }
-
-        .signature .title {
-          font-weight: bold;
-          text-decoration: underline;
-          text-transform: uppercase;
-        }
-
-        /* ========== CC Block ========== */
-        .cc-block {
-          margin-top: 16px;
-          font-size: 11pt;
-          line-height: 1.3;
-          display: flex;
-          page-break-inside: avoid;
-          break-inside: avoid;
-        }
-
-        .cc-block .cc-label {
-          flex: 0 0 90px;
-          font-weight: bold;
+          text-transform: lowercase;
           font-style: italic;
-          text-decoration: underline;
+          margin-top: 2px;
         }
 
-        .cc-block .cc-entries {
-          flex: 1;
-        }
-
-        .cc-entry {
-          display: flex;
-          margin-bottom: 8px;
-          page-break-inside: avoid;
-          break-inside: avoid;
-        }
-
-        .cc-entry:last-child {
-          margin-bottom: 0;
-        }
-
-        .cc-entry .cc-number {
-          flex: 0 0 24px;
-          font-weight: bold;
-        }
-
-        .cc-entry .cc-text p {
-          margin: 0;
-          line-height: 1.3;
-        }
-
-        .cc-entry .cc-text .cc-location {
-          font-weight: bold;
-          text-decoration: underline;
-          text-transform: uppercase;
-        }
-
-        /* ========== Enclosures ========== */
-        .enclosures-block {
-          margin-top: 12px;
-          font-size: 11pt;
-          line-height: 1.3;
-          page-break-inside: avoid;
-          break-inside: avoid;
-        }
-
-        .enclosures-block .label {
-          font-weight: bold;
-        }
-
-        /* ========== Footer ========== */
-        .footer {
+        /* Fixed Footer - Snagged to bottom edge */
+        .footer-wrapper {
           position: fixed;
-          bottom: 10px;
-          left: 60px;
-          right: 60px;
-          border-top: 1px solid #999;
-          padding-top: 6px;
+          bottom: 0;
+          left: 0;
+          right: 0;
           background: white;
-          page-break-inside: avoid;
+          z-index: 1000;
+        }
+
+        .footer {
+          border-top: 1px solid #C29B38;
+          padding-top: 4px;
+          padding-bottom: 2px;
+          background: white;
         }
 
         .footer-table {
@@ -451,36 +245,36 @@ export function getLetterHTML(data: LetterData): string {
           border-collapse: collapse;
         }
 
+        /* Enlarged Emblem Cell & Image Width */
         .footer-emblem-cell {
-          width: 50px;
+          width: 175px;
           vertical-align: middle;
           padding-right: 10px;
         }
 
         .footer-emblem-cell img {
-          width: 50px;
+          width: 165px;
           height: auto;
-          max-height: 35px;
-          object-fit: contain;
+          display: block;
         }
 
         .footer-text-cell {
           text-align: right;
           vertical-align: middle;
           font-size: 8pt;
-          color: #1a1a1a;
-          line-height: 1.2;
-        }
-
-        .footer-tagline-top {
-          font-weight: bold;
-          font-size: 9pt;
-          color: #1E4620;
-          margin-bottom: 2px;
+          color: #333333;
+          line-height: 1.3;
         }
 
         .footer-text-cell p {
           margin: 1px 0;
+        }
+
+        .footer-tagline-top {
+          font-weight: bold;
+          font-size: 8.5pt;
+          color: #1E4620;
+          margin-bottom: 2px;
         }
 
         .footer-tagline-bottom {
@@ -488,91 +282,227 @@ export function getLetterHTML(data: LetterData): string {
           font-weight: bold;
           font-size: 9.5pt;
           color: #1E4620;
-          margin-top: 3px;
+          margin-top: 4px;
         }
 
-        /* ========== Responsive ========== */
-        @media (max-width: 600px) {
-          .page { padding: 20px 15px 120px 15px; }
-          .header { flex-direction: column; text-align: center; }
-          .logo-container { margin-right: 0; margin-bottom: 8px; }
-          .ref-date { flex-direction: column; align-items: flex-start; gap: 4px; }
-          .footer { left: 15px; right: 15px; }
-          .cc-block { flex-direction: column; }
-          .cc-block .cc-label { margin-bottom: 6px; }
+        /* Ref & Date Layout */
+        .ref-date-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          margin-bottom: 16px;
+          font-size: 11pt;
+        }
+
+        .ref-date-row .ref {
+          font-weight: bold;
+        }
+
+        .ref-date-row .date {
+          font-weight: normal;
+        }
+
+        /* Body Content Styles */
+        .body-content {
+          line-height: 1.4;
+        }
+
+        .to-block {
+          margin-bottom: 12px;
+        }
+
+        .to-block p {
+          margin: 0;
+          line-height: 1.3;
+        }
+
+        .to-salutation {
+          margin-bottom: 16px;
+          font-weight: normal;
+        }
+
+        .subject-line {
+          font-weight: bold;
+          text-decoration: underline;
+          text-transform: uppercase;
+          margin: 16px 0;
+          line-height: 1.35;
+        }
+
+        .body-content p {
+          margin-bottom: 10px;
+          text-align: justify;
+          orphans: 3;
+          widows: 3;
+        }
+
+        /* Tables inside body */
+        .body-content table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 10pt;
+          margin: 14px 0;
+        }
+
+        .body-content th,
+        .body-content td {
+          border: 1px solid #000;
+          padding: 6px 8px;
+          text-align: left;
+          vertical-align: top;
+        }
+
+        .body-content th {
+          background-color: #f2f2f2;
+          font-weight: bold;
+        }
+
+        /* Signature Section */
+        .signature-section {
+          margin-top: 28px;
+          page-break-inside: avoid;
+        }
+
+        .signature-anchor {
+          height: 1px;
+          color: transparent;
+        }
+
+        /* Signature image enlarged */
+        .signature-section img,
+        .signature img {
+          max-height: 115px !important;
+          width: auto;
+          display: block;
+          margin-bottom: 6px;
+        }
+
+        .signature {
+          margin-top: 14px;
+        }
+
+        .signature .name {
+          font-weight: bold;
+          font-size: 11.5pt;
+          text-transform: uppercase;
+          letter-spacing: 0.3px;
+        }
+
+        .signature .title {
+          font-weight: bold;
+          font-size: 11.5pt;
+          text-transform: uppercase;
+          letter-spacing: 0.3px;
+          margin-top: 2px;
+        }
+
+        /* CC & Enclosure Blocks */
+        .cc-block {
+          margin-top: 16px;
+          font-size: 10.5pt;
+          page-break-inside: avoid;
+        }
+
+        .cc-label {
+          font-weight: normal;
+          margin-bottom: 4px;
+          display: block;
+        }
+
+        .cc-entry {
+          display: flex;
+          margin-bottom: 4px;
+        }
+
+        .cc-entry .cc-number {
+          width: 20px;
+        }
+
+        .cc-entry .cc-text p {
+          margin: 0;
+        }
+
+        .enclosures-block {
+          margin-top: 12px;
+          font-size: 10.5pt;
+          font-weight: bold;
         }
       </style>
     </head>
     <body>
-      <!-- ===== PAGE CONTENT ===== -->
-      <div class="page">
 
-        <!-- Header -->
-        <div class="header">
-          <div class="logo-container">
-            <img src="${escapeHtml(logoUrl)}" alt="Republic of Kenya / Judiciary Crest" />
-          </div>
-          <div class="header-text">
-            <div class="judiciary">THE JUDICIARY</div>
-            <div class="office-name">OFFICE OF THE REGISTRAR HIGH COURT</div>
-          </div>
+      <!-- Fixed Printable Header -->
+      <div class="header-wrapper">
+        <div class="header-banner">
+          <img src="${escapeHtml(logoUrl)}" alt="Republic of Kenya & Judiciary Logos" />
         </div>
-
-        <div class="header-rule"></div>
-
-        <!-- Ref / Date -->
-        <div class="ref-date">
-          <span class="ref">Ref: ${escapeHtml(ref)}</span>
-          <span class="date">${escapeHtml(date)}</span>
+        <div class="header-text">
+          <div class="judiciary">THE JUDICIARY</div>
+          <div class="office-name">office of the registrar high court</div>
         </div>
+      </div>
 
-        <!-- Body -->
-        <div class="body-content">
-          ${to ? formatToBlock(to) : ""}
-          ${subject ? `<div class="subject-line">RE: ${escapeHtml(subject)}</div>` : ""}
-          ${formatBody(body)}
-        </div>
-
-        <!-- Signature -->
-        <div class="signature-section">
-          <div class="signature-anchor" aria-hidden="true">${SIGNATURE_ANCHOR_TEXT}</div>
-          <div class="signature">
-            <div class="name">${escapeHtml(sender)}</div>
-            <div class="title">${escapeHtml(senderTitle || "Registrar, High Court")}</div>
-          </div>
-        </div>
-
-        <!-- CC -->
-        ${cc ? formatCC(cc) : ""}
-
-        <!-- Enclosures -->
-        ${
-          enclosures
-            ? `
-          <div class="enclosures-block">
-            <span class="label">Enclosures:</span> ${escapeHtml(enclosures)}
-          </div>
-        `
-            : ""
-        }
-
-      </div><!-- end .page -->
-
-      <!-- ===== FOOTER (fixed on every page, with emblem) ===== -->
-      <div class="footer">
-        <table class="footer-table" cellpadding="0" cellspacing="0">
+      <!-- Main Page Flow with Head/Foot Spacers -->
+      <table class="page-table">
+        <thead>
           <tr>
-            <td class="footer-emblem-cell">
-              <img src="${escapeHtml(footerEmblemUrl)}" alt="Social Transformation Emblem" width="90" height="90" />
-            </td>
-            <td class="footer-text-cell">
-              <div class="footer-tagline-top">Social Transformation through Access to Justice</div>
-              <p>Milimani Law Courts | 3rd Floor, Chamber 337 | P.O. Box 30041-00100 | Nairobi</p>
-              <p>Tel. +254 0730 181478 | registrarhighcourt@court.go.ke | www.judiciary.go.ke</p>
-              <div class="footer-tagline-bottom">Justice Be Our Shield and Defender</div>
+            <td><div class="page-header-space"></div></td>
+          </tr>
+        </thead>
+
+        <tbody>
+          <tr>
+            <td>
+              <div class="ref-date-row">
+                <span class="ref">${escapeHtml(ref)}</span>
+                <span class="date">${escapeHtml(date)}</span>
+              </div>
+
+              <div class="body-content">
+                ${to ? formatToBlock(to) : ""}
+                ${subject ? `<div class="subject-line">RE: ${escapeHtml(subject)}</div>` : ""}
+                ${formatBody(body)}
+              </div>
+
+              <div class="signature-section">
+                <div class="signature-anchor" aria-hidden="true">${SIGNATURE_ANCHOR_TEXT}</div>
+                <p>Yours sincerely,</p>
+                <div class="signature">
+                  <div class="name">${escapeHtml(sender)}</div>
+                  <div class="title">${escapeHtml(senderTitle || "REGISTRAR HIGH COURT")}</div>
+                </div>
+              </div>
+
+              ${enclosures ? `<div class="enclosures-block">Encl</div>` : ""}
+              ${cc ? formatCC(cc) : ""}
             </td>
           </tr>
-        </table>
+        </tbody>
+
+        <tfoot>
+          <tr>
+            <td><div class="page-footer-space"></div></td>
+          </tr>
+        </tfoot>
+      </table>
+
+      <!-- Fixed Printable Footer -->
+      <div class="footer-wrapper">
+        <div class="footer">
+          <table class="footer-table" cellpadding="0" cellspacing="0">
+            <tr>
+              <td class="footer-emblem-cell">
+                <img src="${escapeHtml(footerEmblemUrl)}" alt="STAJ Emblem" />
+              </td>
+              <td class="footer-text-cell">
+                <div class="footer-tagline-top">Social Transformation through Access to Justice</div>
+                <p>Milimani Law Courts | 3<sup>rd</sup> Floor, Chamber 337 | P.O. Box 30041-00100 | Nairobi</p>
+                <p>Tel. +254 0730 181478 | registrarhighcourt@court.go.ke | www.judiciary.go.ke</p>
+                <div class="footer-tagline-bottom">Justice Be Our Shield and Defender</div>
+              </td>
+            </tr>
+          </table>
+        </div>
       </div>
 
     </body>

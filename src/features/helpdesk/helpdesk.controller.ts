@@ -18,6 +18,7 @@ import {
     utilityItemIdSchema,
     createClubMembershipSchema,
     createCircuitSchema,
+    updateCircuitSchema,
     createSpecialBenchSchema,
     updateBenchSchema,
     createPartHeardSchema,
@@ -33,7 +34,9 @@ import {
     idSchema,
     updateCircuitDSASchema,
     createServiceWeekSchema,
+    updateServiceWeekSchema,
     createOtherPaymentSchema,
+    updateOtherPaymentSchema,
     updateOtherPaymentDSASchema,
     dsaReportFiltersSchema,
     markDocumentViewedSchema,
@@ -699,6 +702,27 @@ export const helpDeskController = {
         return sendSuccess(res, circuit, 'Circuit DSA details updated');
     }),
 
+    // ─── NEW: Full update for circuits ──────────────────────────────────────
+    updateCircuit: asyncHandler(async (req: Request, res: Response) => {
+        const paramsResult = idSchema.safeParse({ params: req.params });
+        if (!paramsResult.success) {
+            throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        const bodyResult = updateCircuitSchema.safeParse({ body: req.body });
+        if (!bodyResult.success) {
+            throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+        }
+        const circuit = await HelpDeskService.updateCircuit(
+            paramsResult.data.params.id,
+            bodyResult.data.body
+        );
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'circuit_updated', circuit);
+        
+        return sendSuccess(res, circuit, 'Circuit updated');
+    }),
+
     deleteCircuit: asyncHandler(async (req: Request, res: Response) => {
         const result = idSchema.safeParse({ params: req.params });
         if (!result.success) {
@@ -944,6 +968,27 @@ export const helpDeskController = {
         safeRealtimeBroadcast(req, 'service_week_updated', week);
         
         return sendSuccess(res, week, 'Service week status updated');
+    }),
+
+    // ─── NEW: Full update for service weeks ──────────────────────────────────
+    updateServiceWeek: asyncHandler(async (req: Request, res: Response) => {
+        const paramsResult = idSchema.safeParse({ params: req.params });
+        if (!paramsResult.success) {
+            throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        const bodyResult = updateServiceWeekSchema.safeParse({ body: req.body });
+        if (!bodyResult.success) {
+            throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+        }
+        const week = await HelpDeskService.updateServiceWeek(
+            paramsResult.data.params.id,
+            bodyResult.data.body
+        );
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'service_week_updated', week);
+        
+        return sendSuccess(res, week, 'Service week updated');
     }),
 
     deleteServiceWeek: asyncHandler(async (req: Request, res: Response) => {
@@ -1292,6 +1337,27 @@ export const helpDeskController = {
         safeRealtimeBroadcast(req, 'other_payment_dsa_updated', payment);
         
         return sendSuccess(res, payment, 'Other payment DSA details updated');
+    }),
+
+    // ─── NEW: Full update for other payments ──────────────────────────────────
+    updateOtherPayment: asyncHandler(async (req: Request, res: Response) => {
+        const paramsResult = idSchema.safeParse({ params: req.params });
+        if (!paramsResult.success) {
+            throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        const bodyResult = updateOtherPaymentSchema.safeParse({ body: req.body });
+        if (!bodyResult.success) {
+            throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+        }
+        const payment = await HelpDeskService.updateOtherPayment(
+            paramsResult.data.params.id,
+            bodyResult.data.body
+        );
+        
+        // ── Emit real-time event ──────────────────────────────────────────────────
+        safeRealtimeBroadcast(req, 'other_payment_updated', payment);
+        
+        return sendSuccess(res, payment, 'Other payment updated');
     }),
 
     deleteOtherPayment: asyncHandler(async (req: Request, res: Response) => {

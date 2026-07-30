@@ -53,6 +53,7 @@ import type {
     GeneralRequestCategory,
     UpdateGeneralRequestInput,
 } from './helpdesk.types';
+import { UpdateCircuitInput, UpdateOtherPaymentInput, UpdateServiceWeekInput } from './helpdesk.validator';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -3157,5 +3158,202 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
         }
         return allRows;
     }
+
+    // ─── Circuits – Full Update ──────────────────────────────────────────────
+static async updateCircuit(
+    id: string,
+    input: UpdateCircuitInput
+): Promise<Circuit> {
+    const existing = await this.findCircuitById(id);
+    if (!existing) {
+        throw new AppError(404, 'Circuit not found');
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        let paramCount = 1;
+
+        const setField = (column: string, value: unknown) => {
+            if (value !== undefined) {
+                fields.push(`${column} = $${paramCount}`);
+                values.push(value);
+                paramCount++;
+            }
+        };
+
+        setField('name', input.name?.trim());
+        setField('location', input.location?.trim());
+        setField('start_date', input.start_date);
+        setField('end_date', input.end_date);
+        setField('status', input.status);
+
+        if (fields.length > 0) {
+            fields.push('updated_at = now()');
+            values.push(id);
+            await client.query(
+                `UPDATE circuits SET ${fields.join(', ')} WHERE id = $${paramCount}`,
+                values
+            );
+        }
+
+        // Update DSA details if provided
+        if (input.dsa_details !== undefined) {
+            await this.upsertDSADetails(
+                client,
+                'circuit_dsa_details',
+                'circuit_id',
+                id,
+                input.dsa_details,
+                'circuit'
+            );
+        }
+
+        await client.query('COMMIT');
+
+        const updated = await this.findCircuitById(id);
+        if (!updated) throw new AppError(500, 'Failed to update circuit');
+        return updated;
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
+// ─── Other Payments – Full Update ──────────────────────────────────────────
+static async updateOtherPayment(
+    id: string,
+    input: UpdateOtherPaymentInput
+): Promise<OtherPayment> {
+    const existing = await this.findOtherPaymentById(id);
+    if (!existing) {
+        throw new AppError(404, 'Other payment not found');
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        let paramCount = 1;
+
+        const setField = (column: string, value: unknown) => {
+            if (value !== undefined) {
+                fields.push(`${column} = $${paramCount}`);
+                values.push(value);
+                paramCount++;
+            }
+        };
+
+        setField('name', input.name?.trim());
+        setField('description', input.description?.trim());
+        setField('start_date', input.start_date);
+        setField('end_date', input.end_date);
+        setField('status', input.status);
+
+        if (fields.length > 0) {
+            fields.push('updated_at = now()');
+            values.push(id);
+            await client.query(
+                `UPDATE other_payments SET ${fields.join(', ')} WHERE id = $${paramCount}`,
+                values
+            );
+        }
+
+        if (input.dsa_details !== undefined) {
+            await this.upsertDSADetails(
+                client,
+                'other_payment_dsa_details',
+                'other_payment_id',
+                id,
+                input.dsa_details,
+                'other_payment'
+            );
+        }
+
+        await client.query('COMMIT');
+
+        const updated = await this.findOtherPaymentById(id);
+        if (!updated) throw new AppError(500, 'Failed to update other payment');
+        return updated;
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
+// ─── Service Weeks – Full Update ──────────────────────────────────────────
+static async updateServiceWeek(
+    id: string,
+    input: UpdateServiceWeekInput
+): Promise<ServiceWeek> {
+    const existing = await this.findServiceWeekById(id);
+    if (!existing) {
+        throw new AppError(404, 'Service week not found');
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        let paramCount = 1;
+
+        const setField = (column: string, value: unknown) => {
+            if (value !== undefined) {
+                fields.push(`${column} = $${paramCount}`);
+                values.push(value);
+                paramCount++;
+            }
+        };
+
+        setField('name', input.name?.trim());
+        setField('week_number', input.week_number?.trim());
+        setField('year', input.year);
+        setField('start_date', input.start_date);
+        setField('end_date', input.end_date);
+        setField('status', input.status);
+
+        if (fields.length > 0) {
+            fields.push('updated_at = now()');
+            values.push(id);
+            await client.query(
+                `UPDATE service_weeks SET ${fields.join(', ')} WHERE id = $${paramCount}`,
+                values
+            );
+        }
+
+        if (input.dsa_details !== undefined) {
+            await this.upsertDSADetails(
+                client,
+                'service_week_dsa_details',
+                'service_week_id',
+                id,
+                input.dsa_details,
+                'service_week'
+            );
+        }
+
+        await client.query('COMMIT');
+
+        const updated = await this.findServiceWeekById(id);
+        if (!updated) throw new AppError(500, 'Failed to update service week');
+        return updated;
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    } finally {
+        client.release();
+    }
+}
 
 } // end HelpDeskService

@@ -44,6 +44,9 @@ const DOC_SELECT = `
 /**
  * Cleans the input by converting null/undefined/empty strings to appropriate values
  * for database insertion.
+ * 
+ * entity_id is treated as a free‑text string – it can be a UUID or a custom ID
+ * (e.g., "cons-all-2026-07" for consolidated memos).
  */
 function cleanInput(input: CreateHelpdeskDocumentInput): CreateHelpdeskDocumentInput {
     return {
@@ -548,6 +551,75 @@ export class HelpdeskDocumentsService {
         );
 
         return docs;
+    }
+
+    // ─── Consolidated Memo Helpers (NEW) ─────────────────────────────────────
+
+    /**
+     * Find a consolidated memo for a given type and month.
+     * @param type - 'all' or 'fuel'
+     * @param date - optional Date (defaults to now). The entity ID will be "cons-{type}-{YYYY-MM}".
+     * @returns the memo document if found, else null
+     */
+    static async findConsolidatedMemo(
+        type: 'all' | 'fuel',
+        date: Date = new Date()
+    ): Promise<HelpdeskDocument | null> {
+        const entityType = type === 'fuel' ? 'consolidated_fuel_memo' : 'consolidated_utility_memo';
+        const entityId = `cons-${type}-${date.toISOString().slice(0, 7)}`;
+
+        const { rows } = await pool.query(
+            `SELECT ${DOC_SELECT}
+             FROM helpdesk_documents d
+             LEFT JOIN users u ON d.uploaded_by = u.id
+             LEFT JOIN users au ON d.approved_by = au.id
+             LEFT JOIN users ru ON d.returned_by = ru.id
+             WHERE d.is_active = true
+               AND d.entity_type = $1
+               AND d.entity_id = $2
+             ORDER BY d.created_at DESC
+             LIMIT 1`,
+            [entityType, entityId]
+        );
+
+        if (rows.length === 0) return null;
+
+        const history = await this.getApprovalHistory(rows[0].id);
+        const comments = await this.getComments(rows[0].id);
+
+        return {
+            ...rows[0],
+            approval_history: history,
+            comments: comments,
+        };
+    }
+
+    /**
+     * List all consolidated memos, optionally filtered by type.
+     * @param type - optional 'all' or 'fuel'
+     * @returns array of memo documents
+     */
+    static async getConsolidatedMemos(
+        type?: 'all' | 'fuel'
+    ): Promise<HelpdeskDocument[]> {
+        let entityTypes: DocumentEntityType[];
+        if (type === 'fuel') {
+            entityTypes = ['consolidated_fuel_memo'];
+        } else if (type === 'all') {
+            entityTypes = ['consolidated_utility_memo'];
+        } else {
+            entityTypes = ['consolidated_utility_memo', 'consolidated_fuel_memo'];
+        }
+
+        const result: HelpdeskDocument[] = [];
+        for (const et of entityTypes) {
+            const docs = await this.findAll({ entity_type: et });
+            result.push(...docs);
+        }
+
+        // Sort by created_at descending
+        result.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        return result;
     }
 
     // ─── Get Statistics ──────────────────────────────────────────────────────

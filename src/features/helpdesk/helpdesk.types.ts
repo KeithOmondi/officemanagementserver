@@ -19,6 +19,63 @@ export type ReportModule = 'circuit' | 'special_bench' | 'part_heard' | 'service
 export type RemarkType = 'Onboarding' | 'Release';
 export type GeneralRequestCategory = 'Security' | 'Personnel' | 'Administrative';
 
+// ─── NEW: Consolidated Memo Types ─────────────────────────────────────────────
+export type ConsolidatedMemoType = 'all' | 'fuel';
+
+// ─── NEW: Document Entity Types (for helpdesk documents) ────────────────────
+/**
+ * All possible entity types that can have documents attached.
+ * This is used in the helpdeskDocumentsSlice and the backend.
+ */
+export type DocumentEntityType =
+  | 'circuit'
+  | 'bench'
+  | 'partHeard'
+  | 'serviceWeek'
+  | 'otherPayment'
+  | 'ticket'
+  | 'medicalClaim'
+  | 'generalRequest'
+  | 'securityRequest'      // Deprecated, kept for backward compatibility
+  | 'visa'
+  | 'protocol'
+  | 'club'
+  | 'utility_memo'         // Single judge utility memo
+  | 'consolidated_utility_memo'   // Consolidated memo covering all utilities
+  | 'consolidated_fuel_memo'      // Consolidated memo covering fuel only
+  | 'aide'
+  | 'sentry';
+
+// ─── NEW: Consolidated Memo Helpers ──────────────────────────────────────────
+
+/**
+ * Generates a stable, human-readable entity ID for a consolidated memo.
+ * Format: "cons-{type}-{YYYY-MM}" e.g., "cons-all-2026-07"
+ *
+ * @param type - 'all' for all utilities, 'fuel' for fuel-only
+ * @param date - optional Date object (defaults to now)
+ * @returns entity ID string
+ */
+export function getConsolidatedMemoEntityId(
+  type: ConsolidatedMemoType,
+  date: Date = new Date()
+): string {
+  const month = date.toISOString().slice(0, 7); // YYYY-MM
+  return `cons-${type}-${month}`;
+}
+
+/**
+ * Returns the appropriate DocumentEntityType for a consolidated memo.
+ *
+ * @param type - 'all' or 'fuel'
+ * @returns DocumentEntityType
+ */
+export function getConsolidatedMemoEntityType(
+  type: ConsolidatedMemoType
+): DocumentEntityType {
+  return type === 'fuel' ? 'consolidated_fuel_memo' : 'consolidated_utility_memo';
+}
+
 // ============================================================
 // Base Types
 // ============================================================

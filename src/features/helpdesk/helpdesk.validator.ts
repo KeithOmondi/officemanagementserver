@@ -1,3 +1,5 @@
+// src/features/helpdesk/helpdesk.schema.ts
+
 import { z } from 'zod';
 
 // ============================================================
@@ -25,6 +27,69 @@ const remarkTypeEnum = z.enum(['Onboarding', 'Release']);
 const generalRequestCategoryEnum = z.enum(['Security', 'Personnel', 'Administrative']);
 
 const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format');
+
+// ============================================================
+// Document Entity Types (for helpdesk documents)
+// ============================================================
+
+/**
+ * Zod enum for all possible document entity types.
+ * Used for validating entity_type in document uploads, linking, etc.
+ */
+export const documentEntityEnum = z.enum([
+  'circuit',
+  'bench',
+  'partHeard',
+  'serviceWeek',
+  'otherPayment',
+  'ticket',
+  'medicalClaim',
+  'generalRequest',
+  'securityRequest',      // Deprecated, kept for backward compatibility
+  'visa',
+  'protocol',
+  'club',
+  'utility_memo',         // Single judge utility memo
+  'consolidated_utility_memo',   // Consolidated memo covering all utilities
+  'consolidated_fuel_memo',      // Consolidated memo covering fuel only
+  'aide',
+  'sentry',
+]);
+
+/**
+ * Consolidated memo type enum
+ */
+export const consolidatedMemoTypeEnum = z.enum(['all', 'fuel']);
+
+// ─── Helper Functions for Consolidated Memos ──────────────────────────────
+
+/**
+ * Generates a stable, human-readable entity ID for a consolidated memo.
+ * Format: "cons-{type}-{YYYY-MM}" e.g., "cons-all-2026-07"
+ *
+ * @param type - 'all' for all utilities, 'fuel' for fuel-only
+ * @param date - optional Date object (defaults to now)
+ * @returns entity ID string
+ */
+export function getConsolidatedMemoEntityId(
+  type: 'all' | 'fuel',
+  date: Date = new Date()
+): string {
+  const month = date.toISOString().slice(0, 7); // YYYY-MM
+  return `cons-${type}-${month}`;
+}
+
+/**
+ * Returns the appropriate DocumentEntityType for a consolidated memo.
+ *
+ * @param type - 'all' or 'fuel'
+ * @returns the entity type string
+ */
+export function getConsolidatedMemoEntityType(
+  type: 'all' | 'fuel'
+): z.infer<typeof documentEntityEnum> {
+  return type === 'fuel' ? 'consolidated_fuel_memo' : 'consolidated_utility_memo';
+}
 
 // ============================================================
 // DSA Detail Schema
@@ -61,6 +126,9 @@ const dsaDetailSchema = z.object({
  * - Force Number: force_number
  * - Current Station / Residence Security / Sentry: location
  * - Firearm: firearm_type is **optional** initially, but required when `officer_assigned` is provided.
+ *
+ * Additionally, `email` is required whenever `send_email` is true — otherwise
+ * a caller could request a notification with nowhere to send it.
  */
 export const createGeneralRequestSchema = z.object({
     body: z.object({
@@ -131,6 +199,16 @@ export const createGeneralRequestSchema = z.object({
                 requireField('location', 'location is required for this request type');
                 break;
         }
+
+        // send_email implies email must be present — otherwise there's nothing
+        // for the notification step to send to.
+        if (data.send_email && (!data.email || data.email.trim() === '')) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['email'],
+                message: 'email is required when send_email is true',
+            });
+        }
     }),
 });
 
@@ -172,6 +250,15 @@ export const updateGeneralRequestSchema = z.object({
                     message: 'firearm_type is required when updating a Firearm request with an assigned officer',
                 });
             }
+        }
+
+        // send_email implies email must be present, same rule as create.
+        if (data.send_email && (!data.email || data.email.trim() === '')) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['email'],
+                message: 'email is required when send_email is true',
+            });
         }
     }),
 });
@@ -345,6 +432,18 @@ export const updateCircuitDSASchema = z.object({
     }).strict(),
 });
 
+// ─── Full update for circuits ──────────────────────────────────────────────
+export const updateCircuitSchema = z.object({
+    body: z.object({
+        name: z.string().min(1).max(100).optional(),
+        location: z.string().optional(),
+        start_date: dateStringSchema.optional(),
+        end_date: dateStringSchema.optional(),
+        status: statusEnum.optional(),
+        dsa_details: z.array(dsaDetailSchema).optional(),
+    }).strict(),
+});
+
 // ============================================================
 // Other Payments
 // ============================================================
@@ -362,6 +461,18 @@ export const createOtherPaymentSchema = z.object({
 export const updateOtherPaymentDSASchema = z.object({
     body: z.object({
         dsa_details: z.array(dsaDetailSchema).min(1, 'At least one DSA detail is required'),
+    }).strict(),
+});
+
+// ─── Full update for other payments ────────────────────────────────────────
+export const updateOtherPaymentSchema = z.object({
+    body: z.object({
+        name: z.string().min(1).max(100).optional(),
+        description: z.string().optional(),
+        start_date: dateStringSchema.optional(),
+        end_date: dateStringSchema.optional(),
+        status: statusEnum.optional(),
+        dsa_details: z.array(dsaDetailSchema).optional(),
     }).strict(),
 });
 
@@ -426,6 +537,19 @@ export const createServiceWeekSchema = z.object({
         year: z.string().min(4).max(4),
         start_date: dateStringSchema,
         end_date: dateStringSchema,
+        dsa_details: z.array(dsaDetailSchema).optional(),
+    }).strict(),
+});
+
+// ─── Full update for service weeks ─────────────────────────────────────────
+export const updateServiceWeekSchema = z.object({
+    body: z.object({
+        name: z.string().min(1).max(200).optional(),
+        week_number: z.string().min(1).max(20).optional(),
+        year: z.string().min(4).max(4).optional(),
+        start_date: dateStringSchema.optional(),
+        end_date: dateStringSchema.optional(),
+        status: statusEnum.optional(),
         dsa_details: z.array(dsaDetailSchema).optional(),
     }).strict(),
 });
@@ -573,10 +697,12 @@ export type CreateClubMembershipInput = z.infer<typeof createClubMembershipSchem
 // Circuit Types
 export type CreateCircuitInput = z.infer<typeof createCircuitSchema>['body'];
 export type UpdateCircuitDSADetailsInput = z.infer<typeof updateCircuitDSASchema>['body'];
+export type UpdateCircuitInput = z.infer<typeof updateCircuitSchema>['body'];
 
 // Other Payment Types
 export type CreateOtherPaymentInput = z.infer<typeof createOtherPaymentSchema>['body'];
 export type UpdateOtherPaymentDSADetailsInput = z.infer<typeof updateOtherPaymentDSASchema>['body'];
+export type UpdateOtherPaymentInput = z.infer<typeof updateOtherPaymentSchema>['body'];
 
 // Special Bench Types
 export type CreateSpecialBenchInput = z.infer<typeof createSpecialBenchSchema>['body'];
@@ -588,6 +714,7 @@ export type UpdatePartHeardInput = z.infer<typeof updatePartHeardSchema>['body']
 
 // Service Week Types
 export type CreateServiceWeekInput = z.infer<typeof createServiceWeekSchema>['body'];
+export type UpdateServiceWeekInput = z.infer<typeof updateServiceWeekSchema>['body'];
 
 // Medical Claim Types
 export type CreateMedicalClaimInput = z.infer<typeof createMedicalClaimSchema>['body'];
@@ -604,7 +731,14 @@ export type CreateProtocolEventInput = z.infer<typeof createProtocolEventSchema>
 export type HelpDeskFilters = z.infer<typeof helpDeskFiltersSchema>['query'];
 export type DSAReportFilters = z.infer<typeof dsaReportFiltersSchema>['query'];
 
+// Document Entity Types
+export type DocumentEntityType = z.infer<typeof documentEntityEnum>;
+export type ConsolidatedMemoType = z.infer<typeof consolidatedMemoTypeEnum>;
+
 // Export enums for use in routes
+// Note: documentEntityEnum and consolidatedMemoTypeEnum are NOT re-listed here —
+// they're already `export const` at their declaration site above, and naming
+// them again here is a duplicate export ("Cannot redeclare exported variable").
 export { 
   requestTypeEnum,
   remarkTypeEnum,

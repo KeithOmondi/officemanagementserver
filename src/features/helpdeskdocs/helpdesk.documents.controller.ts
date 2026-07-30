@@ -1,5 +1,3 @@
-// src/features/helpdesk/helpdesk.documents.controller.ts
-
 import { Request, Response, NextFunction } from 'express';
 import { HelpdeskDocumentsService } from './helpdesk.documents.service';
 import type {
@@ -79,8 +77,16 @@ function getQueryEnum<T extends string>(
 /**
  * Cleans form-data body by converting null/undefined/empty strings to undefined
  * and handling the entity_id field properly.
+ *
+ * IMPORTANT: this must run BEFORE Zod validation, not after. Multer parses every
+ * multipart field as a string, so a form field the caller didn't fill in arrives
+ * as '' rather than being absent from the body. Several optional schema fields
+ * are `z.string().pipe(someEnum).optional()` — `.optional()` only bypasses
+ * validation for `undefined`, not `''`, so an empty string still gets forced
+ * through the enum and fails validation. Exported here so it can be used as
+ * route middleware ahead of `validate(...)`, not just inside this controller.
  */
-function cleanFormDataBody<T extends Record<string, unknown>>(body: T): T {
+export function cleanFormDataBody<T extends Record<string, unknown>>(body: T): T {
     const cleaned: Record<string, unknown> = {};
     
     for (const [key, value] of Object.entries(body)) {
@@ -122,6 +128,31 @@ function cleanFormDataBody<T extends Record<string, unknown>>(body: T): T {
     return cleaned as T;
 }
 
+/**
+ * Express middleware wrapper around cleanFormDataBody, for use in route chains
+ * BEFORE validate(...) on multipart/form-data endpoints (upload, updateDocumentFile).
+ * Not needed on JSON endpoints — undefined/absent fields there are already
+ * genuinely absent, not empty strings.
+ */
+export function sanitizeFormDataBody(req: Request, _res: Response, next: NextFunction) {
+    req.body = cleanFormDataBody(req.body ?? {});
+    next();
+}
+
+/**
+ * Same idea, but for the batch-upload endpoint where req.body.documents is an
+ * array of per-file metadata objects rather than a single flat body.
+ */
+export function sanitizeBatchFormDataBody(req: Request, _res: Response, next: NextFunction) {
+    const raw = req.body as BatchUploadBody | undefined;
+    if (raw && Array.isArray(raw.documents)) {
+        req.body = {
+            documents: raw.documents.map((doc) => cleanFormDataBody(doc)),
+        };
+    }
+    next();
+}
+
 // ─── Controller ──────────────────────────────────────────────────────────────
 
 export class HelpdeskDocumentsController {
@@ -138,9 +169,9 @@ export class HelpdeskDocumentsController {
                 });
             }
 
-            const rawBody = req.body as UploadHelpdeskDocumentBody;
-            const cleanedBody = cleanFormDataBody(rawBody);
-            const body = cleanedBody as UploadHelpdeskDocumentBody;
+            // req.body has already been sanitized by sanitizeFormDataBody
+            // middleware (before validate() ran), so no cleaning needed here.
+            const body = req.body as UploadHelpdeskDocumentBody;
             
             const userId = (req as any).user?.id as string;
 
@@ -173,8 +204,9 @@ export class HelpdeskDocumentsController {
                 });
             }
 
-            const rawBody = req.body as UpdateDocumentFileBody;
-            const body = cleanFormDataBody(rawBody) as UpdateDocumentFileBody;
+            // req.body has already been sanitized by sanitizeFormDataBody
+            // middleware (before validate() ran), so no cleaning needed here.
+            const body = req.body as UpdateDocumentFileBody;
             
             const userId = (req as any).user?.id as string;
 
@@ -210,7 +242,9 @@ export class HelpdeskDocumentsController {
                 });
             }
 
-            const rawBody = req.body as BatchUploadBody;
+            // req.body.documents has already been sanitized by
+            // sanitizeBatchFormDataBody middleware (before validate() ran).
+            const body = req.body as BatchUploadBody;
             const userId = (req as any).user?.id as string;
 
             if (!userId) {
@@ -219,9 +253,6 @@ export class HelpdeskDocumentsController {
                     message: 'User not authenticated'
                 });
             }
-
-            const cleanedDocuments = rawBody.documents.map(doc => cleanFormDataBody(doc));
-            const body = { documents: cleanedDocuments } as BatchUploadBody;
 
             if (body.documents.length !== files.length) {
                 return res.status(400).json({
@@ -261,11 +292,15 @@ export class HelpdeskDocumentsController {
 
     static async list(req: Request, res: Response, next: NextFunction) {
         try {
+            // ✅ Updated entity_type list to include consolidated memo types
             const entity_type = getQueryEnum(req, 'entity_type', [
                 'circuit', 'bench', 'partHeard', 'serviceWeek', 
                 'otherPayment', 'ticket', 'medicalClaim', 
                 'generalRequest', 'securityRequest',
-                'visa', 'protocol', 'club', 'utility_memo', 'aide', 'sentry'
+                'visa', 'protocol', 'club', 'utility_memo', 
+                'consolidated_utility_memo',  // NEW
+                'consolidated_fuel_memo',     // NEW
+                'aide', 'sentry'
             ] as const);
             
             const entity_id = getQueryParam(req, 'entity_id');

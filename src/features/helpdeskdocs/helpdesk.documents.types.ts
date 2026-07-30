@@ -15,7 +15,9 @@ export type DocumentEntityType =
     | 'visa'             // Visa support documents
     | 'protocol'         // Protocol event documents
     | 'club'             // Club membership documents
-    | 'utility_memo'     // Utility memo documents
+    | 'utility_memo'     // Single judge utility memo
+    | 'consolidated_utility_memo'  // 🔹 NEW: Consolidated memo covering all utilities
+    | 'consolidated_fuel_memo'     // 🔹 NEW: Consolidated memo covering fuel only
     | 'aide'             // Aide request documents
     | 'sentry';          // Sentry request documents
 
@@ -277,7 +279,9 @@ export const DOCUMENT_ENTITY_LABELS: Record<DocumentEntityType, string> = {
     visa: 'Visa Support',
     protocol: 'Protocol Event',
     club: 'Club Membership',
-    utility_memo: 'Utility Memo',
+    utility_memo: 'Utility Memo (Single Judge)',
+    consolidated_utility_memo: 'Consolidated Utility Memo',      // 🔹 NEW
+    consolidated_fuel_memo: 'Consolidated Fuel Memo',            // 🔹 NEW
     aide: 'Aide Request',
     sentry: 'Sentry Request',
 };
@@ -296,6 +300,8 @@ export const DOCUMENT_ENTITY_ICONS: Record<DocumentEntityType, string> = {
     protocol: 'Calendar',
     club: 'Users',
     utility_memo: 'FileText',
+    consolidated_utility_memo: 'FileSpreadsheet',   // 🔹 NEW - icon for consolidated
+    consolidated_fuel_memo: 'Fuel',                  // 🔹 NEW - could use 'Flame' or similar
     aide: 'Shield',
     sentry: 'Home',
 };
@@ -314,6 +320,8 @@ export const DOCUMENT_ENTITY_COLORS: Record<DocumentEntityType, string> = {
     protocol: 'text-blue-600 bg-blue-50',
     club: 'text-purple-600 bg-purple-50',
     utility_memo: 'text-amber-600 bg-amber-50',
+    consolidated_utility_memo: 'text-indigo-600 bg-indigo-50',    // 🔹 NEW
+    consolidated_fuel_memo: 'text-orange-600 bg-orange-50',       // 🔹 NEW
     aide: 'text-blue-600 bg-blue-50',
     sentry: 'text-emerald-600 bg-emerald-50',
 };
@@ -393,6 +401,8 @@ export function isDocumentEntityType(value: string): value is DocumentEntityType
         'protocol',
         'club',
         'utility_memo',
+        'consolidated_utility_memo',  // 🔹 NEW
+        'consolidated_fuel_memo',     // 🔹 NEW
         'aide',
         'sentry'
     ].includes(value);
@@ -454,6 +464,38 @@ export function getRequestTypeLabel(requestType: string): string {
 
 export function getRequestTypeColor(requestType: string): string {
     return REQUEST_TYPE_COLORS[requestType] || 'text-gray-600 bg-gray-50';
+}
+
+// ─── Consolidated Memo Helpers (NEW) ──────────────────────────────────────
+
+export type ConsolidatedMemoType = 'all' | 'fuel';
+
+/**
+ * Generates a stable, human-readable entity ID for a consolidated memo.
+ * Format: "cons-{type}-{YYYY-MM}" e.g., "cons-all-2026-07"
+ *
+ * @param type - 'all' for all utilities, 'fuel' for fuel-only
+ * @param date - optional Date object (defaults to now)
+ * @returns entity ID string
+ */
+export function getConsolidatedMemoEntityId(
+    type: ConsolidatedMemoType,
+    date: Date = new Date()
+): string {
+    const month = date.toISOString().slice(0, 7); // YYYY-MM
+    return `cons-${type}-${month}`;
+}
+
+/**
+ * Returns the appropriate DocumentEntityType for a consolidated memo.
+ *
+ * @param type - 'all' or 'fuel'
+ * @returns DocumentEntityType
+ */
+export function getConsolidatedMemoEntityType(
+    type: ConsolidatedMemoType
+): DocumentEntityType {
+    return type === 'fuel' ? 'consolidated_fuel_memo' : 'consolidated_utility_memo';
 }
 
 // ─── Document Filter Helpers ────────────────────────────────────────────────

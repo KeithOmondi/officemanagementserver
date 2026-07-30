@@ -1,7 +1,11 @@
 // src/features/helpdesk/helpdesk.documents.routes.ts
 
 import { Router } from 'express';
-import { HelpdeskDocumentsController } from './helpdesk.documents.controller';
+import {
+    HelpdeskDocumentsController,
+    sanitizeFormDataBody,
+    sanitizeBatchFormDataBody,
+} from './helpdesk.documents.controller';
 import { upload } from '../../middleware/upload';
 import {
     uploadHelpdeskDocumentSchema,
@@ -33,10 +37,20 @@ router.use(protect);
 // ── Upload Routes ─────────────────────────────────────────────────────────────
 
 // ⚠️ IMPORTANT: For file uploads, multer must come BEFORE validation
-// because validation needs the parsed body from multer
+// because validation needs the parsed body from multer.
+//
+// ⚠️ ALSO IMPORTANT: sanitizeFormDataBody must run AFTER multer but BEFORE
+// validate(). Multer parses every multipart field as a string, so a form
+// field the caller left blank arrives as '' rather than being absent. Several
+// optional schema fields are `z.string().pipe(someEnum).optional()` —
+// `.optional()` only bypasses validation for `undefined`, not `''` — so an
+// empty string still gets forced through the enum and fails validation.
+// Sanitizing first converts those empty strings to undefined so validate()
+// sees a body that actually reflects what the caller meant to send.
 router.post(
     '/upload',
     upload.single('file'),
+    sanitizeFormDataBody,
     validate(uploadHelpdeskDocumentSchema),
     HelpdeskDocumentsController.upload
 );
@@ -44,6 +58,7 @@ router.post(
 router.post(
     '/upload/batch',
     upload.array('files', 20),
+    sanitizeBatchFormDataBody,
     validate(batchUploadSchema),
     HelpdeskDocumentsController.batchUpload
 );
@@ -63,6 +78,7 @@ router.patch(
     '/:id/file',
     requireRole('super_admin'),  // Only Super Admin can update document files
     upload.single('file'),
+    sanitizeFormDataBody,
     validate(updateDocumentFileSchema),
     HelpdeskDocumentsController.updateDocumentFile
 );

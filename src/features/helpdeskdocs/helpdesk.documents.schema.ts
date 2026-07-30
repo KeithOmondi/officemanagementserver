@@ -1,5 +1,3 @@
-// src/features/helpdesk/helpdesk.documents.schema.ts
-
 import { z } from 'zod';
 
 // ─── Base Enums ──────────────────────────────────────────────────────────────
@@ -19,7 +17,9 @@ const documentEntityEnum = z.enum([
     'visa',             // Visa support documents
     'protocol',         // Protocol event documents
     'club',             // Club membership documents
-    'utility_memo',     // Utility memo documents
+    'utility_memo',     // Single judge utility memo
+    'consolidated_utility_memo',  // 🔹 NEW: Consolidated memo covering all utilities
+    'consolidated_fuel_memo',     // 🔹 NEW: Consolidated memo covering fuel only
     'aide',             // Aide request documents
     'sentry',           // Sentry request documents
 ]);
@@ -69,7 +69,8 @@ export const uploadHelpdeskDocumentSchema = z.object({
         ref: z.string().min(1, 'Reference is required').max(100),
         subject: z.string().min(1, 'Subject is required').max(200),
         entity_type: z.string().pipe(documentEntityEnum),
-        entity_id: z.string().uuid().optional().nullable(),
+        // 🔹 Changed: entity_id is now a plain string (not UUID) to support custom IDs like "cons-all-2026-07"
+        entity_id: z.string().optional().nullable(),
         format: z.string().pipe(documentFormatEnum),
         status: z.string().default('draft').pipe(documentStatusEnum).optional(),
         request_type: z.string().pipe(requestTypeEnum).optional().nullable(),
@@ -98,7 +99,7 @@ export const uploadHelpdeskDocumentSchema = z.object({
 export const listHelpdeskDocumentsSchema = z.object({
     query: z.object({
         entity_type: documentEntityEnum.optional(),
-        entity_id: z.string().uuid().optional(),
+        entity_id: z.string().optional(), // 🔹 Changed: allow custom IDs
         format: documentFormatEnum.optional(),
         status: documentStatusEnum.optional(),
         search: z.string().optional(),
@@ -254,7 +255,8 @@ export const linkDocumentSchema = z.object({
     }),
     body: z.object({
         entity_type: documentEntityEnum,
-        entity_id: z.string().uuid('entity_id must be a valid UUID'),
+        // 🔹 Changed: allow custom IDs for consolidated memos
+        entity_id: z.string().optional(),
         request_type: requestTypeEnum.optional(),
         judge_name: z.string().max(100).optional(),
         
@@ -290,7 +292,8 @@ export const documentStatsSchema = z.object({
 export const getDocumentsByEntitySchema = z.object({
     params: z.object({
         entity_type: documentEntityEnum,
-        entity_id: z.string().uuid('Entity ID must be a valid UUID'),
+        // 🔹 Changed: allow custom IDs for consolidated memos
+        entity_id: z.string().optional(),
     }),
     query: z.object({
         status: documentStatusEnum.optional(),
@@ -330,7 +333,8 @@ export const bulkLinkDocumentsSchema = z.object({
     body: z.object({
         document_ids: z.array(z.string().uuid()).min(1, 'At least one document ID is required'),
         entity_type: documentEntityEnum,
-        entity_id: z.string().uuid('Entity ID must be a valid UUID'),
+        // 🔹 Changed: allow custom IDs for consolidated memos
+        entity_id: z.string().optional(),
         request_type: requestTypeEnum.optional(),
         judge_name: z.string().max(100).optional(),
         
@@ -370,7 +374,7 @@ export const batchUploadSchema = z.object({
                 ref: z.string().min(1).max(100),
                 subject: z.string().min(1).max(200),
                 entity_type: documentEntityEnum,
-                entity_id: z.string().uuid().optional(),
+                entity_id: z.string().optional(), // 🔹 Changed: allow custom IDs
                 format: documentFormatEnum,
                 status: documentStatusEnum.default('draft'),
                 request_type: requestTypeEnum.optional(),

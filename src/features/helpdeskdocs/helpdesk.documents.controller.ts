@@ -1,3 +1,5 @@
+// src/features/helpdesk/helpdesk.documents.controller.ts
+
 import { Request, Response, NextFunction } from 'express';
 import { HelpdeskDocumentsService } from './helpdesk.documents.service';
 import type {
@@ -14,6 +16,7 @@ import type {
     UpdateEStampBody,
     UpdateDocumentFileBody,
 } from './helpdesk.documents.schema';
+import type { CreateHelpdeskDocumentInput } from './helpdesk.documents.types';
 import { sendSuccess } from '../../utils/response';
 import { AppError } from '../../utils/response';
 
@@ -135,8 +138,13 @@ export function cleanFormDataBody<T extends Record<string, unknown>>(body: T): T
  * genuinely absent, not empty strings.
  */
 export function sanitizeFormDataBody(req: Request, _res: Response, next: NextFunction) {
-    req.body = cleanFormDataBody(req.body ?? {});
-    next();
+    try {
+        req.body = cleanFormDataBody(req.body ?? {});
+        next();
+    } catch (error) {
+        console.error('[sanitizeFormDataBody] Error:', error);
+        next(error);
+    }
 }
 
 /**
@@ -144,13 +152,18 @@ export function sanitizeFormDataBody(req: Request, _res: Response, next: NextFun
  * array of per-file metadata objects rather than a single flat body.
  */
 export function sanitizeBatchFormDataBody(req: Request, _res: Response, next: NextFunction) {
-    const raw = req.body as BatchUploadBody | undefined;
-    if (raw && Array.isArray(raw.documents)) {
-        req.body = {
-            documents: raw.documents.map((doc) => cleanFormDataBody(doc)),
-        };
+    try {
+        const raw = req.body as BatchUploadBody | undefined;
+        if (raw && Array.isArray(raw.documents)) {
+            req.body = {
+                documents: raw.documents.map((doc) => cleanFormDataBody(doc)),
+            };
+        }
+        next();
+    } catch (error) {
+        console.error('[sanitizeBatchFormDataBody] Error:', error);
+        next(error);
     }
-    next();
 }
 
 // ─── Controller ──────────────────────────────────────────────────────────────
@@ -161,7 +174,28 @@ export class HelpdeskDocumentsController {
 
     static async upload(req: Request, res: Response, next: NextFunction) {
         try {
+            console.log('🚀🚀🚀 UPLOAD CONTROLLER REACHED - NO ZOD VALIDATION 🚀🚀🚀');
+            
             const file = req.file;
+
+            // ─── DIAGNOSTIC ─────────────────────────────────────────────────
+            console.log('[UPLOAD-CONTROLLER] Request received:', {
+                timestamp: new Date().toISOString(),
+                hasFile: !!file,
+                fileInfo: file ? {
+                    originalname: file.originalname,
+                    mimetype: file.mimetype,
+                    size: file.size,
+                } : null,
+                body: req.body,
+                bodyKeys: req.body ? Object.keys(req.body) : [],
+                entityType: req.body?.entity_type,
+                entityId: req.body?.entity_id,
+                userId: (req as any).user?.id,
+            });
+            // ────────────────────────────────────────────────────────────────
+
+            // ─── VALIDATE: File exists ─────────────────────────────────────
             if (!file) {
                 return res.status(400).json({
                     success: false,
@@ -169,12 +203,79 @@ export class HelpdeskDocumentsController {
                 });
             }
 
-            // req.body has already been sanitized by sanitizeFormDataBody
-            // middleware (before validate() ran), so no cleaning needed here.
-            const body = req.body as UploadHelpdeskDocumentBody;
+            // ─── VALIDATE: Required fields ──────────────────────────────────
+            const body = req.body as Record<string, any>;
             
-            const userId = (req as any).user?.id as string;
+            // Check required fields manually
+            const requiredFields = ['ref', 'subject', 'entity_type', 'format'];
+            const missingFields = requiredFields.filter(field => !body[field]);
+            
+            if (missingFields.length > 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Missing required fields: ${missingFields.join(', ')}`,
+                    missingFields
+                });
+            }
 
+            // ─── VALIDATE: Entity type is valid ─────────────────────────────
+            // ✅ ALL entity types including consolidated
+            const validEntityTypes = [
+                'circuit', 'bench', 'partHeard', 'serviceWeek', 
+                'otherPayment', 'ticket', 'medicalClaim', 
+                'generalRequest', 'securityRequest',
+                'visa', 'protocol', 'club', 'utility_memo', 
+                'consolidated_utility_memo', 'consolidated_fuel_memo',
+                'aide', 'sentry'
+            ];
+            
+            if (!validEntityTypes.includes(body.entity_type)) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Invalid entity_type: ${body.entity_type}. Must be one of: ${validEntityTypes.join(', ')}`,
+                    validEntityTypes
+                });
+            }
+
+            // ─── VALIDATE: Format is valid ──────────────────────────────────
+            const validFormats = ['pdf', 'docx', 'xlsx'];
+            if (!validFormats.includes(body.format)) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Invalid format: ${body.format}. Must be one of: ${validFormats.join(', ')}`,
+                    validFormats
+                });
+            }
+
+            // ─── VALIDATE: File type matches format ─────────────────────────
+            const formatToMimeMap: Record<string, string[]> = {
+                'pdf': ['application/pdf'],
+                'docx': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+                'xlsx': ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']
+            };
+
+            const allowedMimes = formatToMimeMap[body.format];
+            if (allowedMimes && !allowedMimes.includes(file.mimetype)) {
+                return res.status(400).json({
+                    success: false,
+                    message: `File type mismatch. Expected ${body.format.toUpperCase()} but received ${file.mimetype}`,
+                    expected: body.format,
+                    received: file.mimetype
+                });
+            }
+
+            // ─── VALIDATE: File size ─────────────────────────────────────────
+            const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+            if (file.size > MAX_FILE_SIZE) {
+                return res.status(400).json({
+                    success: false,
+                    message: `File size exceeds maximum allowed (${MAX_FILE_SIZE / 1024 / 1024}MB)`,
+                    maxSize: MAX_FILE_SIZE,
+                    receivedSize: file.size
+                });
+            }
+
+            const userId = (req as any).user?.id as string;
             if (!userId) {
                 return res.status(401).json({
                     success: false,
@@ -182,10 +283,47 @@ export class HelpdeskDocumentsController {
                 });
             }
 
-            const doc = await HelpdeskDocumentsService.upload(file, body, userId);
+            // ─── Transform body to CreateHelpdeskDocumentInput ──────────────
+            const input: CreateHelpdeskDocumentInput = {
+                ref: body.ref,
+                subject: body.subject,
+                entity_type: body.entity_type,
+                entity_id: body.entity_id || undefined,
+                format: body.format,
+                status: body.status || 'draft',
+                request_type: body.request_type || undefined,
+                judge_name: body.judge_name || undefined,
+                rank: body.rank || undefined,
+                reporting_date: body.reporting_date || undefined,
+                // ─── Aide Request Fields ──────────────────────────────────────
+                officer_rank: body.officer_rank || undefined,
+                officer_name: body.officer_name || undefined,
+                employment_number: body.employment_number || undefined,
+                current_station: body.current_station || undefined,
+                current_unit: body.current_unit || undefined,
+                proposed_assignment: body.proposed_assignment || undefined,
+                aide_status: body.aide_status || undefined,
+                // ─── Sentry Request Fields ──────────────────────────────────────
+                residence_location: body.residence_location || undefined,
+                sentry_status: body.sentry_status || undefined,
+            };
+
+            console.log('📦 Uploading with input:', {
+                entity_type: input.entity_type,
+                entity_id: input.entity_id,
+                format: input.format,
+                ref: input.ref,
+                subject: input.subject,
+            });
+
+            // ─── Proceed with upload ──────────────────────────────────────
+            const doc = await HelpdeskDocumentsService.upload(file, input, userId);
+
+            console.log('✅ Upload successful:', { id: doc.id, ref: doc.ref });
 
             return sendSuccess(res, doc, 'Document saved successfully.', 201);
         } catch (err) {
+            console.error('[UPLOAD-CONTROLLER] threw:', err);
             next(err);
         }
     }
@@ -204,10 +342,7 @@ export class HelpdeskDocumentsController {
                 });
             }
 
-            // req.body has already been sanitized by sanitizeFormDataBody
-            // middleware (before validate() ran), so no cleaning needed here.
             const body = req.body as UpdateDocumentFileBody;
-            
             const userId = (req as any).user?.id as string;
 
             if (!userId) {
@@ -242,8 +377,6 @@ export class HelpdeskDocumentsController {
                 });
             }
 
-            // req.body.documents has already been sanitized by
-            // sanitizeBatchFormDataBody middleware (before validate() ran).
             const body = req.body as BatchUploadBody;
             const userId = (req as any).user?.id as string;
 
@@ -292,14 +425,13 @@ export class HelpdeskDocumentsController {
 
     static async list(req: Request, res: Response, next: NextFunction) {
         try {
-            // ✅ Updated entity_type list to include consolidated memo types
             const entity_type = getQueryEnum(req, 'entity_type', [
                 'circuit', 'bench', 'partHeard', 'serviceWeek', 
                 'otherPayment', 'ticket', 'medicalClaim', 
                 'generalRequest', 'securityRequest',
                 'visa', 'protocol', 'club', 'utility_memo', 
-                'consolidated_utility_memo',  // NEW
-                'consolidated_fuel_memo',     // NEW
+                'consolidated_utility_memo',
+                'consolidated_fuel_memo',
                 'aide', 'sentry'
             ] as const);
             
@@ -324,15 +456,12 @@ export class HelpdeskDocumentsController {
             const rank = getQueryParam(req, 'rank');
             const reporting_date = getQueryParam(req, 'reporting_date');
             
-            // ─── Aide Request Filters ──────────────────────────────────────────
             const officer_rank = getQueryParam(req, 'officer_rank');
             const officer_name = getQueryParam(req, 'officer_name');
             const employment_number = getQueryParam(req, 'employment_number');
             const current_station = getQueryParam(req, 'current_station');
             const current_unit = getQueryParam(req, 'current_unit');
             const aide_status = getQueryParam(req, 'aide_status');
-
-            // ─── Sentry Request Filters ──────────────────────────────────────────
             const residence_location = getQueryParam(req, 'residence_location');
             const sentry_status = getQueryParam(req, 'sentry_status');
 
@@ -353,14 +482,12 @@ export class HelpdeskDocumentsController {
                 date_to,
                 rank,
                 reporting_date,
-                // ─── Aide Request Filters ──────────────────────────────────────
                 officer_rank,
                 officer_name,
                 employment_number,
                 current_station,
                 current_unit,
                 aide_status,
-                // ─── Sentry Request Filters ──────────────────────────────────────
                 residence_location,
                 sentry_status,
             });
@@ -591,7 +718,6 @@ export class HelpdeskDocumentsController {
                 judge_name,
                 rank,
                 reporting_date,
-                // ─── Aide Request Fields ──────────────────────────────────────
                 officer_rank,
                 officer_name,
                 employment_number,
@@ -599,7 +725,6 @@ export class HelpdeskDocumentsController {
                 current_unit,
                 proposed_assignment,
                 aide_status,
-                // ─── Sentry Request Fields ──────────────────────────────────────
                 residence_location,
                 sentry_status,
             } = req.body as LinkDocumentBody;
@@ -611,7 +736,6 @@ export class HelpdeskDocumentsController {
                 throw new AppError(400, 'Entity ID is required');
             }
 
-            // ─── Convert null to undefined ────────────────────────────────────────
             const cleanedRank = rank === null ? undefined : rank;
             const cleanedReportingDate = reporting_date === null ? undefined : reporting_date;
             const cleanedOfficerRank = officer_rank === null ? undefined : officer_rank;
@@ -632,7 +756,6 @@ export class HelpdeskDocumentsController {
                 judge_name,
                 cleanedRank,
                 cleanedReportingDate,
-                // ─── Aide Request Fields ──────────────────────────────────────
                 cleanedOfficerRank,
                 cleanedOfficerName,
                 cleanedEmploymentNumber,
@@ -640,7 +763,6 @@ export class HelpdeskDocumentsController {
                 cleanedCurrentUnit,
                 cleanedProposedAssignment,
                 cleanedAideStatus,
-                // ─── Sentry Request Fields ──────────────────────────────────────
                 cleanedResidenceLocation,
                 cleanedSentryStatus
             );
@@ -663,7 +785,6 @@ export class HelpdeskDocumentsController {
                 judge_name,
                 rank,
                 reporting_date,
-                // ─── Aide Request Fields ──────────────────────────────────────
                 officer_rank,
                 officer_name,
                 employment_number,
@@ -671,7 +792,6 @@ export class HelpdeskDocumentsController {
                 current_unit,
                 proposed_assignment,
                 aide_status,
-                // ─── Sentry Request Fields ──────────────────────────────────────
                 residence_location,
                 sentry_status,
             } = req.body as BulkLinkDocumentsBody;
@@ -686,7 +806,6 @@ export class HelpdeskDocumentsController {
                 throw new AppError(400, 'Entity ID is required');
             }
 
-            // ─── Convert null to undefined ────────────────────────────────────────
             const cleanedRank = rank === null ? undefined : rank;
             const cleanedReportingDate = reporting_date === null ? undefined : reporting_date;
             const cleanedOfficerRank = officer_rank === null ? undefined : officer_rank;
@@ -707,7 +826,6 @@ export class HelpdeskDocumentsController {
                 judge_name,
                 cleanedRank,
                 cleanedReportingDate,
-                // ─── Aide Request Fields ──────────────────────────────────────
                 cleanedOfficerRank,
                 cleanedOfficerName,
                 cleanedEmploymentNumber,
@@ -715,7 +833,6 @@ export class HelpdeskDocumentsController {
                 cleanedCurrentUnit,
                 cleanedProposedAssignment,
                 cleanedAideStatus,
-                // ─── Sentry Request Fields ──────────────────────────────────────
                 cleanedResidenceLocation,
                 cleanedSentryStatus
             );

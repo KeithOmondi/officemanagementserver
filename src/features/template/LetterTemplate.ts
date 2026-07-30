@@ -17,7 +17,7 @@ export interface LetterData {
 }
 
 const DEFAULT_HEADER_BANNER_URL =
-  "https://res.cloudinary.com/do0yflasl/image/upload/v1784363826/ORHC_HEADER_BANNER.jpg";
+  "https://res.cloudinary.com/do0yflasl/image/upload/v1784363826/ORHC_L_crclut.jpg";
 const DEFAULT_FOOTER_EMBLEM_URL =
   "https://res.cloudinary.com/do0yflasl/image/upload/v1784364354/ORHC_EMBLEM_wzmp94.jpg";
 
@@ -148,7 +148,6 @@ export function getLetterHTML(data: LetterData): string {
       <meta charset="UTF-8">
       <title>LETTER</title>
       <style>
-        /* Bottom margin increased slightly (10mm) to push footer down off the raw edge */
         @page {
           size: A4;
           margin: 15mm 20mm 10mm 20mm;
@@ -173,12 +172,11 @@ export function getLetterHTML(data: LetterData): string {
         }
 
         .page-header-space {
-          height: 155px;
+          height: 165px;
         }
 
-        /* Spacer enlarged slightly to match the extra footer breathing room */
         .page-footer-space {
-          height: 100px;
+          height: 120px;
         }
 
         /* Fixed Header */
@@ -189,12 +187,13 @@ export function getLetterHTML(data: LetterData): string {
           right: 0;
           background: white;
           z-index: 1000;
-          padding-top: 10px;
+          padding: 10px 0 8px; /* Adjusted padding */
+          border-bottom: 1.5px solid #C29B38;
         }
 
         .header-banner {
           display: flex;
-          justify-content: center;
+          justify-content: flex-start; /* Logo to the left */
           align-items: center;
           margin-bottom: 8px;
         }
@@ -202,28 +201,31 @@ export function getLetterHTML(data: LetterData): string {
         .header-banner img {
           max-height: 80px;
           width: auto;
+          margin-right: 20px; /* Spacer between logo and text */
         }
 
         .header-text {
-          text-align: center;
-          margin-bottom: 6px;
+          text-align: left; /* Text to the left */
+          margin-bottom: 0;
         }
 
         .header-text .judiciary {
-          font-size: 14pt;
+          font-size: 13pt;
           font-weight: bold;
           text-transform: uppercase;
           letter-spacing: 0.5px;
         }
 
         .header-text .office-name {
-          font-size: 11pt;
-          text-transform: lowercase;
-          font-style: italic;
+          font-size: 10.5pt;
+          font-weight: bold;
+          text-transform: uppercase;
+          font-style: normal;
+          letter-spacing: 0.3px;
           margin-top: 2px;
         }
 
-        /* Fixed Footer - Snagged to bottom edge */
+        /* Fixed Footer */
         .footer-wrapper {
           position: fixed;
           bottom: 0;
@@ -245,7 +247,6 @@ export function getLetterHTML(data: LetterData): string {
           border-collapse: collapse;
         }
 
-        /* Enlarged Emblem Cell & Image Width */
         .footer-emblem-cell {
           width: 175px;
           vertical-align: middle;
@@ -254,7 +255,9 @@ export function getLetterHTML(data: LetterData): string {
 
         .footer-emblem-cell img {
           width: 165px;
+          max-height: 60px;
           height: auto;
+          object-fit: contain;
           display: block;
         }
 
@@ -288,7 +291,7 @@ export function getLetterHTML(data: LetterData): string {
         /* Ref & Date Layout */
         .ref-date-row {
           display: flex;
-          justify-content: space-between;
+          justify-content: normal; /* Normal, but push date far right */
           align-items: flex-start;
           margin-bottom: 16px;
           font-size: 11pt;
@@ -296,6 +299,7 @@ export function getLetterHTML(data: LetterData): string {
 
         .ref-date-row .ref {
           font-weight: bold;
+          margin-right: auto; /* Push reference left */
         }
 
         .ref-date-row .date {
@@ -331,7 +335,7 @@ export function getLetterHTML(data: LetterData): string {
 
         .body-content p {
           margin-bottom: 10px;
-          text-align: justify;
+          text-align: left; /* Standards left alignment */
           orphans: 3;
           widows: 3;
         }
@@ -368,7 +372,6 @@ export function getLetterHTML(data: LetterData): string {
           color: transparent;
         }
 
-        /* Signature image enlarged */
         .signature-section img,
         .signature img {
           max-height: 115px !important;
@@ -435,10 +438,10 @@ export function getLetterHTML(data: LetterData): string {
       <div class="header-wrapper">
         <div class="header-banner">
           <img src="${escapeHtml(logoUrl)}" alt="Republic of Kenya & Judiciary Logos" />
-        </div>
-        <div class="header-text">
-          <div class="judiciary">THE JUDICIARY</div>
-          <div class="office-name">office of the registrar high court</div>
+          <div class="header-text">
+            <div class="judiciary">THE JUDICIARY</div>
+            <div class="office-name">OFFICE OF THE REGISTRAR HIGH COURT</div>
+          </div>
         </div>
       </div>
 
@@ -466,7 +469,7 @@ export function getLetterHTML(data: LetterData): string {
 
               <div class="signature-section">
                 <div class="signature-anchor" aria-hidden="true">${SIGNATURE_ANCHOR_TEXT}</div>
-                <p>Yours sincerely,</p>
+                
                 <div class="signature">
                   <div class="name">${escapeHtml(sender)}</div>
                   <div class="title">${escapeHtml(senderTitle || "REGISTRAR HIGH COURT")}</div>

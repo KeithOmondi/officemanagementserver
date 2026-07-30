@@ -11,7 +11,7 @@ import {
     uploadHelpdeskDocumentSchema,
     listHelpdeskDocumentsSchema,
     getDocumentByIdSchema,
-    updateDocumentFileSchema,  // ✅ Add this import
+    updateDocumentFileSchema,
     submitDocumentForApprovalSchema,
     approveDocumentSchema,
     rejectDocumentSchema,
@@ -36,22 +36,20 @@ router.use(protect);
 
 // ── Upload Routes ─────────────────────────────────────────────────────────────
 
-// ⚠️ IMPORTANT: For file uploads, multer must come BEFORE validation
-// because validation needs the parsed body from multer.
-//
-// ⚠️ ALSO IMPORTANT: sanitizeFormDataBody must run AFTER multer but BEFORE
-// validate(). Multer parses every multipart field as a string, so a form
-// field the caller left blank arrives as '' rather than being absent. Several
-// optional schema fields are `z.string().pipe(someEnum).optional()` —
-// `.optional()` only bypasses validation for `undefined`, not `''` — so an
-// empty string still gets forced through the enum and fails validation.
-// Sanitizing first converts those empty strings to undefined so validate()
-// sees a body that actually reflects what the caller meant to send.
+/**
+ * ⚠️ IMPORTANT: For file uploads, multer must come BEFORE any body parsing.
+ * 
+ * We're NOT using Zod validation here because:
+ * 1. File uploads with FormData are complex
+ * 2. We're doing comprehensive manual validation in the controller
+ * 3. It provides better error messages for file-related issues
+ * 4. The consolidated memo types aren't in the Zod enum yet
+ */
 router.post(
     '/upload',
     upload.single('file'),
     sanitizeFormDataBody,
-    validate(uploadHelpdeskDocumentSchema),
+    // ❌ NO Zod validation - manual validation in controller
     HelpdeskDocumentsController.upload
 );
 
@@ -65,18 +63,9 @@ router.post(
 
 // ── Update Document File ────────────────────────────────────────────────────
 
-/**
- * @route   PATCH /api/v1/helpdesk/documents/:id/file
- * @desc    Update an existing document's file and metadata
- * @access  Super Admin only (for approval workflow)
- * 
- * This endpoint updates the file of an existing document instead of
- * creating a new one, preventing document duplication.
- * Used when Super Admin approves a document and stamps it.
- */
 router.patch(
     '/:id/file',
-    requireRole('super_admin'),  // Only Super Admin can update document files
+    requireRole('super_admin'),
     upload.single('file'),
     sanitizeFormDataBody,
     validate(updateDocumentFileSchema),

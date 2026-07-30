@@ -1,3 +1,5 @@
+// src/features/helpdesk/helpdesk.documents.schema.ts
+
 import { z } from 'zod';
 
 // ─── Base Enums ──────────────────────────────────────────────────────────────
@@ -12,17 +14,28 @@ const documentEntityEnum = z.enum([
     'otherPayment',
     'ticket',
     'medicalClaim',
-    'generalRequest',   // Unified - includes all security/personnel requests
-    'securityRequest',  // Deprecated - kept for backward compatibility
-    'visa',             // Visa support documents
-    'protocol',         // Protocol event documents
-    'club',             // Club membership documents
-    'utility_memo',     // Single judge utility memo
-    'consolidated_utility_memo',  // 🔹 NEW: Consolidated memo covering all utilities
-    'consolidated_fuel_memo',     // 🔹 NEW: Consolidated memo covering fuel only
-    'aide',             // Aide request documents
-    'sentry',           // Sentry request documents
+    'generalRequest',
+    'securityRequest',
+    'visa',
+    'protocol',
+    'club',
+    'utility_memo',
+    'consolidated_utility_memo',
+    'consolidated_fuel_memo',
+    'aide',
+    'sentry',
 ]);
+
+// ─── DIAGNOSTIC: confirm which copy of this module the running server loaded ──
+console.log('[SCHEMA-LOAD] helpdesk.documents.schema.ts', {
+    file: __filename,
+    pid: process.pid,
+    loadedAt: new Date().toISOString(),
+    documentEntityEnumValues: documentEntityEnum.options,
+    hasConsolidatedUtility: documentEntityEnum.options.includes('consolidated_utility_memo'),
+    hasConsolidatedFuel: documentEntityEnum.options.includes('consolidated_fuel_memo'),
+});
+// ──────────────────────────────────────────────────────────────────────────────
 
 const documentStatusEnum = z.enum(['draft', 'pending_approval', 'approved', 'rejected', 'returned']);
 
@@ -58,19 +71,45 @@ const unitTypeEnum = z.enum(['KPS', 'APS', 'GSU', 'DCI', 'VIPPU', 'Other']);
 
 const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format').optional();
 
+// ✅ Custom validator for entity_id that accepts both UUIDs and custom IDs
+const entityIdSchema = z.string().optional().nullable().refine(
+    (val) => {
+        if (!val) return true; // null/undefined is allowed
+        
+        // Check if it's a valid UUID
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (uuidRegex.test(val)) return true;
+        
+        // Check if it's a consolidated memo ID
+        const consRegex = /^cons-(all|fuel)-[0-9]{4}-[0-9]{2}$/;
+        if (consRegex.test(val)) return true;
+        
+        // Check if it's a temp ID (for new records)
+        const tempRegex = /^temp-/;
+        if (tempRegex.test(val)) return true;
+        
+        return false;
+    },
+    { message: 'entity_id must be a valid UUID, consolidated ID (e.g., cons-all-2026-07), or temp ID' }
+);
+
 // ─── POST /api/helpdesk/documents/upload ──────────────────────────────────────
 
 /**
- * This schema handles multipart/form-data uploads where all fields come as strings.
- * Since multer parses form-data fields as strings, we need to handle the conversion.
+ * UPDATED: This schema handles multipart/form-data uploads.
+ * 
+ * IMPORTANT: The file itself is handled by multer and is available as req.file,
+ * NOT in req.body. This schema only validates the form fields in req.body.
+ * 
+ * The actual validation for the file (size, type, etc.) should be handled
+ * by multer configuration.
  */
 export const uploadHelpdeskDocumentSchema = z.object({
     body: z.object({
         ref: z.string().min(1, 'Reference is required').max(100),
         subject: z.string().min(1, 'Subject is required').max(200),
         entity_type: z.string().pipe(documentEntityEnum),
-        // 🔹 Changed: entity_id is now a plain string (not UUID) to support custom IDs like "cons-all-2026-07"
-        entity_id: z.string().optional().nullable(),
+        entity_id: entityIdSchema, // ✅ Uses the custom validator
         format: z.string().pipe(documentFormatEnum),
         status: z.string().default('draft').pipe(documentStatusEnum).optional(),
         request_type: z.string().pipe(requestTypeEnum).optional().nullable(),
@@ -91,7 +130,26 @@ export const uploadHelpdeskDocumentSchema = z.object({
         
         // ─── Legacy fields ──────────────────────────────────────────────────────
         rank: z.string().max(50).optional().nullable(),
-        reporting_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format').optional().nullable(),
+        reporting_date: dateStringSchema.optional().nullable(),
+    }),
+});
+
+/**
+ * File validation schema for use with multer
+ * This can be used to validate the file after multer processes it
+ */
+export const fileValidationSchema = z.object({
+    file: z.object({
+        fieldname: z.string(),
+        originalname: z.string(),
+        encoding: z.string(),
+        mimetype: z.string().refine(
+            (mime) => ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'].includes(mime),
+            { message: 'File must be PDF, DOCX, or XLSX' }
+        ),
+        size: z.number().max(10 * 1024 * 1024, 'File size must be less than 10MB'), // 10MB limit
+        buffer: z.instanceof(Buffer).optional(),
+        path: z.string().optional(),
     }),
 });
 
@@ -99,7 +157,7 @@ export const uploadHelpdeskDocumentSchema = z.object({
 export const listHelpdeskDocumentsSchema = z.object({
     query: z.object({
         entity_type: documentEntityEnum.optional(),
-        entity_id: z.string().optional(), // 🔹 Changed: allow custom IDs
+        entity_id: z.string().optional(), // ✅ Allow any string for filtering
         format: documentFormatEnum.optional(),
         status: documentStatusEnum.optional(),
         search: z.string().optional(),
@@ -255,8 +313,7 @@ export const linkDocumentSchema = z.object({
     }),
     body: z.object({
         entity_type: documentEntityEnum,
-        // 🔹 Changed: allow custom IDs for consolidated memos
-        entity_id: z.string().optional(),
+        entity_id: z.string().optional(), // ✅ Allow any string
         request_type: requestTypeEnum.optional(),
         judge_name: z.string().max(100).optional(),
         
@@ -292,8 +349,7 @@ export const documentStatsSchema = z.object({
 export const getDocumentsByEntitySchema = z.object({
     params: z.object({
         entity_type: documentEntityEnum,
-        // 🔹 Changed: allow custom IDs for consolidated memos
-        entity_id: z.string().optional(),
+        entity_id: z.string().optional(), // ✅ Allow any string
     }),
     query: z.object({
         status: documentStatusEnum.optional(),
@@ -333,8 +389,7 @@ export const bulkLinkDocumentsSchema = z.object({
     body: z.object({
         document_ids: z.array(z.string().uuid()).min(1, 'At least one document ID is required'),
         entity_type: documentEntityEnum,
-        // 🔹 Changed: allow custom IDs for consolidated memos
-        entity_id: z.string().optional(),
+        entity_id: z.string().optional(), // ✅ Allow any string
         request_type: requestTypeEnum.optional(),
         judge_name: z.string().max(100).optional(),
         
@@ -374,7 +429,7 @@ export const batchUploadSchema = z.object({
                 ref: z.string().min(1).max(100),
                 subject: z.string().min(1).max(200),
                 entity_type: documentEntityEnum,
-                entity_id: z.string().optional(), // 🔹 Changed: allow custom IDs
+                entity_id: z.string().optional(), // ✅ Allow any string
                 format: documentFormatEnum,
                 status: documentStatusEnum.default('draft'),
                 request_type: requestTypeEnum.optional(),
@@ -424,6 +479,7 @@ export type BulkUpdateStatusBody = z.infer<typeof bulkUpdateStatusSchema>['body'
 export type BatchUploadBody = z.infer<typeof batchUploadSchema>['body'];
 export type DeleteCommentParams = z.infer<typeof deleteCommentSchema>['params'];
 export type UpdateDocumentFileBody = z.infer<typeof updateDocumentFileSchema>['body'];
+export type FileValidation = z.infer<typeof fileValidationSchema>;
 
 // Export enums for use in routes
 export {

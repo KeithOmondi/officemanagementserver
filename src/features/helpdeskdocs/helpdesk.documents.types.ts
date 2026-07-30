@@ -16,8 +16,8 @@ export type DocumentEntityType =
     | 'protocol'         // Protocol event documents
     | 'club'             // Club membership documents
     | 'utility_memo'     // Single judge utility memo
-    | 'consolidated_utility_memo'  // 🔹 NEW: Consolidated memo covering all utilities
-    | 'consolidated_fuel_memo'     // 🔹 NEW: Consolidated memo covering fuel only
+    | 'consolidated_utility_memo'  // Consolidated memo covering all utilities
+    | 'consolidated_fuel_memo'     // Consolidated memo covering fuel only
     | 'aide'             // Aide request documents
     | 'sentry';          // Sentry request documents
 
@@ -58,21 +58,21 @@ export interface HelpdeskDocument {
     judge_name?: string;        // Associated judge name
 
     // ─── Aide Request Fields ──────────────────────────────────────────────────
-    officer_rank?: string | null;      // Police officer rank
-    officer_name?: string | null;      // Police officer name
-    employment_number?: string | null; // Employment/Service number
-    current_station?: string | null;   // Current station
-    current_unit?: string | null;      // Current unit (KPS, APS, GSU, etc.)
-    proposed_assignment?: string | null; // Proposed assignment description
-    aide_status?: string | null;       // Aide request status (in_progress, rejected, attached)
+    officer_rank?: string | null;
+    officer_name?: string | null;
+    employment_number?: string | null;
+    current_station?: string | null;
+    current_unit?: string | null;
+    proposed_assignment?: string | null;
+    aide_status?: string | null;
     
     // ─── Sentry Request Fields ────────────────────────────────────────────────
-    residence_location?: string | null; // Residence location for sentry
-    sentry_status?: string | null;      // Sentry request status (pending, active, resolved, rejected)
+    residence_location?: string | null;
+    sentry_status?: string | null;
     
     // ─── Legacy fields ──────────────────────────────────────────────────────
-    rank?: string | null;              // Officer's rank (deprecated, use officer_rank)
-    reporting_date?: string | null;    // Expected reporting date
+    rank?: string | null;
+    reporting_date?: string | null;
 }
 
 export interface ApprovalHistoryEntry {
@@ -104,8 +104,8 @@ export interface CreateHelpdeskDocumentInput {
     entity_id?: string | null;
     format: DocumentFormat;
     status?: DocumentStatus;
-    request_type?: string | null;      // For general requests
-    judge_name?: string | null;        // For better tracking
+    request_type?: string | null;
+    judge_name?: string | null;
     
     // ─── Aide Request Fields ──────────────────────────────────────────────
     officer_rank?: string | null;
@@ -158,27 +158,27 @@ export interface HelpdeskDocumentFilters {
     offset?: number;
     uploaded_by?: string;
     pending_my_approval?: boolean;
-    unlinked?: boolean;  // Filter for documents not linked to any entity
-    request_type?: string;  // Filter by request type (Driver, Bodyguard, etc.)
-    judge_name?: string;    // Filter by judge name
-    date_from?: string;     // Filter by date range
+    unlinked?: boolean;
+    request_type?: string;
+    judge_name?: string;
+    date_from?: string;
     date_to?: string;
     
     // ─── Aide Request Filters ──────────────────────────────────────────────
-    officer_rank?: string;      // Filter by officer rank
-    officer_name?: string;      // Filter by officer name
-    employment_number?: string; // Filter by employment number
-    current_station?: string;   // Filter by current station
-    current_unit?: string;      // Filter by current unit
-    aide_status?: string;       // Filter by aide status
+    officer_rank?: string;
+    officer_name?: string;
+    employment_number?: string;
+    current_station?: string;
+    current_unit?: string;
+    aide_status?: string;
     
     // ─── Sentry Request Filters ──────────────────────────────────────────────
-    residence_location?: string; // Filter by residence location
-    sentry_status?: string;      // Filter by sentry status
+    residence_location?: string;
+    sentry_status?: string;
     
     // ─── Legacy fields ──────────────────────────────────────────────────────
-    rank?: string;              // Filter by rank
-    reporting_date?: string;    // Filter by reporting date
+    rank?: string;
+    reporting_date?: string;
 }
 
 export interface DocumentApprovalRequest {
@@ -206,8 +206,8 @@ export interface DocumentReturnRequest {
 export interface LinkDocumentInput {
     entity_type: DocumentEntityType;
     entity_id: string;
-    request_type?: string;      // For general requests
-    judge_name?: string;        // For better tracking
+    request_type?: string;
+    judge_name?: string;
     
     // ─── Aide Request Fields ──────────────────────────────────────────────
     officer_rank?: string | null;
@@ -280,8 +280,8 @@ export const DOCUMENT_ENTITY_LABELS: Record<DocumentEntityType, string> = {
     protocol: 'Protocol Event',
     club: 'Club Membership',
     utility_memo: 'Utility Memo (Single Judge)',
-    consolidated_utility_memo: 'Consolidated Utility Memo',      // 🔹 NEW
-    consolidated_fuel_memo: 'Consolidated Fuel Memo',            // 🔹 NEW
+    consolidated_utility_memo: 'Consolidated Utility Memo',
+    consolidated_fuel_memo: 'Consolidated Fuel Memo',
     aide: 'Aide Request',
     sentry: 'Sentry Request',
 };
@@ -300,8 +300,8 @@ export const DOCUMENT_ENTITY_ICONS: Record<DocumentEntityType, string> = {
     protocol: 'Calendar',
     club: 'Users',
     utility_memo: 'FileText',
-    consolidated_utility_memo: 'FileSpreadsheet',   // 🔹 NEW - icon for consolidated
-    consolidated_fuel_memo: 'Fuel',                  // 🔹 NEW - could use 'Flame' or similar
+    consolidated_utility_memo: 'FileSpreadsheet',
+    consolidated_fuel_memo: 'Fuel',
     aide: 'Shield',
     sentry: 'Home',
 };
@@ -320,8 +320,8 @@ export const DOCUMENT_ENTITY_COLORS: Record<DocumentEntityType, string> = {
     protocol: 'text-blue-600 bg-blue-50',
     club: 'text-purple-600 bg-purple-50',
     utility_memo: 'text-amber-600 bg-amber-50',
-    consolidated_utility_memo: 'text-indigo-600 bg-indigo-50',    // 🔹 NEW
-    consolidated_fuel_memo: 'text-orange-600 bg-orange-50',       // 🔹 NEW
+    consolidated_utility_memo: 'text-indigo-600 bg-indigo-50',
+    consolidated_fuel_memo: 'text-orange-600 bg-orange-50',
     aide: 'text-blue-600 bg-blue-50',
     sentry: 'text-emerald-600 bg-emerald-50',
 };
@@ -401,8 +401,8 @@ export function isDocumentEntityType(value: string): value is DocumentEntityType
         'protocol',
         'club',
         'utility_memo',
-        'consolidated_utility_memo',  // 🔹 NEW
-        'consolidated_fuel_memo',     // 🔹 NEW
+        'consolidated_utility_memo',
+        'consolidated_fuel_memo',
         'aide',
         'sentry'
     ].includes(value);
@@ -466,17 +466,13 @@ export function getRequestTypeColor(requestType: string): string {
     return REQUEST_TYPE_COLORS[requestType] || 'text-gray-600 bg-gray-50';
 }
 
-// ─── Consolidated Memo Helpers (NEW) ──────────────────────────────────────
+// ─── Consolidated Memo Helpers ──────────────────────────────────────────────
 
 export type ConsolidatedMemoType = 'all' | 'fuel';
 
 /**
  * Generates a stable, human-readable entity ID for a consolidated memo.
  * Format: "cons-{type}-{YYYY-MM}" e.g., "cons-all-2026-07"
- *
- * @param type - 'all' for all utilities, 'fuel' for fuel-only
- * @param date - optional Date object (defaults to now)
- * @returns entity ID string
  */
 export function getConsolidatedMemoEntityId(
     type: ConsolidatedMemoType,
@@ -488,9 +484,6 @@ export function getConsolidatedMemoEntityId(
 
 /**
  * Returns the appropriate DocumentEntityType for a consolidated memo.
- *
- * @param type - 'all' or 'fuel'
- * @returns DocumentEntityType
  */
 export function getConsolidatedMemoEntityType(
     type: ConsolidatedMemoType
@@ -503,78 +496,34 @@ export function getConsolidatedMemoEntityType(
 export function buildDocumentFilters(filters: HelpdeskDocumentFilters): Record<string, any> {
     const result: Record<string, any> = {};
 
-    if (filters.entity_type) {
-        result.entity_type = filters.entity_type;
-    }
-    if (filters.entity_id) {
-        result.entity_id = filters.entity_id;
-    }
-    if (filters.format) {
-        result.format = filters.format;
-    }
-    if (filters.status) {
-        result.status = filters.status;
-    }
-    if (filters.search) {
-        result.search = filters.search;
-    }
-    if (filters.uploaded_by) {
-        result.uploaded_by = filters.uploaded_by;
-    }
-    if (filters.request_type) {
-        result.request_type = filters.request_type;
-    }
-    if (filters.judge_name) {
-        result.judge_name = filters.judge_name;
-    }
-    if (filters.date_from) {
-        result.date_from = filters.date_from;
-    }
-    if (filters.date_to) {
-        result.date_to = filters.date_to;
-    }
-    if (filters.unlinked !== undefined) {
-        result.unlinked = filters.unlinked;
-    }
-    if (filters.pending_my_approval !== undefined) {
-        result.pending_my_approval = filters.pending_my_approval;
-    }
+    if (filters.entity_type) result.entity_type = filters.entity_type;
+    if (filters.entity_id) result.entity_id = filters.entity_id;
+    if (filters.format) result.format = filters.format;
+    if (filters.status) result.status = filters.status;
+    if (filters.search) result.search = filters.search;
+    if (filters.uploaded_by) result.uploaded_by = filters.uploaded_by;
+    if (filters.request_type) result.request_type = filters.request_type;
+    if (filters.judge_name) result.judge_name = filters.judge_name;
+    if (filters.date_from) result.date_from = filters.date_from;
+    if (filters.date_to) result.date_to = filters.date_to;
+    if (filters.unlinked !== undefined) result.unlinked = filters.unlinked;
+    if (filters.pending_my_approval !== undefined) result.pending_my_approval = filters.pending_my_approval;
     
-    // ─── Aide Request Filters ──────────────────────────────────────────────
-    if (filters.officer_rank) {
-        result.officer_rank = filters.officer_rank;
-    }
-    if (filters.officer_name) {
-        result.officer_name = filters.officer_name;
-    }
-    if (filters.employment_number) {
-        result.employment_number = filters.employment_number;
-    }
-    if (filters.current_station) {
-        result.current_station = filters.current_station;
-    }
-    if (filters.current_unit) {
-        result.current_unit = filters.current_unit;
-    }
-    if (filters.aide_status) {
-        result.aide_status = filters.aide_status;
-    }
+    // Aide Request Filters
+    if (filters.officer_rank) result.officer_rank = filters.officer_rank;
+    if (filters.officer_name) result.officer_name = filters.officer_name;
+    if (filters.employment_number) result.employment_number = filters.employment_number;
+    if (filters.current_station) result.current_station = filters.current_station;
+    if (filters.current_unit) result.current_unit = filters.current_unit;
+    if (filters.aide_status) result.aide_status = filters.aide_status;
     
-    // ─── Sentry Request Filters ──────────────────────────────────────────────
-    if (filters.residence_location) {
-        result.residence_location = filters.residence_location;
-    }
-    if (filters.sentry_status) {
-        result.sentry_status = filters.sentry_status;
-    }
+    // Sentry Request Filters
+    if (filters.residence_location) result.residence_location = filters.residence_location;
+    if (filters.sentry_status) result.sentry_status = filters.sentry_status;
     
-    // ─── Legacy fields ──────────────────────────────────────────────────────
-    if (filters.rank) {
-        result.rank = filters.rank;
-    }
-    if (filters.reporting_date) {
-        result.reporting_date = filters.reporting_date;
-    }
+    // Legacy fields
+    if (filters.rank) result.rank = filters.rank;
+    if (filters.reporting_date) result.reporting_date = filters.reporting_date;
 
     return result;
 }

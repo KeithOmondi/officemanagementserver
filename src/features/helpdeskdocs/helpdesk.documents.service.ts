@@ -1,5 +1,3 @@
-// src/features/helpdesk/helpdesk.documents.service.ts
-
 import { pool } from '../../config/db';
 import { AppError } from '../../utils/response';
 import { uploadToCloudinary, deleteFromCloudinary } from '../../config/cloudinary';
@@ -49,7 +47,7 @@ const DOC_SELECT = `
  * (e.g., "cons-all-2026-07" for consolidated memos).
  */
 function cleanInput(input: CreateHelpdeskDocumentInput): CreateHelpdeskDocumentInput {
-    return {
+    const cleaned: CreateHelpdeskDocumentInput = {
         ref: input.ref?.trim() || '',
         subject: input.subject?.trim() || '',
         entity_type: input.entity_type,
@@ -72,6 +70,8 @@ function cleanInput(input: CreateHelpdeskDocumentInput): CreateHelpdeskDocumentI
         residence_location: input.residence_location === null ? undefined : input.residence_location?.trim() || undefined,
         sentry_status: input.sentry_status === null ? undefined : input.sentry_status?.trim() || undefined,
     };
+    
+    return cleaned;
 }
 
 // ─── Service ──────────────────────────────────────────────────────────────────
@@ -81,10 +81,33 @@ export class HelpdeskDocumentsService {
     // ─── Upload & Persist ─────────────────────────────────────────────────────
 
     static async upload(
-        file: Express.Multer.File,
+        file: Express.Multer.File | undefined,
         input: CreateHelpdeskDocumentInput,
         userId: string
     ): Promise<HelpdeskDocument> {
+        // ─── VALIDATE: File exists ──────────────────────────────────────────────
+        if (!file) {
+            throw new AppError(400, 'No file uploaded. Please attach a file to upload.');
+        }
+
+        // ─── VALIDATE: File size ────────────────────────────────────────────────
+        const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+        if (file.size > MAX_FILE_SIZE) {
+            throw new AppError(400, `File size exceeds maximum allowed (${MAX_FILE_SIZE / 1024 / 1024}MB)`);
+        }
+
+        // ─── VALIDATE: File type ────────────────────────────────────────────────
+        const allowedMimeTypes = [
+            'application/pdf',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        ];
+        
+        if (!allowedMimeTypes.includes(file.mimetype)) {
+            throw new AppError(400, `Invalid file type. Allowed types: PDF, DOCX, XLSX. Received: ${file.mimetype}`);
+        }
+
+        // ─── VALIDATE: Input fields ─────────────────────────────────────────────
         // Clean the input first
         const cleaned = cleanInput(input);
 
@@ -101,6 +124,22 @@ export class HelpdeskDocumentsService {
             throw new AppError(400, 'Document format is required');
         }
 
+        // ─── VALIDATE: Format matches file type ─────────────────────────────────
+        const formatToMimeMap: Record<string, string[]> = {
+            'pdf': ['application/pdf'],
+            'docx': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+            'xlsx': ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']
+        };
+
+        const allowedMimesForFormat = formatToMimeMap[cleaned.format];
+        if (allowedMimesForFormat && !allowedMimesForFormat.includes(file.mimetype)) {
+            throw new AppError(
+                400, 
+                `File type mismatch. Expected ${cleaned.format.toUpperCase()} but received ${file.mimetype}`
+            );
+        }
+
+        // ─── UPLOAD to Cloudinary ─────────────────────────────────────────────
         const result = await uploadToCloudinary(file, FOLDER);
 
         try {
@@ -156,13 +195,50 @@ export class HelpdeskDocumentsService {
 
     static async updateDocumentFile(
         id: string,
-        file: Express.Multer.File,
+        file: Express.Multer.File | undefined,
         input: UpdateDocumentFileInput,
         userId?: string
     ): Promise<HelpdeskDocument> {
+        // ─── VALIDATE: File exists ──────────────────────────────────────────────
+        if (!file) {
+            throw new AppError(400, 'No file uploaded. Please attach a file to update.');
+        }
+
+        // ─── VALIDATE: File size ────────────────────────────────────────────────
+        const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+        if (file.size > MAX_FILE_SIZE) {
+            throw new AppError(400, `File size exceeds maximum allowed (${MAX_FILE_SIZE / 1024 / 1024}MB)`);
+        }
+
+        // ─── VALIDATE: File type ────────────────────────────────────────────────
+        const allowedMimeTypes = [
+            'application/pdf',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        ];
+        
+        if (!allowedMimeTypes.includes(file.mimetype)) {
+            throw new AppError(400, `Invalid file type. Allowed types: PDF, DOCX, XLSX. Received: ${file.mimetype}`);
+        }
+
         const doc = await this.findById(id);
         if (!doc) {
             throw new AppError(404, 'Document not found');
+        }
+
+        // ─── VALIDATE: Format matches file type ─────────────────────────────────
+        const formatToMimeMap: Record<string, string[]> = {
+            'pdf': ['application/pdf'],
+            'docx': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+            'xlsx': ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']
+        };
+
+        const allowedMimesForFormat = formatToMimeMap[doc.format];
+        if (allowedMimesForFormat && !allowedMimesForFormat.includes(file.mimetype)) {
+            throw new AppError(
+                400, 
+                `File type mismatch. Expected ${doc.format.toUpperCase()} but received ${file.mimetype}`
+            );
         }
 
         // Upload new file to Cloudinary

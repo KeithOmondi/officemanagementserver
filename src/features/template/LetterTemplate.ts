@@ -171,58 +171,48 @@ export function getLetterHTML(data: LetterData): string {
           border-collapse: collapse;
         }
 
-        .page-header-space {
-          height: 165px;
-        }
-
         .page-footer-space {
           height: 120px;
         }
 
-        /* Fixed Header */
-        .header-wrapper {
-          position: fixed;
-          top: 0;
-          left: 0;
-          right: 0;
-          background: white;
-          z-index: 1000;
-          padding: 10px 0 8px; /* Adjusted padding */
+        /* Flow Header (Appears only on Page 1) */
+        .first-page-header {
+          padding-bottom: 10px;
+          margin-bottom: 20px;
           border-bottom: 1.5px solid #C29B38;
         }
 
         .header-banner {
           display: flex;
-          justify-content: flex-start; /* Logo to the left */
+          justify-content: flex-start;
           align-items: center;
-          margin-bottom: 8px;
         }
 
         .header-banner img {
-          max-height: 80px;
+          max-height: 105px; /* Increased logo size */
           width: auto;
-          margin-right: 20px; /* Spacer between logo and text */
+          margin-right: 20px;
         }
 
         .header-text {
-          text-align: left; /* Text to the left */
+          text-align: left;
           margin-bottom: 0;
         }
 
         .header-text .judiciary {
-          font-size: 13pt;
+          font-size: 14pt;
           font-weight: bold;
           text-transform: uppercase;
           letter-spacing: 0.5px;
         }
 
         .header-text .office-name {
-          font-size: 10.5pt;
+          font-size: 11pt;
           font-weight: bold;
           text-transform: uppercase;
           font-style: normal;
           letter-spacing: 0.3px;
-          margin-top: 2px;
+          margin-top: 3px;
         }
 
         /* Fixed Footer */
@@ -291,7 +281,7 @@ export function getLetterHTML(data: LetterData): string {
         /* Ref & Date Layout */
         .ref-date-row {
           display: flex;
-          justify-content: normal; /* Normal, but push date far right */
+          justify-content: normal;
           align-items: flex-start;
           margin-bottom: 16px;
           font-size: 11pt;
@@ -299,7 +289,7 @@ export function getLetterHTML(data: LetterData): string {
 
         .ref-date-row .ref {
           font-weight: bold;
-          margin-right: auto; /* Push reference left */
+          margin-right: auto;
         }
 
         .ref-date-row .date {
@@ -335,7 +325,7 @@ export function getLetterHTML(data: LetterData): string {
 
         .body-content p {
           margin-bottom: 10px;
-          text-align: left; /* Standards left alignment */
+          text-align: left;
           orphans: 3;
           widows: 3;
         }
@@ -434,28 +424,22 @@ export function getLetterHTML(data: LetterData): string {
     </head>
     <body>
 
-      <!-- Fixed Printable Header -->
-      <div class="header-wrapper">
-        <div class="header-banner">
-          <img src="${escapeHtml(logoUrl)}" alt="Republic of Kenya & Judiciary Logos" />
-          <div class="header-text">
-            <div class="judiciary">THE JUDICIARY</div>
-            <div class="office-name">OFFICE OF THE REGISTRAR HIGH COURT</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Main Page Flow with Head/Foot Spacers -->
+      <!-- Main Page Flow with Foot Spacer -->
       <table class="page-table">
-        <thead>
-          <tr>
-            <td><div class="page-header-space"></div></td>
-          </tr>
-        </thead>
-
         <tbody>
           <tr>
             <td>
+              <!-- Header rendered inline on page 1 only -->
+              <div class="first-page-header">
+                <div class="header-banner">
+                  <img src="${escapeHtml(logoUrl)}" alt="Republic of Kenya & Judiciary Logos" />
+                  <div class="header-text">
+                    <div class="judiciary">THE JUDICIARY</div>
+                    <div class="office-name">OFFICE OF THE REGISTRAR HIGH COURT</div>
+                  </div>
+                </div>
+              </div>
+
               <div class="ref-date-row">
                 <span class="ref">${escapeHtml(ref)}</span>
                 <span class="date">${escapeHtml(date)}</span>

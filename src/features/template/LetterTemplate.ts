@@ -189,7 +189,7 @@ export function getLetterHTML(data: LetterData): string {
         }
 
         .header-banner img {
-          max-height: 105px; /* Increased logo size */
+          max-height: 105px;
           width: auto;
           margin-right: 20px;
         }
@@ -357,9 +357,18 @@ export function getLetterHTML(data: LetterData): string {
           page-break-inside: avoid;
         }
 
+        .valediction {
+          margin-bottom: 12px;
+        }
+
+        /* Essential for PDF text parsers: white text instead of transparent/zero-height */
         .signature-anchor {
-          height: 1px;
-          color: transparent;
+          font-size: 1pt;
+          color: #ffffff;
+          line-height: 1;
+          user-select: none;
+          display: block;
+          margin-bottom: 4px;
         }
 
         .signature-section img,
@@ -452,7 +461,8 @@ export function getLetterHTML(data: LetterData): string {
               </div>
 
               <div class="signature-section">
-                <div class="signature-anchor" aria-hidden="true">${SIGNATURE_ANCHOR_TEXT}</div>
+                <p class="valediction">Yours sincerely,</p>
+                <div class="signature-anchor">${SIGNATURE_ANCHOR_TEXT}</div>
                 
                 <div class="signature">
                   <div class="name">${escapeHtml(sender)}</div>

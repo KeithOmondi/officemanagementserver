@@ -3,7 +3,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { HelpdeskDocumentsService } from './helpdesk.documents.service';
 import type {
-    UploadHelpdeskDocumentBody,
     SubmitDocumentForApprovalBody,
     ApproveDocumentBody,
     RejectDocumentBody,
@@ -15,6 +14,14 @@ import type {
     BulkUpdateStatusBody,
     UpdateEStampBody,
     UpdateDocumentFileBody,
+    // ─── Two-step approval types ──────────────────────────────────────────────
+    InternalPreviewDocumentBody,
+    InternalApproveDocumentBody,
+    InternalRejectDocumentBody,
+    InternalRequestChangesBody,
+    InternalCancelApprovalBody,
+    SendBackToRequesterBody,
+    ResubmitDocumentBody,
 } from './helpdesk.documents.schema';
 import type { CreateHelpdeskDocumentInput } from './helpdesk.documents.types';
 import { sendSuccess } from '../../utils/response';
@@ -219,7 +226,6 @@ export class HelpdeskDocumentsController {
             }
 
             // ─── VALIDATE: Entity type is valid ─────────────────────────────
-            // ✅ ALL entity types including consolidated
             const validEntityTypes = [
                 'circuit', 'bench', 'partHeard', 'serviceWeek', 
                 'otherPayment', 'ticket', 'medicalClaim', 
@@ -295,7 +301,6 @@ export class HelpdeskDocumentsController {
                 judge_name: body.judge_name || undefined,
                 rank: body.rank || undefined,
                 reporting_date: body.reporting_date || undefined,
-                // ─── Aide Request Fields ──────────────────────────────────────
                 officer_rank: body.officer_rank || undefined,
                 officer_name: body.officer_name || undefined,
                 employment_number: body.employment_number || undefined,
@@ -303,7 +308,6 @@ export class HelpdeskDocumentsController {
                 current_unit: body.current_unit || undefined,
                 proposed_assignment: body.proposed_assignment || undefined,
                 aide_status: body.aide_status || undefined,
-                // ─── Sentry Request Fields ──────────────────────────────────────
                 residence_location: body.residence_location || undefined,
                 sentry_status: body.sentry_status || undefined,
             };
@@ -316,7 +320,6 @@ export class HelpdeskDocumentsController {
                 subject: input.subject,
             });
 
-            // ─── Proceed with upload ──────────────────────────────────────
             const doc = await HelpdeskDocumentsService.upload(file, input, userId);
 
             console.log('✅ Upload successful:', { id: doc.id, ref: doc.ref });
@@ -456,6 +459,19 @@ export class HelpdeskDocumentsController {
             const rank = getQueryParam(req, 'rank');
             const reporting_date = getQueryParam(req, 'reporting_date');
             
+            // ─── Two-step approval filters ──────────────────────────────────────
+            const internal_approval_status = getQueryEnum(req, 'internal_approval_status', [
+                'pending', 'previewed', 'approved_internal', 'rejected_internal',
+                'changes_requested_internal', 'changes_ready'
+            ] as const);
+            const requester_status = getQueryEnum(req, 'requester_status', [
+                'pending_approval', 'approved', 'rejected', 'changes_requested', 'in_revision'
+            ] as const);
+            const is_sent_back_to_requester = getQueryBoolean(req, 'is_sent_back_to_requester');
+            const pending_internal_approval = getQueryBoolean(req, 'pending_internal_approval');
+            const ready_to_send_back = getQueryBoolean(req, 'ready_to_send_back');
+            const my_requester_documents = getQueryBoolean(req, 'my_requester_documents');
+            
             const officer_rank = getQueryParam(req, 'officer_rank');
             const officer_name = getQueryParam(req, 'officer_name');
             const employment_number = getQueryParam(req, 'employment_number');
@@ -482,6 +498,12 @@ export class HelpdeskDocumentsController {
                 date_to,
                 rank,
                 reporting_date,
+                internal_approval_status,
+                requester_status,
+                is_sent_back_to_requester,
+                pending_internal_approval,
+                ready_to_send_back,
+                my_requester_documents,
                 officer_rank,
                 officer_name,
                 employment_number,
@@ -589,8 +611,364 @@ export class HelpdeskDocumentsController {
         }
     }
 
-    // ─── Approve Document ────────────────────────────────────────────────────
+    // ─── TWO-STEP APPROVAL CONTROLLER METHODS ────────────────────────────────
 
+    /**
+     * POST /api/helpdesk/documents/:id/internal/preview
+     * Super admin previews a document internally
+     * Requester does not see this action
+     */
+    static async internalPreview(req: Request, res: Response, next: NextFunction) {
+        try {
+            const id = getParam(req, 'id');
+            const userId = (req as any).user?.id as string;
+            const body = req.body as InternalPreviewDocumentBody;
+
+            const doc = await HelpdeskDocumentsService.internalPreview(
+                id,
+                {
+                    document_id: id,
+                    previewed_by: body.previewed_by || userId,
+                    previewed_by_name: body.previewed_by_name || (req as any).user?.full_name,
+                    comments: body.comments,
+                    ip_address: body.ip_address,
+                    user_agent: body.user_agent,
+                }
+            );
+
+            return sendSuccess(res, doc, 'Document previewed successfully.');
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    /**
+     * POST /api/helpdesk/documents/:id/internal/approve
+     * Super admin approves internally
+     * Requester still sees 'pending_approval' until send back
+     */
+    static async internalApprove(req: Request, res: Response, next: NextFunction) {
+        try {
+            const id = getParam(req, 'id');
+            const userId = (req as any).user?.id as string;
+            const body = req.body as InternalApproveDocumentBody;
+
+            const doc = await HelpdeskDocumentsService.internalApprove(
+                id,
+                {
+                    document_id: id,
+                    action: 'approve',
+                    approved_by: body.approved_by || userId,
+                    approved_by_name: body.approved_by_name || (req as any).user?.full_name,
+                    comments: body.comments,
+                    generate_e_stamp: body.generate_e_stamp ?? true,
+                }
+            );
+
+            return sendSuccess(res, doc, 'Document approved internally. Send back to requester when ready.');
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    /**
+     * POST /api/helpdesk/documents/:id/internal/reject
+     * Super admin rejects internally
+     * Requester still sees 'pending_approval' until send back
+     */
+    static async internalReject(req: Request, res: Response, next: NextFunction) {
+        try {
+            const id = getParam(req, 'id');
+            const userId = (req as any).user?.id as string;
+            const body = req.body as InternalRejectDocumentBody;
+
+            if (!body.rejection_reason) {
+                throw new AppError(400, 'Rejection reason is required');
+            }
+
+            const doc = await HelpdeskDocumentsService.internalReject(
+                id,
+                {
+                    document_id: id,
+                    action: 'reject',
+                    approved_by: body.rejected_by || userId,
+                    approved_by_name: body.rejected_by_name || (req as any).user?.full_name,
+                    comments: body.comments,
+                    rejection_reason: body.rejection_reason,
+                }
+            );
+
+            return sendSuccess(res, doc, 'Document rejected internally. Send back to requester when ready.');
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    /**
+     * POST /api/helpdesk/documents/:id/internal/request-changes
+     * Super admin requests changes internally
+     * Requester still sees 'pending_approval' until send back
+     */
+    static async internalRequestChanges(req: Request, res: Response, next: NextFunction) {
+        try {
+            const id = getParam(req, 'id');
+            const userId = (req as any).user?.id as string;
+            const body = req.body as InternalRequestChangesBody;
+
+            if (!body.changes_requested || body.changes_requested.length === 0) {
+                throw new AppError(400, 'At least one change request is required');
+            }
+
+            const doc = await HelpdeskDocumentsService.internalRequestChanges(
+                id,
+                {
+                    document_id: id,
+                    action: 'request_changes',
+                    approved_by: body.requested_by || userId,
+                    approved_by_name: body.requested_by_name || (req as any).user?.full_name,
+                    comments: body.comments,
+                    changes_requested: body.changes_requested,
+                }
+            );
+
+            return sendSuccess(res, doc, 'Changes requested internally. Send back to requester when ready.');
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    /**
+     * POST /api/helpdesk/documents/:id/internal/cancel
+     * Super admin cancels internal approval decision
+     * Resets document back to pending
+     */
+    static async internalCancelApproval(req: Request, res: Response, next: NextFunction) {
+        try {
+            const id = getParam(req, 'id');
+            const userId = (req as any).user?.id as string;
+            const body = req.body as InternalCancelApprovalBody;
+
+            const doc = await HelpdeskDocumentsService.cancelInternalApproval(
+                id,
+                {
+                    document_id: id,
+                    cancelled_by: body.cancelled_by || userId,
+                    cancelled_by_name: body.cancelled_by_name || (req as any).user?.full_name,
+                    reason: body.reason,
+                }
+            );
+
+            return sendSuccess(res, doc, 'Internal approval decision cancelled.');
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    /**
+     * POST /api/helpdesk/documents/:id/send-back
+     * Super admin sends document back to requester
+     * THIS is when the requester finally sees the status change
+     */
+    static async sendBackToRequester(req: Request, res: Response, next: NextFunction) {
+        try {
+            const id = getParam(req, 'id');
+            const userId = (req as any).user?.id as string;
+            const body = req.body as SendBackToRequesterBody;
+
+            if (!body.final_status) {
+                throw new AppError(400, 'Final status is required');
+            }
+
+            // Ensure final_status is one of the allowed values
+            const validStatuses = ['approved', 'rejected', 'changes_requested'];
+            if (!validStatuses.includes(body.final_status)) {
+                throw new AppError(400, `Final status must be one of: ${validStatuses.join(', ')}`);
+            }
+
+            const doc = await HelpdeskDocumentsService.sendBackToRequester(
+                id,
+                {
+                    document_id: id,
+                    sent_by: body.sent_by || userId,
+                    sent_by_name: body.sent_by_name || (req as any).user?.full_name,
+                    comments: body.comments,
+                    final_status: body.final_status as 'approved' | 'rejected' | 'changes_requested',
+                    requester_message: body.requester_message,
+                    notify_requester: body.notify_requester ?? true,
+                }
+            );
+
+            const statusMessages: Record<string, string> = {
+                approved: 'Document approved and sent back to requester.',
+                rejected: 'Document rejected and sent back to requester.',
+                changes_requested: 'Changes requested and sent back to requester.',
+            };
+
+            return sendSuccess(res, doc, statusMessages[body.final_status] || 'Document sent back to requester.');
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    /**
+     * POST /api/helpdesk/documents/:id/resubmit
+     * Requester resubmits document after making changes
+     */
+    static async resubmitDocument(req: Request, res: Response, next: NextFunction) {
+        try {
+            const id = getParam(req, 'id');
+            const userId = (req as any).user?.id as string;
+            const body = req.body as ResubmitDocumentBody;
+
+            const doc = await HelpdeskDocumentsService.resubmitAfterChanges(
+                id,
+                {
+                    document_id: id,
+                    submitted_by: body.submitted_by || userId,
+                    submitted_by_name: body.submitted_by_name || (req as any).user?.full_name,
+                    comments: body.comments,
+                    file_update: body.file_update || false,
+                }
+            );
+
+            return sendSuccess(res, doc, 'Document resubmitted successfully.');
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    // ─── TWO-STEP APPROVAL DASHBOARD METHODS ──────────────────────────────────
+
+    /**
+     * GET /api/helpdesk/documents/pending-internal
+     * Super admin dashboard - get pending internal approvals
+     */
+    static async getPendingInternalApprovals(req: Request, res: Response, next: NextFunction) {
+        try {
+            const entity_type = getQueryEnum(req, 'entity_type', [
+                'circuit', 'bench', 'partHeard', 'serviceWeek', 
+                'otherPayment', 'ticket', 'medicalClaim', 
+                'generalRequest', 'securityRequest',
+                'visa', 'protocol', 'club', 'utility_memo', 
+                'consolidated_utility_memo', 'consolidated_fuel_memo',
+                'aide', 'sentry'
+            ] as const);
+            
+            const internal_approval_status = getQueryEnum(req, 'internal_approval_status', [
+                'pending', 'previewed', 'approved_internal', 'rejected_internal',
+                'changes_requested_internal', 'changes_ready'
+            ] as const);
+            
+            const search = getQueryParam(req, 'search');
+            const limit = getQueryNumber(req, 'limit');
+            const offset = getQueryNumber(req, 'offset');
+
+            const docs = await HelpdeskDocumentsService.getPendingInternalApprovals({
+                entity_type,
+                internal_approval_status,
+                search,
+                limit,
+                offset,
+            });
+
+            // Also get summary for the dashboard
+            const summary = await HelpdeskDocumentsService.getPendingInternalApprovalsSummary({
+                entity_type,
+            });
+
+            return sendSuccess(res, {
+                documents: docs,
+                summary,
+            }, `Found ${docs.length} pending internal approvals.`);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    /**
+     * GET /api/helpdesk/documents/pending-internal/summary
+     * Get internal approval summary stats for super admin dashboard
+     */
+    static async getPendingInternalSummary(req: Request, res: Response, next: NextFunction) {
+        try {
+            const entity_type = getQueryParam(req, 'entity_type') as any;
+
+            const summary = await HelpdeskDocumentsService.getPendingInternalApprovalsSummary({
+                entity_type,
+            });
+
+            return sendSuccess(res, summary, 'Pending internal approvals summary retrieved.');
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    /**
+     * GET /api/helpdesk/documents/requester-dashboard
+     * Requester dashboard - get documents visible to requester
+     */
+    static async getRequesterDashboard(req: Request, res: Response, next: NextFunction) {
+        try {
+            const userId = (req as any).user?.id as string;
+            
+            if (!userId) {
+                throw new AppError(401, 'User not authenticated');
+            }
+
+            const requester_status = getQueryEnum(req, 'requester_status', [
+                'pending_approval', 'approved', 'rejected', 'changes_requested', 'in_revision'
+            ] as const);
+            
+            const entity_type = getQueryEnum(req, 'entity_type', [
+                'circuit', 'bench', 'partHeard', 'serviceWeek', 
+                'otherPayment', 'ticket', 'medicalClaim', 
+                'generalRequest', 'securityRequest',
+                'visa', 'protocol', 'club', 'utility_memo', 
+                'consolidated_utility_memo', 'consolidated_fuel_memo',
+                'aide', 'sentry'
+            ] as const);
+            
+            const search = getQueryParam(req, 'search');
+            const limit = getQueryNumber(req, 'limit');
+            const offset = getQueryNumber(req, 'offset');
+
+            const docs = await HelpdeskDocumentsService.getRequesterDocuments(userId, {
+                requester_status,
+                entity_type,
+                search,
+                limit,
+                offset,
+            });
+
+            // Get summary stats for requester
+            const allDocs = await HelpdeskDocumentsService.getRequesterDocuments(userId, {
+                requester_status,
+                entity_type,
+            });
+
+            const summary = {
+                total: allDocs.length,
+                by_status: allDocs.reduce((acc, doc) => {
+                    acc[doc.status] = (acc[doc.status] || 0) + 1;
+                    return acc;
+                }, {} as Record<string, number>),
+                can_resubmit: allDocs.filter(doc => doc.can_resubmit).length,
+            };
+
+            return sendSuccess(res, {
+                documents: docs,
+                summary,
+            }, `Found ${docs.length} documents for requester.`);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    // ─── LEGACY METHODS (Deprecated) ──────────────────────────────────────────
+
+    /**
+     * @deprecated Use internalApprove() and sendBackToRequester() instead
+     */
     static async approve(req: Request, res: Response, next: NextFunction) {
         try {
             const id = getParam(req, 'id');
@@ -610,8 +988,9 @@ export class HelpdeskDocumentsController {
         }
     }
 
-    // ─── Reject Document ─────────────────────────────────────────────────────
-
+    /**
+     * @deprecated Use internalReject() and sendBackToRequester() instead
+     */
     static async reject(req: Request, res: Response, next: NextFunction) {
         try {
             const id = getParam(req, 'id');
@@ -630,8 +1009,9 @@ export class HelpdeskDocumentsController {
         }
     }
 
-    // ─── Return Document ─────────────────────────────────────────────────────
-
+    /**
+     * @deprecated Use internalRequestChanges() and sendBackToRequester() instead
+     */
     static async returnDocument(req: Request, res: Response, next: NextFunction) {
         try {
             const id = getParam(req, 'id');

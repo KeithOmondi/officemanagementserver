@@ -39,6 +39,25 @@ console.log('[SCHEMA-LOAD] helpdesk.documents.schema.ts', {
 
 const documentStatusEnum = z.enum(['draft', 'pending_approval', 'approved', 'rejected', 'returned']);
 
+// ─── Two-Step Approval Enums ─────────────────────────────────────────────────
+
+const internalApprovalStatusEnum = z.enum([
+    'pending',
+    'previewed',
+    'approved_internal',
+    'rejected_internal',
+    'changes_requested_internal',
+    'changes_ready'
+]);
+
+const requesterVisibleStatusEnum = z.enum([
+    'pending_approval',
+    'approved',
+    'rejected',
+    'changes_requested',
+    'in_revision'
+]);
+
 const requestTypeEnum = z.enum([
     'Driver',
     'Bodyguard',
@@ -171,6 +190,14 @@ export const listHelpdeskDocumentsSchema = z.object({
         date_from: dateStringSchema.optional(),
         date_to: dateStringSchema.optional(),
         
+        // ─── Two-Step Approval Filters ──────────────────────────────────────────
+        internal_approval_status: internalApprovalStatusEnum.optional(),
+        requester_status: requesterVisibleStatusEnum.optional(),
+        is_sent_back_to_requester: z.string().transform((val) => val === 'true').optional(),
+        pending_internal_approval: z.string().transform((val) => val === 'true').optional(),
+        ready_to_send_back: z.string().transform((val) => val === 'true').optional(),
+        my_requester_documents: z.string().transform((val) => val === 'true').optional(),
+        
         // ─── Aide Request Filters ──────────────────────────────────────────────
         officer_rank: z.string().pipe(officerRankEnum).optional(),
         officer_name: z.string().optional(),
@@ -242,6 +269,8 @@ export const submitDocumentForApprovalSchema = z.object({
 });
 
 // ─── POST /api/helpdesk/documents/:id/approve ────────────────────────────────
+// ⚠️ DEPRECATED: This is the old single-step approval.
+// Use /api/helpdesk/documents/:id/internal/approve for two-step workflow
 export const approveDocumentSchema = z.object({
     params: z.object({
         id: z.string().uuid('Document ID must be a valid UUID'),
@@ -256,6 +285,8 @@ export const approveDocumentSchema = z.object({
 });
 
 // ─── POST /api/helpdesk/documents/:id/reject ─────────────────────────────────
+// ⚠️ DEPRECATED: This is the old single-step rejection.
+// Use /api/helpdesk/documents/:id/internal/reject for two-step workflow
 export const rejectDocumentSchema = z.object({
     params: z.object({
         id: z.string().uuid('Document ID must be a valid UUID'),
@@ -269,6 +300,8 @@ export const rejectDocumentSchema = z.object({
 });
 
 // ─── POST /api/helpdesk/documents/:id/return ─────────────────────────────────
+// ⚠️ DEPRECATED: This is the old single-step return.
+// Use /api/helpdesk/documents/:id/internal/return for two-step workflow
 export const returnDocumentSchema = z.object({
     params: z.object({
         id: z.string().uuid('Document ID must be a valid UUID'),
@@ -456,6 +489,173 @@ export const batchUploadSchema = z.object({
     }),
 });
 
+// ─── TWO-STEP APPROVAL SCHEMAS ─────────────────────────────────────────────────
+
+/**
+ * POST /api/helpdesk/documents/:id/internal/preview
+ * Super admin previews a document (internal action)
+ */
+export const internalPreviewDocumentSchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Document ID must be a valid UUID'),
+    }),
+    body: z.object({
+        previewed_by: z.string().uuid().optional(),
+        previewed_by_name: z.string().max(100).optional(),
+        comments: z.string().max(500).optional(),
+        ip_address: z.string().ipv4().optional(), // ✅ Use .ipv4() or .ipv6()
+        user_agent: z.string().optional(),
+    }),
+});
+
+/**
+ * POST /api/helpdesk/documents/:id/internal/approve
+ * Super admin approves internally (requester doesn't see this yet)
+ */
+export const internalApproveDocumentSchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Document ID must be a valid UUID'),
+    }),
+    body: z.object({
+        approved_by: z.string().uuid().optional(),
+        approved_by_name: z.string().max(100).optional(),
+        comments: z.string().max(500).optional(),
+        generate_e_stamp: z.boolean().default(true),
+    }),
+});
+
+/**
+ * POST /api/helpdesk/documents/:id/internal/reject
+ * Super admin rejects internally (requester doesn't see this yet)
+ */
+export const internalRejectDocumentSchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Document ID must be a valid UUID'),
+    }),
+    body: z.object({
+        rejection_reason: z.string().min(1, 'Rejection reason is required').max(500),
+        rejected_by: z.string().uuid().optional(),
+        rejected_by_name: z.string().max(100).optional(),
+        comments: z.string().max(500).optional(),
+    }),
+});
+
+/**
+ * POST /api/helpdesk/documents/:id/internal/request-changes
+ * Super admin requests changes internally (requester doesn't see this yet)
+ */
+export const internalRequestChangesSchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Document ID must be a valid UUID'),
+    }),
+    body: z.object({
+        changes_requested: z.array(z.string()).min(1, 'At least one change request is required'),
+        requested_by: z.string().uuid().optional(),
+        requested_by_name: z.string().max(100).optional(),
+        comments: z.string().max(500).optional(),
+    }),
+});
+
+/**
+ * POST /api/helpdesk/documents/:id/internal/cancel
+ * Super admin cancels internal approval decision (resets to pending)
+ */
+export const internalCancelApprovalSchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Document ID must be a valid UUID'),
+    }),
+    body: z.object({
+        cancelled_by: z.string().uuid().optional(),
+        cancelled_by_name: z.string().max(100).optional(),
+        reason: z.string().max(500).optional(),
+    }),
+});
+
+/**
+ * POST /api/helpdesk/documents/:id/send-back
+ * Super admin sends document back to requester (this is when requester sees the status)
+ */
+export const sendBackToRequesterSchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Document ID must be a valid UUID'),
+    }),
+    body: z.object({
+        final_status: requesterVisibleStatusEnum, // 'approved' | 'rejected' | 'changes_requested'
+        sent_by: z.string().uuid().optional(),
+        sent_by_name: z.string().max(100).optional(),
+        comments: z.string().max(500).optional(),
+        requester_message: z.string().max(500).optional(),
+        notify_requester: z.boolean().default(true),
+    }),
+});
+
+/**
+ * POST /api/helpdesk/documents/:id/resubmit
+ * Requester resubmits document after changes
+ */
+export const resubmitDocumentSchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Document ID must be a valid UUID'),
+    }),
+    body: z.object({
+        submitted_by: z.string().uuid().optional(),
+        submitted_by_name: z.string().max(100).optional(),
+        comments: z.string().max(500).optional(),
+        file_update: z.boolean().default(false),
+    }),
+});
+
+/**
+ * GET /api/helpdesk/documents/pending-internal
+ * Super admin dashboard - get pending internal approvals
+ */
+export const pendingInternalApprovalsSchema = z.object({
+    query: z.object({
+        entity_type: documentEntityEnum.optional(),
+        internal_approval_status: internalApprovalStatusEnum.optional(),
+        priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),
+        date_from: dateStringSchema.optional(),
+        date_to: dateStringSchema.optional(),
+        search: z.string().optional(),
+        limit: z.string().regex(/^\d+$/).optional().transform(Number),
+        offset: z.string().regex(/^\d+$/).optional().transform(Number),
+    }),
+});
+
+/**
+ * GET /api/helpdesk/documents/requester-dashboard
+ * Requester dashboard - get documents visible to requester
+ */
+export const requesterDashboardSchema = z.object({
+    query: z.object({
+        requester_status: requesterVisibleStatusEnum.optional(),
+        entity_type: documentEntityEnum.optional(),
+        search: z.string().optional(),
+        limit: z.string().regex(/^\d+$/).optional().transform(Number),
+        offset: z.string().regex(/^\d+$/).optional().transform(Number),
+    }),
+});
+
+/**
+ * GET /api/helpdesk/documents/internal-summary
+ * Get internal approval summary (super admin dashboard stats)
+ */
+export const internalApprovalSummarySchema = z.object({
+    query: z.object({
+        entity_type: documentEntityEnum.optional(),
+    }).optional(),
+});
+
+/**
+ * GET /api/helpdesk/documents/requester-summary
+ * Get requester dashboard summary
+ */
+export const requesterSummarySchema = z.object({
+    query: z.object({
+        user_id: z.string().uuid().optional(),
+    }),
+});
+
 // ─── Type exports ─────────────────────────────────────────────────────────────
 
 // Core Types
@@ -481,11 +681,24 @@ export type DeleteCommentParams = z.infer<typeof deleteCommentSchema>['params'];
 export type UpdateDocumentFileBody = z.infer<typeof updateDocumentFileSchema>['body'];
 export type FileValidation = z.infer<typeof fileValidationSchema>;
 
+// Two-Step Approval Types
+export type InternalPreviewDocumentBody = z.infer<typeof internalPreviewDocumentSchema>['body'];
+export type InternalApproveDocumentBody = z.infer<typeof internalApproveDocumentSchema>['body'];
+export type InternalRejectDocumentBody = z.infer<typeof internalRejectDocumentSchema>['body'];
+export type InternalRequestChangesBody = z.infer<typeof internalRequestChangesSchema>['body'];
+export type InternalCancelApprovalBody = z.infer<typeof internalCancelApprovalSchema>['body'];
+export type SendBackToRequesterBody = z.infer<typeof sendBackToRequesterSchema>['body'];
+export type ResubmitDocumentBody = z.infer<typeof resubmitDocumentSchema>['body'];
+export type PendingInternalApprovalsQuery = z.infer<typeof pendingInternalApprovalsSchema>['query'];
+export type RequesterDashboardQuery = z.infer<typeof requesterDashboardSchema>['query'];
+
 // Export enums for use in routes
 export {
     documentFormatEnum,
     documentEntityEnum,
     documentStatusEnum,
+    internalApprovalStatusEnum,
+    requesterVisibleStatusEnum,
     requestTypeEnum,
     aideStatusEnum,
     sentryStatusEnum,

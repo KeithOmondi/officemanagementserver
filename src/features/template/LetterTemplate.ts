@@ -461,7 +461,6 @@ export function getLetterHTML(data: LetterData): string {
               </div>
 
               <div class="signature-section">
-                <p class="valediction">Yours sincerely,</p>
                 <div class="signature-anchor">${SIGNATURE_ANCHOR_TEXT}</div>
                 
                 <div class="signature">

@@ -115,6 +115,16 @@ export interface HelpdeskDocument {
     is_sent_back_to_requester: boolean; // Document has been sent back to requester
     is_requester_notified: boolean; // Requester has been notified
 
+    // ─── Signature Fields ──────────────────────────────────────────────────────
+    is_signed: boolean;                    // Whether the document has been signed
+    signed_by?: string;                    // ID of the user who signed
+    signed_by_name?: string;               // Name of the user who signed
+    signed_at?: string;                    // When the document was signed
+    signature_position_x?: number | null;  // X position of signature on PDF
+    signature_position_y?: number | null;  // Y position of signature on PDF
+    signature_position_width?: number | null;  // Width of signature on PDF
+    signature_position_height?: number | null; // Height of signature on PDF
+
     // ─── Aide Request Fields ──────────────────────────────────────────────────
     officer_rank?: string | null;
     officer_name?: string | null;
@@ -136,7 +146,7 @@ export interface HelpdeskDocument {
 export interface ApprovalHistoryEntry {
     id: string;
     document_id: string;
-    action: 'submitted' | 'approved' | 'rejected' | 'returned' | 'previewed' | 'sent_back' | 'resubmitted';
+    action: 'submitted' | 'approved' | 'rejected' | 'returned' | 'previewed' | 'sent_back' | 'resubmitted' | 'signed';
     from_user_id: string;
     from_user_name: string;
     to_user_id?: string;
@@ -208,6 +218,11 @@ export interface UpdateDocumentFileInput {
     rejection_reason?: string;
     returned_by?: string;
     returned_by_name?: string;
+    // ─── Signature fields ──────────────────────────────────────────────────────
+    is_signed?: boolean;
+    signed_by?: string;
+    signed_by_name?: string;
+    signed_at?: string;
 }
 
 export interface HelpdeskDocumentFilters {
@@ -267,6 +282,11 @@ export interface InternalApprovalRequest {
     approved_by_name?: string;
     // Optional: generate e-stamp immediately on internal approval
     generate_e_stamp?: boolean;
+    // ─── Signature position ─────────────────────────────────────────────────
+    signature_position_x?: number;
+    signature_position_y?: number;
+    signature_position_width?: number;
+    signature_position_height?: number;
 }
 
 /**
@@ -379,6 +399,10 @@ export interface RequesterDocumentView {
     rejection_reason?: string;
     // Show if resubmit is allowed
     can_resubmit: boolean;
+    // ─── Signature info ──────────────────────────────────────────────────────
+    is_signed: boolean;
+    signed_by_name?: string;
+    signed_at?: string;
 }
 
 // ─── Notification Types ──────────────────────────────────────────────────────
@@ -828,15 +852,15 @@ export function getNextInternalStatus(
             approve: 'approved_internal',
             reject: 'rejected_internal',
             request_changes: 'changes_requested_internal',
-            resubmit_changes: 'pending', // Shouldn't happen from pending
+            resubmit_changes: 'pending',
             cancel: 'pending',
         },
         previewed: {
-            preview: 'previewed', // Can preview multiple times
+            preview: 'previewed',
             approve: 'approved_internal',
             reject: 'rejected_internal',
             request_changes: 'changes_requested_internal',
-            resubmit_changes: 'pending', // Shouldn't happen from previewed
+            resubmit_changes: 'pending',
             cancel: 'pending',
         },
         approved_internal: {
@@ -852,7 +876,7 @@ export function getNextInternalStatus(
             approve: 'approved_internal',
             reject: 'rejected_internal',
             request_changes: 'changes_requested_internal',
-            resubmit_changes: 'pending', // Requester can resubmit after rejection
+            resubmit_changes: 'pending',
             cancel: 'pending',
         },
         changes_requested_internal: {
@@ -860,11 +884,11 @@ export function getNextInternalStatus(
             approve: 'approved_internal',
             reject: 'rejected_internal',
             request_changes: 'changes_requested_internal',
-            resubmit_changes: 'changes_ready', // Requester has made changes
+            resubmit_changes: 'changes_ready',
             cancel: 'pending',
         },
         changes_ready: {
-            preview: 'previewed', // Super admin reviews changes
+            preview: 'previewed',
             approve: 'approved_internal',
             reject: 'rejected_internal',
             request_changes: 'changes_requested_internal',
@@ -992,7 +1016,7 @@ export function getConsolidatedMemoEntityId(
     type: ConsolidatedMemoType,
     date: Date = new Date()
 ): string {
-    const month = date.toISOString().slice(0, 7); // YYYY-MM
+    const month = date.toISOString().slice(0, 7);
     return `cons-${type}-${month}`;
 }
 
@@ -1123,7 +1147,17 @@ export const TWO_STEP_APPROVAL_TABLE_COLUMNS = `
     -- Flags
     is_internal_approval_complete BOOLEAN DEFAULT FALSE,
     is_sent_back_to_requester BOOLEAN DEFAULT FALSE,
-    is_requester_notified BOOLEAN DEFAULT FALSE
+    is_requester_notified BOOLEAN DEFAULT FALSE,
+    
+    -- Signature fields
+    is_signed BOOLEAN DEFAULT FALSE,
+    signed_by UUID,
+    signed_by_name VARCHAR(255),
+    signed_at TIMESTAMP,
+    signature_position_x FLOAT,
+    signature_position_y FLOAT,
+    signature_position_width FLOAT,
+    signature_position_height FLOAT
 `;
 
 export const PREVIEW_HISTORY_TABLE_SCHEMA = `

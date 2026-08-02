@@ -2,8 +2,8 @@
 
 export type ProjectTaskStatus = 'todo' | 'inprogress' | 'done' | 'overdue' | 'pending_approval' | 'blocked' | 'review';
 export type ProjectPriority = 'low' | 'normal' | 'high' | 'urgent' | 'critical';
-export type ProjectTaskType = 'task' | 'bug' | 'feature' | 'improvement' | 'support' | 'maintenance';
 export type ProjectVisibility = 'public' | 'private' | 'team';
+export type ChecklistStatus = 'completed' | 'in_progress' | 'no_progress' | 'pending';
 
 export interface ProjectUser {
     id: string;
@@ -40,7 +40,7 @@ export interface ProjectTask {
     description: string | null;
     status: ProjectTaskStatus;
     priority: ProjectPriority;
-    type: ProjectTaskType;
+    type?: string; // Free text field, not required
     assignee: string | null;
     assignee_name: string | null;
     deadline: string;
@@ -57,6 +57,13 @@ export interface ProjectTask {
     updated_at: string;
     subtasks?: ProjectSubtask[];
     comments?: ProjectTaskComment[];
+    
+    // Checklist-specific fields
+    checklist_status?: ChecklistStatus;
+    next_steps?: string | null;
+    team_lead?: string | null;
+    serial_number?: number | null;
+    category?: string | null;
 }
 
 export interface Project {
@@ -102,7 +109,7 @@ export interface CreateProjectTaskInput {
     description?: string | null;
     status?: ProjectTaskStatus;
     priority?: ProjectPriority;
-    type?: ProjectTaskType;
+    type?: string; // Free text field
     assignee?: string | null;
     deadline?: string;
     start_date?: string | null;
@@ -110,6 +117,13 @@ export interface CreateProjectTaskInput {
     estimated_hours?: number;
     parent_task_id?: string | null;
     visibility?: ProjectVisibility;
+    
+    // Checklist-specific fields
+    checklist_status?: ChecklistStatus;
+    next_steps?: string | null;
+    team_lead?: string | null;
+    serial_number?: number | null;
+    category?: string | null;
 }
 
 export interface UpdateProjectTaskInput {
@@ -118,7 +132,7 @@ export interface UpdateProjectTaskInput {
     description?: string | null;
     status?: ProjectTaskStatus;
     priority?: ProjectPriority;
-    type?: ProjectTaskType;
+    type?: string; // Free text field
     assignee?: string | null;
     deadline?: string | null;
     start_date?: string | null;
@@ -127,12 +141,19 @@ export interface UpdateProjectTaskInput {
     actual_hours?: number | null;
     parent_task_id?: string | null;
     visibility?: ProjectVisibility;
+    
+    // Checklist-specific fields
+    checklist_status?: ChecklistStatus;
+    next_steps?: string | null;
+    team_lead?: string | null;
+    serial_number?: number | null;
+    category?: string | null;
 }
 
 export interface CreateProjectSubtaskInput {
     title: string;
-    description?: string | null;  // ✅ Fixed: Allow null
-    assigned_to?: string | null;  // ✅ Fixed: Allow null
+    description?: string | null;
+    assigned_to?: string | null;
 }
 
 export interface UpdateProjectSubtaskInput {
@@ -154,7 +175,7 @@ export interface ProjectTaskFilters {
     project_id?: string;
     status?: ProjectTaskStatus;
     priority?: ProjectPriority;
-    type?: ProjectTaskType;
+    type?: string; // Free text field for filtering
     assignee?: string;
     tags?: string[] | string;
     search?: string;
@@ -164,6 +185,11 @@ export interface ProjectTaskFilters {
     limit?: number;
     sort_by?: 'created_at' | 'deadline' | 'priority' | 'status' | 'title';
     sort_order?: 'ASC' | 'DESC';
+    
+    // Checklist-specific filters
+    checklist_status?: ChecklistStatus;
+    category?: string;
+    team_lead?: string;
 }
 
 export interface ProjectFilters {
@@ -197,4 +223,78 @@ export interface ProjectStats {
     blocked: number;
     review: number;
     total: number;
+}
+
+// ─── Checklist-Specific Types ──────────────────────────────────────────────
+
+export interface ChecklistTask {
+    serial_number: number;
+    activity: string;
+    status: ChecklistStatus;
+    next_steps: string | null;
+    team_lead: string | null;
+    category: string | null;
+    task_id?: string; // Reference to the underlying ProjectTask
+    description?: string | null;
+    deadline?: string | null;
+    priority?: string | null;
+    assignee_name?: string | null;
+}
+
+export interface ChecklistSection {
+    category: string;
+    tasks: ChecklistTask[];
+    total: number;
+    completed: number;
+    in_progress: number;
+    no_progress: number;
+    pending: number;
+}
+
+export interface ChecklistStats {
+    total: number;
+    completed: number;
+    in_progress: number;
+    no_progress: number;
+    pending: number;
+    sections: ChecklistSection[];
+    completion_percentage: number;
+}
+
+// ─── Component Props Types ──────────────────────────────────────────────────
+
+export interface ChecklistTableProps {
+    tasks: ChecklistTask[];
+    onStatusChange: (serialNumber: number, status: ChecklistStatus) => void;
+    onNextStepsUpdate: (serialNumber: number, nextSteps: string) => void;
+    onTeamLeadUpdate: (serialNumber: number, teamLead: string) => void;
+    onTaskClick?: (taskId: string) => void;
+    isLoading?: boolean;
+}
+
+export interface ChecklistFilters {
+    category?: string;
+    status?: ChecklistStatus;
+    team_lead?: string;
+    search?: string;
+}
+
+// ─── Additional Utility Types ──────────────────────────────────────────────
+
+export interface ChecklistStatsResponse {
+    stats: ChecklistStats;
+    categories: string[];
+}
+
+export interface ChecklistBulkUpdateResult {
+    success: boolean;
+    updated_count: number;
+    failed_ids?: string[];
+    errors?: Array<{ id: string; error: string }>;
+}
+
+export interface ChecklistReorderResult {
+    success: boolean;
+    reordered_count: number;
+    category?: string | null;
 }

@@ -3,6 +3,8 @@
 import { pool } from '../../config/db';
 import { AppError } from '../../utils/response';
 import { uploadToCloudinary, deleteFromCloudinary } from '../../config/cloudinary';
+import { embedSignatureIntoPDF } from '../../utils/embedSignature';
+import axios from 'axios';
 import type {
     HelpdeskDocument,
     CreateHelpdeskDocumentInput,
@@ -52,20 +54,18 @@ const DOC_SELECT = `
     d.requester_visible_by_name, d.resubmit_count, d.last_resubmitted_at,
     d.last_resubmitted_by, d.is_internal_approval_complete,
     d.is_sent_back_to_requester, d.is_requester_notified,
+    -- Signature fields
+    d.is_signed, d.signed_by, d.signed_by_name, d.signed_at,
+    d.signature_position_x, d.signature_position_y,
+    d.signature_position_width, d.signature_position_height,
     u.full_name as uploaded_by_name,
     au.full_name as approved_by_name,
-    ru.full_name as returned_by_name
+    ru.full_name as returned_by_name,
+    su.full_name as signed_by_name
 `;
 
 // ─── Helper: Clean input for database ─────────────────────────────────────────
 
-/**
- * Cleans the input by converting null/undefined/empty strings to appropriate values
- * for database insertion.
- * 
- * entity_id is treated as a free‑text string – it can be a UUID or a custom ID
- * (e.g., "cons-all-2026-07" for consolidated memos).
- */
 function cleanInput(input: CreateHelpdeskDocumentInput): CreateHelpdeskDocumentInput {
     const cleaned: CreateHelpdeskDocumentInput = {
         ref: input.ref?.trim() || '',
@@ -78,7 +78,6 @@ function cleanInput(input: CreateHelpdeskDocumentInput): CreateHelpdeskDocumentI
         judge_name: input.judge_name === null ? undefined : input.judge_name?.trim() || undefined,
         rank: input.rank === null ? undefined : input.rank?.trim() || undefined,
         reporting_date: input.reporting_date === null ? undefined : input.reporting_date?.trim() || undefined,
-        // ─── Aide Request Fields ──────────────────────────────────────────────
         officer_rank: input.officer_rank === null ? undefined : input.officer_rank?.trim() || undefined,
         officer_name: input.officer_name === null ? undefined : input.officer_name?.trim() || undefined,
         employment_number: input.employment_number === null ? undefined : input.employment_number?.trim() || undefined,
@@ -86,11 +85,9 @@ function cleanInput(input: CreateHelpdeskDocumentInput): CreateHelpdeskDocumentI
         current_unit: input.current_unit === null ? undefined : input.current_unit?.trim() || undefined,
         proposed_assignment: input.proposed_assignment === null ? undefined : input.proposed_assignment?.trim() || undefined,
         aide_status: input.aide_status === null ? undefined : input.aide_status?.trim() || undefined,
-        // ─── Sentry Request Fields ──────────────────────────────────────────────
         residence_location: input.residence_location === null ? undefined : input.residence_location?.trim() || undefined,
         sentry_status: input.sentry_status === null ? undefined : input.sentry_status?.trim() || undefined,
     };
-    
     return cleaned;
 }
 
@@ -105,18 +102,15 @@ export class HelpdeskDocumentsService {
         input: CreateHelpdeskDocumentInput,
         userId: string
     ): Promise<HelpdeskDocument> {
-        // ─── VALIDATE: File exists ──────────────────────────────────────────────
         if (!file) {
             throw new AppError(400, 'No file uploaded. Please attach a file to upload.');
         }
 
-        // ─── VALIDATE: File size ────────────────────────────────────────────────
-        const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+        const MAX_FILE_SIZE = 10 * 1024 * 1024;
         if (file.size > MAX_FILE_SIZE) {
             throw new AppError(400, `File size exceeds maximum allowed (${MAX_FILE_SIZE / 1024 / 1024}MB)`);
         }
 
-        // ─── VALIDATE: File type ────────────────────────────────────────────────
         const allowedMimeTypes = [
             'application/pdf',
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -127,8 +121,6 @@ export class HelpdeskDocumentsService {
             throw new AppError(400, `Invalid file type. Allowed types: PDF, DOCX, XLSX. Received: ${file.mimetype}`);
         }
 
-        // ─── VALIDATE: Input fields ─────────────────────────────────────────────
-        // Clean the input first
         const cleaned = cleanInput(input);
 
         if (!cleaned.ref?.trim()) {
@@ -144,7 +136,6 @@ export class HelpdeskDocumentsService {
             throw new AppError(400, 'Document format is required');
         }
 
-        // ─── VALIDATE: Format matches file type ─────────────────────────────────
         const formatToMimeMap: Record<string, string[]> = {
             'pdf': ['application/pdf'],
             'docx': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
@@ -159,7 +150,6 @@ export class HelpdeskDocumentsService {
             );
         }
 
-        // ─── UPLOAD to Cloudinary ─────────────────────────────────────────────
         const result = await uploadToCloudinary(file, FOLDER);
 
         try {
@@ -171,7 +161,6 @@ export class HelpdeskDocumentsService {
                      officer_rank, officer_name, employment_number,
                      current_station, current_unit, proposed_assignment, aide_status,
                      residence_location, sentry_status,
-                     -- Two-step approval default values
                      internal_approval_status, requester_status)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 
                          $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
@@ -200,8 +189,8 @@ export class HelpdeskDocumentsService {
                     cleaned.aide_status || null,
                     cleaned.residence_location || null,
                     cleaned.sentry_status || null,
-                    'pending', // internal_approval_status
-                    'pending_approval', // requester_status
+                    'pending',
+                    'pending_approval',
                 ]
             );
 
@@ -224,18 +213,15 @@ export class HelpdeskDocumentsService {
         input: UpdateDocumentFileInput,
         userId?: string
     ): Promise<HelpdeskDocument> {
-        // ─── VALIDATE: File exists ──────────────────────────────────────────────
         if (!file) {
             throw new AppError(400, 'No file uploaded. Please attach a file to update.');
         }
 
-        // ─── VALIDATE: File size ────────────────────────────────────────────────
-        const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+        const MAX_FILE_SIZE = 10 * 1024 * 1024;
         if (file.size > MAX_FILE_SIZE) {
             throw new AppError(400, `File size exceeds maximum allowed (${MAX_FILE_SIZE / 1024 / 1024}MB)`);
         }
 
-        // ─── VALIDATE: File type ────────────────────────────────────────────────
         const allowedMimeTypes = [
             'application/pdf',
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -251,7 +237,6 @@ export class HelpdeskDocumentsService {
             throw new AppError(404, 'Document not found');
         }
 
-        // ─── VALIDATE: Format matches file type ─────────────────────────────────
         const formatToMimeMap: Record<string, string[]> = {
             'pdf': ['application/pdf'],
             'docx': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
@@ -266,7 +251,6 @@ export class HelpdeskDocumentsService {
             );
         }
 
-        // Upload new file to Cloudinary
         const result = await uploadToCloudinary(file, FOLDER);
 
         const client = await pool.connect();
@@ -277,7 +261,6 @@ export class HelpdeskDocumentsService {
             const values: unknown[] = [];
             let p = 1;
 
-            // Update file fields
             updates.push(`file_url = $${p}`);
             values.push(result.secure_url);
             p++;
@@ -290,14 +273,12 @@ export class HelpdeskDocumentsService {
             values.push(result.bytes ?? null);
             p++;
 
-            // Update status if provided
             if (input.status) {
                 updates.push(`status = $${p}`);
                 values.push(input.status);
                 p++;
             }
 
-            // Update e-stamp fields if provided
             if (input.e_stamp_url !== undefined) {
                 updates.push(`e_stamp_url = $${p}`);
                 values.push(input.e_stamp_url);
@@ -316,7 +297,6 @@ export class HelpdeskDocumentsService {
                 p++;
             }
 
-            // Update approval fields if provided
             if (input.approved_by !== undefined) {
                 updates.push(`approved_by = $${p}`);
                 values.push(input.approved_by);
@@ -329,7 +309,6 @@ export class HelpdeskDocumentsService {
                 p++;
             }
 
-            // Update return fields if provided
             if (input.returned_by !== undefined) {
                 updates.push(`returned_by = $${p}`);
                 values.push(input.returned_by);
@@ -342,22 +321,43 @@ export class HelpdeskDocumentsService {
                 p++;
             }
 
-            // Update rejection reason if provided
             if (input.rejection_reason !== undefined) {
                 updates.push(`rejection_reason = $${p}`);
                 values.push(input.rejection_reason);
                 p++;
             }
 
-            // Add timestamp
+            // ─── Signature fields ──────────────────────────────────────────────
+            if (input.is_signed !== undefined) {
+                updates.push(`is_signed = $${p}`);
+                values.push(input.is_signed);
+                p++;
+            }
+
+            if (input.signed_by !== undefined) {
+                updates.push(`signed_by = $${p}`);
+                values.push(input.signed_by);
+                p++;
+            }
+
+            if (input.signed_by_name !== undefined) {
+                updates.push(`signed_by_name = $${p}`);
+                values.push(input.signed_by_name);
+                p++;
+            }
+
+            if (input.signed_at !== undefined) {
+                updates.push(`signed_at = $${p}`);
+                values.push(input.signed_at);
+                p++;
+            }
+
             updates.push(`updated_at = NOW()`);
 
-            // Set approved_at if status is 'approved'
             if (input.status === 'approved') {
                 updates.push(`approved_at = NOW()`);
             }
 
-            // Set returned_at if status is 'returned'
             if (input.status === 'returned') {
                 updates.push(`returned_at = NOW()`);
             }
@@ -371,7 +371,6 @@ export class HelpdeskDocumentsService {
                 values
             );
 
-            // Add to approval history if status changed
             if (input.status && input.status !== doc.status) {
                 let action: 'submitted' | 'approved' | 'rejected' | 'returned';
                 switch (input.status) {
@@ -400,7 +399,6 @@ export class HelpdeskDocumentsService {
 
             await client.query('COMMIT');
 
-            // Delete old file from Cloudinary after transaction succeeds
             if (doc.public_id) {
                 try {
                     await deleteFromCloudinary(doc.public_id, 'raw');
@@ -415,7 +413,6 @@ export class HelpdeskDocumentsService {
 
         } catch (err) {
             await client.query('ROLLBACK');
-            // Clean up the newly uploaded file if transaction failed
             try {
                 await deleteFromCloudinary(result.public_id, 'raw');
             } catch (cleanupError) {
@@ -438,6 +435,7 @@ export class HelpdeskDocumentsService {
              LEFT JOIN users u ON d.uploaded_by = u.id
              LEFT JOIN users au ON d.approved_by = au.id
              LEFT JOIN users ru ON d.returned_by = ru.id
+             LEFT JOIN users su ON d.signed_by = su.id
              WHERE d.id = $1 AND d.is_active = true`,
             [id]
         );
@@ -463,6 +461,7 @@ export class HelpdeskDocumentsService {
             LEFT JOIN users u ON d.uploaded_by = u.id
             LEFT JOIN users au ON d.approved_by = au.id
             LEFT JOIN users ru ON d.returned_by = ru.id
+            LEFT JOIN users su ON d.signed_by = su.id
             WHERE d.is_active = true
         `;
         const params: unknown[] = [];
@@ -513,7 +512,6 @@ export class HelpdeskDocumentsService {
             params.push(filters.reporting_date);
             p++;
         }
-        // ─── Aide Request Filters ──────────────────────────────────────────────
         if (filters.officer_rank) {
             query += ` AND d.officer_rank = $${p}`;
             params.push(filters.officer_rank);
@@ -544,7 +542,6 @@ export class HelpdeskDocumentsService {
             params.push(filters.aide_status);
             p++;
         }
-        // ─── Sentry Request Filters ──────────────────────────────────────────────
         if (filters.residence_location) {
             query += ` AND d.residence_location ILIKE $${p}`;
             params.push(`%${filters.residence_location}%`);
@@ -574,7 +571,6 @@ export class HelpdeskDocumentsService {
             p++;
         }
 
-        // ─── Two-Step Approval Filters ──────────────────────────────────────────
         if (filters.internal_approval_status) {
             query += ` AND d.internal_approval_status = $${p}`;
             params.push(filters.internal_approval_status);
@@ -638,6 +634,7 @@ export class HelpdeskDocumentsService {
             LEFT JOIN users u ON d.uploaded_by = u.id
             LEFT JOIN users au ON d.approved_by = au.id
             LEFT JOIN users ru ON d.returned_by = ru.id
+            LEFT JOIN users su ON d.signed_by = su.id
             WHERE d.is_active = true
               AND d.entity_type = $1
               AND d.entity_id = $2
@@ -678,12 +675,6 @@ export class HelpdeskDocumentsService {
 
     // ─── Consolidated Memo Helpers ─────────────────────────────────────
 
-    /**
-     * Find a consolidated memo for a given type and month.
-     * @param type - 'all' or 'fuel'
-     * @param date - optional Date (defaults to now). The entity ID will be "cons-{type}-{YYYY-MM}".
-     * @returns the memo document if found, else null
-     */
     static async findConsolidatedMemo(
         type: 'all' | 'fuel',
         date: Date = new Date()
@@ -697,6 +688,7 @@ export class HelpdeskDocumentsService {
              LEFT JOIN users u ON d.uploaded_by = u.id
              LEFT JOIN users au ON d.approved_by = au.id
              LEFT JOIN users ru ON d.returned_by = ru.id
+             LEFT JOIN users su ON d.signed_by = su.id
              WHERE d.is_active = true
                AND d.entity_type = $1
                AND d.entity_id = $2
@@ -717,11 +709,6 @@ export class HelpdeskDocumentsService {
         };
     }
 
-    /**
-     * List all consolidated memos, optionally filtered by type.
-     * @param type - optional 'all' or 'fuel'
-     * @returns array of memo documents
-     */
     static async getConsolidatedMemos(
         type?: 'all' | 'fuel'
     ): Promise<HelpdeskDocument[]> {
@@ -740,7 +727,6 @@ export class HelpdeskDocumentsService {
             result.push(...docs);
         }
 
-        // Sort by created_at descending
         result.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
         return result;
     }
@@ -748,197 +734,196 @@ export class HelpdeskDocumentsService {
     // ─── Get Statistics ──────────────────────────────────────────────────────
 
     static async getStats(filters?: { entity_type?: DocumentEntityType; date_from?: string; date_to?: string }): Promise<DocumentStats> {
-    const params: unknown[] = [];
-    let whereClause = 'WHERE d.is_active = true';
-    let p = 1;
+        const params: unknown[] = [];
+        let whereClause = 'WHERE d.is_active = true';
+        let p = 1;
 
-    if (filters?.entity_type) {
-        whereClause += ` AND d.entity_type = $${p}`;
-        params.push(filters.entity_type);
-        p++;
+        if (filters?.entity_type) {
+            whereClause += ` AND d.entity_type = $${p}`;
+            params.push(filters.entity_type);
+            p++;
+        }
+        if (filters?.date_from) {
+            whereClause += ` AND d.created_at >= $${p}::date`;
+            params.push(filters.date_from);
+            p++;
+        }
+        if (filters?.date_to) {
+            whereClause += ` AND d.created_at <= $${p}::date`;
+            params.push(filters.date_to);
+            p++;
+        }
+
+        const totalQuery = `SELECT COUNT(*) as total FROM helpdesk_documents d ${whereClause}`;
+        const { rows: totalRows } = await pool.query(totalQuery, params);
+        const total = Number(totalRows[0]?.total) || 0;
+
+        const statusQuery = `SELECT d.status, COUNT(*) as count FROM helpdesk_documents d ${whereClause} GROUP BY d.status`;
+        const { rows: statusRows } = await pool.query(statusQuery, params);
+        const statusCounts: Record<string, number> = {};
+        statusRows.forEach(row => {
+            statusCounts[row.status] = Number(row.count);
+        });
+
+        const entityQuery = `
+            SELECT d.entity_type, COUNT(*) as count, 
+                   COUNT(CASE WHEN d.status = 'pending_approval' THEN 1 END) as pending,
+                   COUNT(CASE WHEN d.status = 'approved' THEN 1 END) as approved
+            FROM helpdesk_documents d ${whereClause}
+            GROUP BY d.entity_type
+        `;
+        const { rows: entityRows } = await pool.query(entityQuery, params);
+
+        const activityQuery = `
+            SELECT d.id, d.ref, d.subject, 'submitted' as action, u.full_name as user_name, d.created_at
+            FROM helpdesk_documents d
+            LEFT JOIN users u ON d.uploaded_by = u.id
+            ${whereClause}
+            ORDER BY d.created_at DESC
+            LIMIT 10
+        `;
+        const { rows: activityRows } = await pool.query(activityQuery, params);
+
+        const internalStatsQuery = `
+            SELECT 
+                COUNT(CASE WHEN d.internal_approval_status IN ('pending', 'previewed') THEN 1 END) as pending_internal,
+                COUNT(CASE WHEN d.is_internal_approval_complete = true AND d.is_sent_back_to_requester = false THEN 1 END) as ready_to_send_back
+            FROM helpdesk_documents d
+            ${whereClause}
+        `;
+        const { rows: internalStatsRows } = await pool.query(internalStatsQuery, params);
+
+        return {
+            total,
+            pending_approval: statusCounts.pending_approval || 0,
+            approved: statusCounts.approved || 0,
+            rejected: statusCounts.rejected || 0,
+            returned: statusCounts.returned || 0,
+            draft: statusCounts.draft || 0,
+            by_entity: entityRows.map(row => ({
+                entity_type: row.entity_type as DocumentEntityType,
+                count: Number(row.count),
+                pending: Number(row.pending) || 0,
+                approved: Number(row.approved) || 0,
+            })),
+            recent_activity: activityRows.map(row => ({
+                id: row.id,
+                ref: row.ref,
+                subject: row.subject,
+                action: row.action,
+                user_name: row.user_name || 'System',
+                created_at: row.created_at,
+            })),
+            pending_internal: Number(internalStatsRows[0]?.pending_internal) || 0,
+            ready_to_send_back: Number(internalStatsRows[0]?.ready_to_send_back) || 0,
+        };
     }
-    if (filters?.date_from) {
-        whereClause += ` AND d.created_at >= $${p}::date`;
-        params.push(filters.date_from);
-        p++;
-    }
-    if (filters?.date_to) {
-        whereClause += ` AND d.created_at <= $${p}::date`;
-        params.push(filters.date_to);
-        p++;
-    }
-
-    const totalQuery = `SELECT COUNT(*) as total FROM helpdesk_documents d ${whereClause}`;
-    const { rows: totalRows } = await pool.query(totalQuery, params);
-    const total = Number(totalRows[0]?.total) || 0;
-
-    const statusQuery = `SELECT d.status, COUNT(*) as count FROM helpdesk_documents d ${whereClause} GROUP BY d.status`;
-    const { rows: statusRows } = await pool.query(statusQuery, params);
-    const statusCounts: Record<string, number> = {};
-    statusRows.forEach(row => {
-        statusCounts[row.status] = Number(row.count);
-    });
-
-    const entityQuery = `
-        SELECT d.entity_type, COUNT(*) as count, 
-               COUNT(CASE WHEN d.status = 'pending_approval' THEN 1 END) as pending,
-               COUNT(CASE WHEN d.status = 'approved' THEN 1 END) as approved
-        FROM helpdesk_documents d ${whereClause}
-        GROUP BY d.entity_type
-    `;
-    const { rows: entityRows } = await pool.query(entityQuery, params);
-
-    const activityQuery = `
-        SELECT d.id, d.ref, d.subject, 'submitted' as action, u.full_name as user_name, d.created_at
-        FROM helpdesk_documents d
-        LEFT JOIN users u ON d.uploaded_by = u.id
-        ${whereClause}
-        ORDER BY d.created_at DESC
-        LIMIT 10
-    `;
-    const { rows: activityRows } = await pool.query(activityQuery, params);
-
-    // ─── Two-step approval stats ──────────────────────────────────────────────
-    const internalStatsQuery = `
-        SELECT 
-            COUNT(CASE WHEN d.internal_approval_status IN ('pending', 'previewed') THEN 1 END) as pending_internal,
-            COUNT(CASE WHEN d.is_internal_approval_complete = true AND d.is_sent_back_to_requester = false THEN 1 END) as ready_to_send_back
-        FROM helpdesk_documents d
-        ${whereClause}
-    `;
-    const { rows: internalStatsRows } = await pool.query(internalStatsQuery, params);
-
-    return {
-        total,
-        pending_approval: statusCounts.pending_approval || 0,
-        approved: statusCounts.approved || 0,
-        rejected: statusCounts.rejected || 0,
-        returned: statusCounts.returned || 0,
-        draft: statusCounts.draft || 0,
-        by_entity: entityRows.map(row => ({
-            entity_type: row.entity_type as DocumentEntityType,
-            count: Number(row.count),
-            pending: Number(row.pending) || 0,
-            approved: Number(row.approved) || 0,
-        })),
-        recent_activity: activityRows.map(row => ({
-            id: row.id,
-            ref: row.ref,
-            subject: row.subject,
-            action: row.action,
-            user_name: row.user_name || 'System',
-            created_at: row.created_at,
-        })),
-        pending_internal: Number(internalStatsRows[0]?.pending_internal) || 0,
-        ready_to_send_back: Number(internalStatsRows[0]?.ready_to_send_back) || 0,
-    };
-}
 
     // ─── Get Summary ─────────────────────────────────────────────────────────
-static async getSummary(filters?: { entity_type?: DocumentEntityType }): Promise<DocumentSummary> {
-    const params: unknown[] = [];
-    let whereClause = 'WHERE d.is_active = true';
-    let p = 1;
 
-    if (filters?.entity_type) {
-        whereClause += ` AND d.entity_type = $${p}`;
-        params.push(filters.entity_type);
-        p++;
+    static async getSummary(filters?: { entity_type?: DocumentEntityType }): Promise<DocumentSummary> {
+        const params: unknown[] = [];
+        let whereClause = 'WHERE d.is_active = true';
+        let p = 1;
+
+        if (filters?.entity_type) {
+            whereClause += ` AND d.entity_type = $${p}`;
+            params.push(filters.entity_type);
+            p++;
+        }
+
+        const summaryQuery = `
+            SELECT 
+                COUNT(*) as total,
+                COUNT(CASE WHEN d.status = 'draft' THEN 1 END) as draft,
+                COUNT(CASE WHEN d.status = 'pending_approval' THEN 1 END) as pending_approval,
+                COUNT(CASE WHEN d.status = 'approved' THEN 1 END) as approved,
+                COUNT(CASE WHEN d.status = 'rejected' THEN 1 END) as rejected,
+                COUNT(CASE WHEN d.status = 'returned' THEN 1 END) as returned,
+                COUNT(CASE WHEN d.internal_approval_status = 'pending' THEN 1 END) as internal_pending,
+                COUNT(CASE WHEN d.internal_approval_status = 'previewed' THEN 1 END) as internal_previewed,
+                COUNT(CASE WHEN d.internal_approval_status = 'approved_internal' THEN 1 END) as internal_approved,
+                COUNT(CASE WHEN d.internal_approval_status = 'rejected_internal' THEN 1 END) as internal_rejected,
+                COUNT(CASE WHEN d.internal_approval_status = 'changes_requested_internal' THEN 1 END) as internal_changes_requested,
+                COUNT(CASE WHEN d.internal_approval_status = 'changes_ready' THEN 1 END) as internal_changes_ready,
+                COUNT(CASE WHEN d.requester_status = 'pending_approval' THEN 1 END) as requester_pending,
+                COUNT(CASE WHEN d.requester_status = 'approved' THEN 1 END) as requester_approved,
+                COUNT(CASE WHEN d.requester_status = 'rejected' THEN 1 END) as requester_rejected,
+                COUNT(CASE WHEN d.requester_status = 'changes_requested' THEN 1 END) as requester_changes_requested,
+                COUNT(CASE WHEN d.requester_status = 'in_revision' THEN 1 END) as requester_in_revision,
+                COUNT(CASE WHEN d.is_signed = true THEN 1 END) as signed_count
+            FROM helpdesk_documents d
+            ${whereClause}
+        `;
+        const { rows } = await pool.query(summaryQuery, params);
+        const summary = rows[0];
+
+        const statusQuery = `SELECT d.status, COUNT(*) as count FROM helpdesk_documents d ${whereClause} GROUP BY d.status`;
+        const { rows: statusRows } = await pool.query(statusQuery, params);
+        const byStatus: Record<DocumentStatus, number> = {
+            draft: 0,
+            pending_approval: 0,
+            approved: 0,
+            rejected: 0,
+            returned: 0,
+        };
+        statusRows.forEach(row => {
+            const status = row.status as DocumentStatus;
+            if (status in byStatus) {
+                byStatus[status] = Number(row.count);
+            }
+        });
+
+        const entityQuery = `SELECT d.entity_type, COUNT(*) as count FROM helpdesk_documents d ${whereClause} GROUP BY d.entity_type`;
+        const { rows: entityRows } = await pool.query(entityQuery, params);
+        const byEntityType: Record<DocumentEntityType, number> = {} as Record<DocumentEntityType, number>;
+        entityRows.forEach(row => {
+            byEntityType[row.entity_type as DocumentEntityType] = Number(row.count);
+        });
+
+        const formatQuery = `SELECT d.format, COUNT(*) as count FROM helpdesk_documents d ${whereClause} GROUP BY d.format`;
+        const { rows: formatRows } = await pool.query(formatQuery, params);
+        const byFormat: Record<DocumentFormat, number> = {
+            pdf: 0,
+            docx: 0,
+            xlsx: 0,
+        };
+        formatRows.forEach(row => {
+            const format = row.format as DocumentFormat;
+            if (format in byFormat) {
+                byFormat[format] = Number(row.count);
+            }
+        });
+
+        const requesterStatusSummary: Record<RequesterVisibleStatus, number> = {
+            pending_approval: Number(summary.requester_pending) || 0,
+            approved: Number(summary.requester_approved) || 0,
+            rejected: Number(summary.requester_rejected) || 0,
+            changes_requested: Number(summary.requester_changes_requested) || 0,
+            in_revision: Number(summary.requester_in_revision) || 0,
+        };
+
+        return {
+            total: Number(summary.total) || 0,
+            by_status: byStatus,
+            by_entity_type: byEntityType,
+            by_format: byFormat,
+            pending_approval: Number(summary.pending_approval) || 0,
+            draft: Number(summary.draft) || 0,
+            approved: Number(summary.approved) || 0,
+            rejected: Number(summary.rejected) || 0,
+            returned: Number(summary.returned) || 0,
+            internal_approval_summary: {
+                pending: Number(summary.internal_pending) || 0,
+                previewed: Number(summary.internal_previewed) || 0,
+                approved_internal: Number(summary.internal_approved) || 0,
+                rejected_internal: Number(summary.internal_rejected) || 0,
+                changes_requested_internal: Number(summary.internal_changes_requested) || 0,
+                changes_ready: Number(summary.internal_changes_ready) || 0,
+            },
+            requester_status_summary: requesterStatusSummary,
+        };
     }
-
-    const summaryQuery = `
-        SELECT 
-            COUNT(*) as total,
-            COUNT(CASE WHEN d.status = 'draft' THEN 1 END) as draft,
-            COUNT(CASE WHEN d.status = 'pending_approval' THEN 1 END) as pending_approval,
-            COUNT(CASE WHEN d.status = 'approved' THEN 1 END) as approved,
-            COUNT(CASE WHEN d.status = 'rejected' THEN 1 END) as rejected,
-            COUNT(CASE WHEN d.status = 'returned' THEN 1 END) as returned,
-            COUNT(CASE WHEN d.internal_approval_status = 'pending' THEN 1 END) as internal_pending,
-            COUNT(CASE WHEN d.internal_approval_status = 'previewed' THEN 1 END) as internal_previewed,
-            COUNT(CASE WHEN d.internal_approval_status = 'approved_internal' THEN 1 END) as internal_approved,
-            COUNT(CASE WHEN d.internal_approval_status = 'rejected_internal' THEN 1 END) as internal_rejected,
-            COUNT(CASE WHEN d.internal_approval_status = 'changes_requested_internal' THEN 1 END) as internal_changes_requested,
-            COUNT(CASE WHEN d.internal_approval_status = 'changes_ready' THEN 1 END) as internal_changes_ready,
-            COUNT(CASE WHEN d.requester_status = 'pending_approval' THEN 1 END) as requester_pending,
-            COUNT(CASE WHEN d.requester_status = 'approved' THEN 1 END) as requester_approved,
-            COUNT(CASE WHEN d.requester_status = 'rejected' THEN 1 END) as requester_rejected,
-            COUNT(CASE WHEN d.requester_status = 'changes_requested' THEN 1 END) as requester_changes_requested,
-            COUNT(CASE WHEN d.requester_status = 'in_revision' THEN 1 END) as requester_in_revision
-        FROM helpdesk_documents d
-        ${whereClause}
-    `;
-    const { rows } = await pool.query(summaryQuery, params);
-    const summary = rows[0];
-
-    const statusQuery = `SELECT d.status, COUNT(*) as count FROM helpdesk_documents d ${whereClause} GROUP BY d.status`;
-    const { rows: statusRows } = await pool.query(statusQuery, params);
-    const byStatus: Record<DocumentStatus, number> = {
-        draft: 0,
-        pending_approval: 0,
-        approved: 0,
-        rejected: 0,
-        returned: 0,
-    };
-    statusRows.forEach(row => {
-        const status = row.status as DocumentStatus;
-        if (status in byStatus) {
-            byStatus[status] = Number(row.count);
-        }
-    });
-
-    const entityQuery = `SELECT d.entity_type, COUNT(*) as count FROM helpdesk_documents d ${whereClause} GROUP BY d.entity_type`;
-    const { rows: entityRows } = await pool.query(entityQuery, params);
-    const byEntityType: Record<DocumentEntityType, number> = {} as Record<DocumentEntityType, number>;
-    entityRows.forEach(row => {
-        byEntityType[row.entity_type as DocumentEntityType] = Number(row.count);
-    });
-
-    const formatQuery = `SELECT d.format, COUNT(*) as count FROM helpdesk_documents d ${whereClause} GROUP BY d.format`;
-    const { rows: formatRows } = await pool.query(formatQuery, params);
-    const byFormat: Record<DocumentFormat, number> = {
-        pdf: 0,
-        docx: 0,
-        xlsx: 0,
-    };
-    formatRows.forEach(row => {
-        const format = row.format as DocumentFormat;
-        if (format in byFormat) {
-            byFormat[format] = Number(row.count);
-        }
-    });
-
-    // Build requester status summary
-    const requesterStatusSummary: Record<RequesterVisibleStatus, number> = {
-        pending_approval: Number(summary.requester_pending) || 0,
-        approved: Number(summary.requester_approved) || 0,
-        rejected: Number(summary.requester_rejected) || 0,
-        changes_requested: Number(summary.requester_changes_requested) || 0,
-        in_revision: Number(summary.requester_in_revision) || 0,
-    };
-
-    return {
-        total: Number(summary.total) || 0,
-        by_status: byStatus,
-        by_entity_type: byEntityType,
-        by_format: byFormat,
-        pending_approval: Number(summary.pending_approval) || 0,
-        draft: Number(summary.draft) || 0,
-        approved: Number(summary.approved) || 0,
-        rejected: Number(summary.rejected) || 0,
-        returned: Number(summary.returned) || 0,
-        internal_approval_summary: {
-            pending: Number(summary.internal_pending) || 0,
-            previewed: Number(summary.internal_previewed) || 0,
-            approved_internal: Number(summary.internal_approved) || 0,
-            rejected_internal: Number(summary.internal_rejected) || 0,
-            changes_requested_internal: Number(summary.internal_changes_requested) || 0,
-            changes_ready: Number(summary.internal_changes_ready) || 0,
-        },
-        requester_status_summary: requesterStatusSummary,
-    };
-}
-
 
     // ─── Submit for Approval ────────────────────────────────────────────────
 
@@ -1022,7 +1007,6 @@ static async getSummary(filters?: { entity_type?: DocumentEntityType }): Promise
         try {
             await client.query('BEGIN');
 
-            // Increment preview count
             const newPreviewCount = (doc.internal_preview_count || 0) + 1;
 
             await client.query(
@@ -1044,7 +1028,6 @@ static async getSummary(filters?: { entity_type?: DocumentEntityType }): Promise
                 ]
             );
 
-            // Record preview history (you'd need a preview history table)
             await this.addApprovalHistory(
                 id,
                 input.previewed_by || 'system',
@@ -1066,89 +1049,188 @@ static async getSummary(filters?: { entity_type?: DocumentEntityType }): Promise
         }
     }
 
-    /**
-     * Internal Approve - Super admin approves internally
-     * Requester still sees 'pending_approval' until send back
-     */
-    static async internalApprove(
-        id: string,
-        input: InternalApprovalRequest
-    ): Promise<HelpdeskDocument> {
-        const doc = await this.findById(id);
-        if (!doc) {
-            throw new AppError(404, 'Document not found');
-        }
+   // src/features/helpdeskdocs/helpdesk.documents.service.ts - Updated internalApprove method
 
-        if (doc.status !== 'pending_approval') {
-            throw new AppError(400, `Cannot approve document with status: ${doc.status}`);
-        }
+/**
+ * Internal Approve - Super admin approves internally with signature embedding
+ * Requester still sees 'pending_approval' until send back
+ */
+static async internalApprove(
+  id: string,
+  input: InternalApprovalRequest
+): Promise<HelpdeskDocument> {
+  const doc = await this.findById(id);
+  if (!doc) {
+    throw new AppError(404, 'Document not found');
+  }
 
-        if (!doc.entity_id) {
-            throw new AppError(400, 'Document must be linked to an entity before approval');
-        }
+  if (doc.status !== 'pending_approval') {
+    throw new AppError(400, `Cannot approve document with status: ${doc.status}`);
+  }
 
-        // Can approve from pending, previewed, or changes_ready
-        if (!['pending', 'previewed', 'changes_ready'].includes(doc.internal_approval_status)) {
-            throw new AppError(400, `Cannot approve from internal status: ${doc.internal_approval_status}`);
-        }
+  if (!doc.entity_id) {
+    throw new AppError(400, 'Document must be linked to an entity before approval');
+  }
 
-        const client = await pool.connect();
-        try {
-            await client.query('BEGIN');
+  if (!['pending', 'previewed', 'changes_ready'].includes(doc.internal_approval_status)) {
+    throw new AppError(400, `Cannot approve from internal status: ${doc.internal_approval_status}`);
+  }
 
-            let eStampUrl: string | null = null;
-            let eStampPublicId: string | null = null;
+  // ─── FETCH SIGNER'S SIGNATURE ──────────────────────────────────────────────
+  const { rows: userRows } = await pool.query(
+    `SELECT full_name, signature_url FROM users 
+     WHERE id = $1 AND is_active = true`,
+    [input.approved_by]
+  );
+  const signer = userRows[0];
+  
+  console.log('[InternalApprove] Signer details:', {
+    id: input.approved_by,
+    found: !!signer,
+    hasSignature: signer?.signature_url ? true : false,
+    signatureUrl: signer?.signature_url || 'null',
+  });
+  
+  if (!signer) {
+    throw new AppError(404, 'User not found');
+  }
 
-            // Generate e-stamp if requested
-            if (input.generate_e_stamp) {
-                const eStamp = await this.generateEStamp(doc);
-                eStampUrl = eStamp.secure_url;
-                eStampPublicId = eStamp.public_id;
-            }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-            await client.query(
-                `UPDATE helpdesk_documents
-                 SET internal_approval_status = 'approved_internal',
-                     internal_approved_by = $1,
-                     internal_approved_by_name = $2,
-                     internal_approved_at = NOW(),
-                     internal_comments = COALESCE($3, internal_comments),
-                     is_internal_approval_complete = true,
-                     e_stamp_url = COALESCE($4, e_stamp_url),
-                     e_stamp_public_id = COALESCE($5, e_stamp_public_id),
-                     e_stamp_status = CASE WHEN $4 IS NOT NULL THEN 'stamped' ELSE e_stamp_status END,
-                     updated_at = NOW()
-                 WHERE id = $6 AND is_active = true`,
-                [
-                    input.approved_by || null,
-                    input.approved_by_name || null,
-                    input.comments || null,
-                    eStampUrl,
-                    eStampPublicId,
-                    id
-                ]
-            );
+    let signedFileUrl = doc.file_url;
+    let signedPublicId = doc.public_id;
+    let wasSigned = false;
 
-            await this.addApprovalHistory(
-                id,
-                input.approved_by || 'system',
-                'approved',
-                doc.uploaded_by || undefined,
-                input.comments || 'Document approved internally (pending send back)'
-            );
+    // ─── EMBED SIGNATURE INTO PDF ──────────────────────────────────────────────
+    if (doc.file_url && doc.format === 'pdf' && signer?.signature_url) {
+      try {
+        console.log(`[InternalApprove] Embedding signature for document ${id}...`);
+        
+        const response = await axios.get<ArrayBuffer>(doc.file_url, { 
+          responseType: 'arraybuffer' 
+        });
+        const originalPdf = Buffer.from(response.data);
 
-            await client.query('COMMIT');
+        const signedPdf = await embedSignatureIntoPDF(
+          originalPdf,
+          signer.signature_url,
+          null,
+          signer.full_name || 'Registrar, High Court',
+          false
+        );
 
-            const updatedDoc = await this.findById(id);
-            if (!updatedDoc) throw new AppError(500, 'Failed to retrieve updated document');
-            return updatedDoc;
-        } catch (err) {
-            await client.query('ROLLBACK');
-            throw err;
-        } finally {
-            client.release();
-        }
+        const multerFile: Express.Multer.File = {
+          buffer: signedPdf,
+          mimetype: 'application/pdf',
+          originalname: doc.file_url.split('/').pop() || 'signed-document.pdf',
+          size: signedPdf.length,
+          fieldname: 'file',
+          encoding: '7bit',
+          stream: null as any,
+          destination: '',
+          filename: '',
+          path: '',
+        };
+        const uploaded = await uploadToCloudinary(multerFile, FOLDER);
+        signedFileUrl = uploaded.secure_url;
+        signedPublicId = uploaded.public_id;
+        wasSigned = true;
+
+        console.log(`[InternalApprove] Signature embedded successfully for document ${id}`);
+      } catch (embedError) {
+        console.error(`[InternalApprove] Failed to embed signature for document ${id}:`, embedError);
+      }
     }
+
+    // Generate e-stamp if requested
+    let eStampUrl: string | null = null;
+    let eStampPublicId: string | null = null;
+    if (input.generate_e_stamp) {
+      const eStamp = await this.generateEStamp(doc);
+      eStampUrl = eStamp.secure_url;
+      eStampPublicId = eStamp.public_id;
+    }
+
+    // ─── FIX: Use proper SQL with explicit type casting ──────────────────────
+    // Build the update query with proper parameter handling
+   const updateQuery = `
+  UPDATE helpdesk_documents
+  SET internal_approval_status = 'approved_internal',
+      internal_approved_by = $1::uuid,
+      internal_approved_by_name = $2::varchar,
+      internal_approved_at = NOW(),
+      internal_comments = COALESCE($3::text, internal_comments),
+      is_internal_approval_complete = true,
+      e_stamp_url = $4::text,
+      e_stamp_public_id = $5::varchar,
+      e_stamp_status = CASE WHEN $4::text IS NOT NULL THEN 'stamped' ELSE e_stamp_status END,
+      is_signed = $6::boolean,
+      signed_by = CASE WHEN $6::boolean THEN $1::uuid ELSE signed_by END,
+      signed_by_name = CASE WHEN $6::boolean THEN $2::varchar ELSE signed_by_name END,
+      signed_at = CASE WHEN $6::boolean THEN NOW() ELSE signed_at END,
+      file_url = $7::text,
+      public_id = $8::varchar,
+      updated_at = NOW()
+  WHERE id = $9::uuid AND is_active = true
+`;
+
+    console.log('[InternalApprove] Update params:', {
+      approved_by: input.approved_by,
+      approved_by_name: input.approved_by_name,
+      comments: input.comments,
+      eStampUrl,
+      eStampPublicId,
+      wasSigned,
+      signedFileUrl,
+      signedPublicId,
+      id,
+    });
+
+    await client.query(updateQuery, [
+      input.approved_by || null,
+      input.approved_by_name || null,
+      input.comments || null,
+      eStampUrl,
+      eStampPublicId,
+      wasSigned,
+      signedFileUrl,
+      signedPublicId,
+      id
+    ]);
+
+    // Delete old file if it was replaced
+    if (doc.public_id && doc.public_id !== signedPublicId && signedFileUrl !== doc.file_url) {
+      try {
+        await deleteFromCloudinary(doc.public_id, 'raw');
+        console.log(`[InternalApprove] Deleted old file ${doc.public_id}`);
+      } catch (error) {
+        console.error('Failed to delete old file from Cloudinary:', error);
+      }
+    }
+
+    await this.addApprovalHistory(
+      id,
+      input.approved_by || 'system',
+      'approved',
+      doc.uploaded_by || undefined,
+      input.comments || `Document approved internally${wasSigned ? ' and signed' : ''} (pending send back)`
+    );
+
+    await client.query('COMMIT');
+
+    const updatedDoc = await this.findById(id);
+    if (!updatedDoc) throw new AppError(500, 'Failed to retrieve updated document');
+    return updatedDoc;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('[InternalApprove] Error:', err);
+    throw err;
+  } finally {
+    client.release();
+  }
+}
 
     /**
      * Internal Reject - Super admin rejects internally
@@ -1292,7 +1374,6 @@ static async getSummary(filters?: { entity_type?: DocumentEntityType }): Promise
             throw new AppError(400, `Cannot cancel internal approval for document with status: ${doc.status}`);
         }
 
-        // Can cancel from any internal status except pending
         if (doc.internal_approval_status === 'pending') {
             throw new AppError(400, 'Document is already pending review');
         }
@@ -1348,12 +1429,10 @@ static async getSummary(filters?: { entity_type?: DocumentEntityType }): Promise
             throw new AppError(404, 'Document not found');
         }
 
-        // Can only send back if internal approval is complete
         if (!doc.is_internal_approval_complete) {
             throw new AppError(400, 'Internal approval decision must be made before sending back');
         }
 
-        // Map internal status to requester visible status
         const internalToRequesterMap: Record<string, RequesterVisibleStatus> = {
             'approved_internal': 'approved',
             'rejected_internal': 'rejected',
@@ -1365,14 +1444,12 @@ static async getSummary(filters?: { entity_type?: DocumentEntityType }): Promise
             throw new AppError(400, `Cannot send back from internal status: ${doc.internal_approval_status}`);
         }
 
-        // If final_status is provided, use it, otherwise use the mapped status
         const finalStatus = input.final_status || requesterStatus;
 
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
 
-            // Update document status based on final status
             let newStatus: DocumentStatus;
             switch (finalStatus) {
                 case 'approved':
@@ -1442,7 +1519,6 @@ static async getSummary(filters?: { entity_type?: DocumentEntityType }): Promise
             throw new AppError(404, 'Document not found');
         }
 
-        // Requester can only resubmit if status is changes_requested or rejected
         if (!['changes_requested', 'rejected'].includes(doc.requester_status)) {
             throw new AppError(400, `Cannot resubmit document with requester status: ${doc.requester_status}`);
         }
@@ -1498,7 +1574,6 @@ static async getSummary(filters?: { entity_type?: DocumentEntityType }): Promise
     static async getPendingInternalApprovals(
         filters: HelpdeskDocumentFilters = {}
     ): Promise<HelpdeskDocument[]> {
-        // Only get documents that are pending internal approval
         const pendingFilters: HelpdeskDocumentFilters = {
             ...filters,
             pending_internal_approval: true,
@@ -1509,78 +1584,75 @@ static async getSummary(filters?: { entity_type?: DocumentEntityType }): Promise
     }
 
     static async getPendingInternalApprovalsSummary(
-    filters?: { entity_type?: DocumentEntityType }
-): Promise<PendingInternalApprovalsSummary> {
-    const params: unknown[] = [];
-    let whereClause = 'WHERE d.is_active = true AND d.status = \'pending_approval\'';
-    let p = 1;
+        filters?: { entity_type?: DocumentEntityType }
+    ): Promise<PendingInternalApprovalsSummary> {
+        const params: unknown[] = [];
+        let whereClause = 'WHERE d.is_active = true AND d.status = \'pending_approval\'';
+        let p = 1;
 
-    if (filters?.entity_type) {
-        whereClause += ` AND d.entity_type = $${p}`;
-        params.push(filters.entity_type);
-        p++;
+        if (filters?.entity_type) {
+            whereClause += ` AND d.entity_type = $${p}`;
+            params.push(filters.entity_type);
+            p++;
+        }
+
+        const query = `
+            SELECT 
+                COUNT(*) as total_pending,
+                COUNT(CASE WHEN d.internal_approval_status = 'pending' THEN 1 END) as pending_review,
+                COUNT(CASE WHEN d.internal_approval_status = 'previewed' THEN 1 END) as previewed,
+                COUNT(CASE WHEN d.internal_approval_status = 'approved_internal' THEN 1 END) as approved_internal,
+                COUNT(CASE WHEN d.internal_approval_status = 'rejected_internal' THEN 1 END) as rejected_internal,
+                COUNT(CASE WHEN d.internal_approval_status = 'changes_requested_internal' THEN 1 END) as changes_requested_internal,
+                COUNT(CASE WHEN d.is_internal_approval_complete = true THEN 1 END) as ready_to_send_back,
+                MIN(d.created_at) as oldest_pending,
+                AVG(EXTRACT(EPOCH FROM (NOW() - d.created_at)) / 3600) as avg_review_hours
+            FROM helpdesk_documents d
+            ${whereClause}
+        `;
+
+        const { rows } = await pool.query(query, params);
+        const result = rows[0];
+
+        const entityQuery = `
+            SELECT d.entity_type, COUNT(*) as count
+            FROM helpdesk_documents d
+            ${whereClause}
+            GROUP BY d.entity_type
+        `;
+        const { rows: entityRows } = await pool.query(entityQuery, params);
+        const byEntityType: Record<DocumentEntityType, number> = {} as Record<DocumentEntityType, number>;
+        entityRows.forEach(row => {
+            byEntityType[row.entity_type as DocumentEntityType] = Number(row.count);
+        });
+
+        let oldestPendingDays = 0;
+        if (result.oldest_pending) {
+            oldestPendingDays = Math.floor((Date.now() - new Date(result.oldest_pending).getTime()) / (1000 * 60 * 60 * 24));
+        }
+
+        const urgentQuery = `
+            SELECT COUNT(*) as urgent
+            FROM helpdesk_documents d
+            ${whereClause}
+            AND d.created_at < NOW() - INTERVAL '2 days'
+        `;
+        const { rows: urgentRows } = await pool.query(urgentQuery, params);
+
+        return {
+            total_pending_internal: Number(result.total_pending) || 0,
+            pending_review: Number(result.pending_review) || 0,
+            previewed: Number(result.previewed) || 0,
+            approved_internal: Number(result.approved_internal) || 0,
+            rejected_internal: Number(result.rejected_internal) || 0,
+            changes_requested_internal: Number(result.changes_requested_internal) || 0,
+            ready_to_send_back: Number(result.ready_to_send_back) || 0,
+            by_entity_type: byEntityType,
+            urgent_pending: Number(urgentRows[0]?.urgent) || 0,
+            oldest_pending_days: oldestPendingDays,
+            average_review_time_hours: result.avg_review_hours ? Number(result.avg_review_hours) : undefined,
+        };
     }
-
-    const query = `
-        SELECT 
-            COUNT(*) as total_pending,
-            COUNT(CASE WHEN d.internal_approval_status = 'pending' THEN 1 END) as pending_review,
-            COUNT(CASE WHEN d.internal_approval_status = 'previewed' THEN 1 END) as previewed,
-            COUNT(CASE WHEN d.internal_approval_status = 'approved_internal' THEN 1 END) as approved_internal,
-            COUNT(CASE WHEN d.internal_approval_status = 'rejected_internal' THEN 1 END) as rejected_internal,
-            COUNT(CASE WHEN d.internal_approval_status = 'changes_requested_internal' THEN 1 END) as changes_requested_internal,
-            COUNT(CASE WHEN d.is_internal_approval_complete = true THEN 1 END) as ready_to_send_back,
-            MIN(d.created_at) as oldest_pending,
-            AVG(EXTRACT(EPOCH FROM (NOW() - d.created_at)) / 3600) as avg_review_hours
-        FROM helpdesk_documents d
-        ${whereClause}
-    `;
-
-    const { rows } = await pool.query(query, params);
-    const result = rows[0];
-
-    // Get by entity type breakdown
-    const entityQuery = `
-        SELECT d.entity_type, COUNT(*) as count
-        FROM helpdesk_documents d
-        ${whereClause}
-        GROUP BY d.entity_type
-    `;
-    const { rows: entityRows } = await pool.query(entityQuery, params);
-    const byEntityType: Record<DocumentEntityType, number> = {} as Record<DocumentEntityType, number>;
-    entityRows.forEach(row => {
-        byEntityType[row.entity_type as DocumentEntityType] = Number(row.count);
-    });
-
-    // Calculate oldest pending days
-    let oldestPendingDays = 0;
-    if (result.oldest_pending) {
-        oldestPendingDays = Math.floor((Date.now() - new Date(result.oldest_pending).getTime()) / (1000 * 60 * 60 * 24));
-    }
-
-    // Determine urgent pending (documents pending > 2 days)
-    const urgentQuery = `
-        SELECT COUNT(*) as urgent
-        FROM helpdesk_documents d
-        ${whereClause}
-        AND d.created_at < NOW() - INTERVAL '2 days'
-    `;
-    const { rows: urgentRows } = await pool.query(urgentQuery, params);
-
-    return {
-        total_pending_internal: Number(result.total_pending) || 0,
-        pending_review: Number(result.pending_review) || 0,
-        previewed: Number(result.previewed) || 0,
-        approved_internal: Number(result.approved_internal) || 0,
-        rejected_internal: Number(result.rejected_internal) || 0,
-        changes_requested_internal: Number(result.changes_requested_internal) || 0,
-        ready_to_send_back: Number(result.ready_to_send_back) || 0,
-        by_entity_type: byEntityType,
-        urgent_pending: Number(urgentRows[0]?.urgent) || 0,
-        oldest_pending_days: oldestPendingDays,
-        average_review_time_hours: result.avg_review_hours ? Number(result.avg_review_hours) : undefined,
-    };
-}
 
     // ─── Requester Dashboard ──────────────────────────────────────────────────
 
@@ -1591,11 +1663,8 @@ static async getSummary(filters?: { entity_type?: DocumentEntityType }): Promise
         const docFilters: HelpdeskDocumentFilters = {
             ...filters,
             uploaded_by: userId,
-            is_sent_back_to_requester: true, // Only show documents that have been sent back
+            is_sent_back_to_requester: true,
         };
-
-        // Also include pending documents that haven't been sent back yet but are visible to requester
-        // For requester, we want to show all their documents with their requester_status
 
         const docs = await this.findAll(docFilters);
 
@@ -1614,237 +1683,10 @@ static async getSummary(filters?: { entity_type?: DocumentEntityType }): Promise
             changes_requested: doc.internal_changes_requested,
             rejection_reason: doc.internal_rejection_reason,
             can_resubmit: ['changes_requested', 'rejected'].includes(doc.requester_status),
+            is_signed: doc.is_signed || false,
+            signed_by_name: doc.signed_by_name,
+            signed_at: doc.signed_at,
         }));
-    }
-
-    // ─── Legacy Methods (Deprecated - kept for backward compatibility) ──────
-
-    // ─── Approve Document (Legacy) ──────────────────────────────────────────
-
-    /**
-     * @deprecated Use internalApprove() and sendBackToRequester() instead
-     */
-    static async approveDocument(
-        id: string,
-        userId: string,
-        comments?: string,
-        approvedByName?: string
-    ): Promise<HelpdeskDocument> {
-        const doc = await this.findById(id);
-        if (!doc) {
-            throw new AppError(404, 'Document not found');
-        }
-
-        if (doc.status !== 'pending_approval') {
-            throw new AppError(400, `Cannot approve document with status: ${doc.status}`);
-        }
-
-        const client = await pool.connect();
-        try {
-            await client.query('BEGIN');
-
-            const eStamp = await this.generateEStamp(doc);
-
-            await client.query(
-                `UPDATE helpdesk_documents
-                 SET status = 'approved',
-                     approved_by = $1,
-                     approved_at = NOW(),
-                     e_stamp_url = $2,
-                     e_stamp_public_id = $3,
-                     e_stamp_status = 'stamped',
-                     requester_status = 'approved',
-                     is_sent_back_to_requester = true,
-                     updated_at = NOW()
-                 WHERE id = $4 AND is_active = true`,
-                [userId, eStamp.secure_url, eStamp.public_id, id]
-            );
-
-            await this.addApprovalHistory(
-                id,
-                userId,
-                'approved',
-                doc.uploaded_by || undefined,
-                comments || 'Document approved'
-            );
-
-            await client.query('COMMIT');
-
-            const updatedDoc = await this.findById(id);
-            if (!updatedDoc) throw new AppError(500, 'Failed to retrieve updated document');
-            return updatedDoc;
-        } catch (err) {
-            await client.query('ROLLBACK');
-            throw err;
-        } finally {
-            client.release();
-        }
-    }
-
-    // ─── Reject Document (Legacy) ───────────────────────────────────────────
-
-    /**
-     * @deprecated Use internalReject() and sendBackToRequester() instead
-     */
-    static async rejectDocument(
-        id: string,
-        userId: string,
-        reason: string,
-        comments?: string
-    ): Promise<HelpdeskDocument> {
-        const doc = await this.findById(id);
-        if (!doc) {
-            throw new AppError(404, 'Document not found');
-        }
-
-        if (doc.status !== 'pending_approval') {
-            throw new AppError(400, `Cannot reject document with status: ${doc.status}`);
-        }
-
-        const client = await pool.connect();
-        try {
-            await client.query('BEGIN');
-
-            await client.query(
-                `UPDATE helpdesk_documents
-                 SET status = 'rejected',
-                     rejection_reason = $1,
-                     requester_status = 'rejected',
-                     is_sent_back_to_requester = true,
-                     updated_at = NOW()
-                 WHERE id = $2 AND is_active = true`,
-                [reason, id]
-            );
-
-            const fullComment = comments 
-                ? `Rejection reason: ${reason}. ${comments}` 
-                : `Rejection reason: ${reason}`;
-
-            await this.addApprovalHistory(
-                id,
-                userId,
-                'rejected',
-                doc.uploaded_by || undefined,
-                fullComment
-            );
-
-            await client.query('COMMIT');
-
-            const updatedDoc = await this.findById(id);
-            if (!updatedDoc) throw new AppError(500, 'Failed to retrieve updated document');
-            return updatedDoc;
-        } catch (err) {
-            await client.query('ROLLBACK');
-            throw err;
-        } finally {
-            client.release();
-        }
-    }
-
-    // ─── Return Document (Legacy) ───────────────────────────────────────────
-
-    /**
-     * @deprecated Use internalRequestChanges() and sendBackToRequester() instead
-     */
-    static async returnDocument(
-        id: string,
-        userId: string,
-        comments?: string,
-        instructions?: string
-    ): Promise<HelpdeskDocument> {
-        const doc = await this.findById(id);
-        if (!doc) {
-            throw new AppError(404, 'Document not found');
-        }
-
-        if (doc.status !== 'pending_approval' && doc.status !== 'approved') {
-            throw new AppError(400, `Cannot return document with status: ${doc.status}`);
-        }
-
-        const client = await pool.connect();
-        try {
-            await client.query('BEGIN');
-
-            await client.query(
-                `UPDATE helpdesk_documents
-                 SET status = 'returned',
-                     returned_by = $1,
-                     returned_at = NOW(),
-                     requester_status = 'changes_requested',
-                     is_sent_back_to_requester = true,
-                     updated_at = NOW()
-                 WHERE id = $2 AND is_active = true`,
-                [userId, id]
-            );
-
-            const fullComment = instructions 
-                ? `${comments || ''} Instructions: ${instructions}`.trim()
-                : comments || 'Document returned for revision';
-
-            await this.addApprovalHistory(
-                id,
-                userId,
-                'returned',
-                doc.uploaded_by || undefined,
-                fullComment
-            );
-
-            await client.query('COMMIT');
-
-            const updatedDoc = await this.findById(id);
-            if (!updatedDoc) throw new AppError(500, 'Failed to retrieve updated document');
-            return updatedDoc;
-        } catch (err) {
-            await client.query('ROLLBACK');
-            throw err;
-        } finally {
-            client.release();
-        }
-    }
-
-    // ─── Update E-Stamp ──────────────────────────────────────────────────────
-
-    static async updateEStamp(
-        id: string,
-        eStampUrl?: string,
-        eStampPublicId?: string,
-        status: EStampStatus = 'stamped'
-    ): Promise<HelpdeskDocument> {
-        const doc = await this.findById(id);
-        if (!doc) {
-            throw new AppError(404, 'Document not found');
-        }
-
-        const updates: string[] = [];
-        const values: unknown[] = [];
-        let p = 1;
-
-        if (eStampUrl !== undefined) {
-            updates.push(`e_stamp_url = $${p}`);
-            values.push(eStampUrl);
-            p++;
-        }
-        if (eStampPublicId !== undefined) {
-            updates.push(`e_stamp_public_id = $${p}`);
-            values.push(eStampPublicId);
-            p++;
-        }
-        updates.push(`e_stamp_status = $${p}`);
-        values.push(status);
-        p++;
-        updates.push(`updated_at = NOW()`);
-        values.push(id);
-
-        await pool.query(
-            `UPDATE helpdesk_documents
-             SET ${updates.join(', ')}
-             WHERE id = $${p} AND is_active = true`,
-            values
-        );
-
-        const updatedDoc = await this.findById(id);
-        if (!updatedDoc) throw new AppError(500, 'Failed to retrieve updated document');
-        return updatedDoc;
     }
 
     // ─── Generate E-Stamp ────────────────────────────────────────────────────
@@ -1866,7 +1708,6 @@ static async getSummary(filters?: { entity_type?: DocumentEntityType }): Promise
         judgeName?: string,
         rank?: string,
         reportingDate?: string,
-        // ─── Aide Request Fields ──────────────────────────────────────────────
         officerRank?: string,
         officerName?: string,
         employmentNumber?: string,
@@ -1874,7 +1715,6 @@ static async getSummary(filters?: { entity_type?: DocumentEntityType }): Promise
         currentUnit?: string,
         proposedAssignment?: string,
         aideStatus?: string,
-        // ─── Sentry Request Fields ──────────────────────────────────────────────
         residenceLocation?: string,
         sentryStatus?: string
     ): Promise<HelpdeskDocument> {
@@ -1921,7 +1761,6 @@ static async getSummary(filters?: { entity_type?: DocumentEntityType }): Promise
             p++;
         }
 
-        // ─── Aide Request Fields ──────────────────────────────────────────────
         if (officerRank !== undefined) {
             updates.push(`officer_rank = $${p}`);
             values.push(officerRank || null);
@@ -1964,7 +1803,6 @@ static async getSummary(filters?: { entity_type?: DocumentEntityType }): Promise
             p++;
         }
 
-        // ─── Sentry Request Fields ──────────────────────────────────────────────
         if (residenceLocation !== undefined) {
             updates.push(`residence_location = $${p}`);
             values.push(residenceLocation || null);
@@ -2002,7 +1840,6 @@ static async getSummary(filters?: { entity_type?: DocumentEntityType }): Promise
         judgeName?: string,
         rank?: string,
         reportingDate?: string,
-        // ─── Aide Request Fields ──────────────────────────────────────────────
         officerRank?: string,
         officerName?: string,
         employmentNumber?: string,
@@ -2010,7 +1847,6 @@ static async getSummary(filters?: { entity_type?: DocumentEntityType }): Promise
         currentUnit?: string,
         proposedAssignment?: string,
         aideStatus?: string,
-        // ─── Sentry Request Fields ──────────────────────────────────────────────
         residenceLocation?: string,
         sentryStatus?: string
     ): Promise<{ success: string[]; failed: string[] }> {
@@ -2191,7 +2027,7 @@ static async getSummary(filters?: { entity_type?: DocumentEntityType }): Promise
     private static async addApprovalHistory(
         documentId: string,
         fromUserId: string,
-        action: 'submitted' | 'approved' | 'rejected' | 'returned' | 'previewed' | 'sent_back' | 'resubmitted',
+        action: 'submitted' | 'approved' | 'rejected' | 'returned' | 'previewed' | 'sent_back' | 'resubmitted' | 'signed',
         toUserId?: string,
         comments?: string
     ): Promise<void> {

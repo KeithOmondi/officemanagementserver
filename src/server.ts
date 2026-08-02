@@ -11,6 +11,7 @@ import { setupWebSocket } from './socket';
 // REMOVED: import { scheduleBringUpReminders } from './jobs/bringUpReminders.job';
 import { scheduleMonthlyReportGeneration } from './cron/monthly-report.cron';
 import RealtimeService from './services/realtime.service';
+import { scheduleReminderDispatch } from './cron/reminders.cron';
 
 profileImport('After imports');
 
@@ -42,6 +43,7 @@ const startServer = async () => {
     // ── Schedule Background Jobs ─────────────────────────────────────────────
     // REMOVED: scheduleBringUpReminders(io);
     scheduleMonthlyReportGeneration();
+    scheduleReminderDispatch();
 
     return { server, io, realtimeService };
 

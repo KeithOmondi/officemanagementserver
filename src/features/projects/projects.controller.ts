@@ -14,8 +14,13 @@ import {
     updateSubtaskSchema,
     createCommentSchema,
     updateCommentSchema,
+    checklistFiltersSchema,
+    updateChecklistStatusSchema,
+    bulkUpdateChecklistSchema,
+    reorderChecklistSchema,
+    taskBySerialNumberSchema,
 } from './projects.validator';
-import type { CreateProjectTaskInput } from './projects.types';
+import type { CreateProjectTaskInput, ChecklistStatus } from './projects.types';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -84,17 +89,17 @@ export const projectController = {
         return sendSuccess(res, project, 'Project retrieved successfully');
     }),
 
-  updateProject: asyncHandler(async (req: Request, res: Response) => {
-    const result = updateProjectSchema.safeParse({ params: req.params, body: req.body });
-    if (!result.success) {
-        throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid update data');
-    }
-    const project = await ProjectService.updateProject(
-        result.data.params.id,
-        result.data.body
-    );
-    return sendSuccess(res, project, 'Project updated successfully');
-}),
+    updateProject: asyncHandler(async (req: Request, res: Response) => {
+        const result = updateProjectSchema.safeParse({ params: req.params, body: req.body });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid update data');
+        }
+        const project = await ProjectService.updateProject(
+            result.data.params.id,
+            result.data.body
+        );
+        return sendSuccess(res, project, 'Project updated successfully');
+    }),
 
     deleteProject: asyncHandler(async (req: Request, res: Response) => {
         const result = idParamSchema.safeParse({ params: req.params });
@@ -146,14 +151,13 @@ export const projectController = {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid task data');
         }
         
-        // ✅ Fixed: Properly handle all fields including deadline
         const data: CreateProjectTaskInput = {
             title: result.data.body.title,
             project_id: nullToUndefined(result.data.body.project_id),
             description: nullToUndefined(result.data.body.description),
             status: result.data.body.status,
             priority: result.data.body.priority,
-            type: result.data.body.type,
+            type: nullToUndefined(result.data.body.type), // ✅ Convert null to undefined
             assignee: nullToUndefined(result.data.body.assignee),
             deadline: result.data.body.deadline || getDefaultDeadline(),
             start_date: nullToUndefined(result.data.body.start_date),
@@ -161,6 +165,12 @@ export const projectController = {
             estimated_hours: nullToUndefined(result.data.body.estimated_hours),
             parent_task_id: nullToUndefined(result.data.body.parent_task_id),
             visibility: result.data.body.visibility,
+            // Checklist fields
+            checklist_status: nullToUndefined(result.data.body.checklist_status),
+            next_steps: nullToUndefined(result.data.body.next_steps),
+            team_lead: nullToUndefined(result.data.body.team_lead),
+            serial_number: nullToUndefined(result.data.body.serial_number),
+            category: nullToUndefined(result.data.body.category),
         };
         
         const task = await ProjectService.createTask(
@@ -191,16 +201,36 @@ export const projectController = {
     }),
 
     updateTask: asyncHandler(async (req: Request, res: Response) => {
-    const result = updateTaskSchema.safeParse({ params: req.params, body: req.body });
-    if (!result.success) {
-        throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid update data');
-    }
-    const task = await ProjectService.updateTask(
-        result.data.params.id,
-        result.data.body
-    );
-    return sendSuccess(res, task, 'Task updated successfully');
-}),
+        const result = updateTaskSchema.safeParse({ params: req.params, body: req.body });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid update data');
+        }
+        
+        // Convert null to undefined for all fields
+        const body = {
+            ...result.data.body,
+            type: nullToUndefined(result.data.body.type),
+            project_id: nullToUndefined(result.data.body.project_id),
+            description: nullToUndefined(result.data.body.description),
+            assignee: nullToUndefined(result.data.body.assignee),
+            deadline: nullToUndefined(result.data.body.deadline),
+            start_date: nullToUndefined(result.data.body.start_date),
+            estimated_hours: nullToUndefined(result.data.body.estimated_hours),
+            actual_hours: nullToUndefined(result.data.body.actual_hours),
+            parent_task_id: nullToUndefined(result.data.body.parent_task_id),
+            checklist_status: nullToUndefined(result.data.body.checklist_status),
+            next_steps: nullToUndefined(result.data.body.next_steps),
+            team_lead: nullToUndefined(result.data.body.team_lead),
+            serial_number: nullToUndefined(result.data.body.serial_number),
+            category: nullToUndefined(result.data.body.category),
+        };
+        
+        const task = await ProjectService.updateTask(
+            result.data.params.id,
+            body
+        );
+        return sendSuccess(res, task, 'Task updated successfully');
+    }),
 
     deleteTask: asyncHandler(async (req: Request, res: Response) => {
         const result = idParamSchema.safeParse({ params: req.params });
@@ -321,5 +351,102 @@ export const projectController = {
             paramsResult.data.commentId
         );
         return sendSuccess(res, null, 'Comment deleted successfully');
+    }),
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  CHECKLIST-SPECIFIC CONTROLLERS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    getChecklistStats: asyncHandler(async (req: Request, res: Response) => {
+        const { projectId, category } = req.query;
+        const stats = await ProjectService.getChecklistStats(
+            projectId as string,
+            category as string
+        );
+        return sendSuccess(res, stats, 'Checklist stats retrieved successfully');
+    }),
+
+    getChecklistTasks: asyncHandler(async (req: Request, res: Response) => {
+        const result = checklistFiltersSchema.safeParse({ query: req.query });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid filters');
+        }
+        
+        const { projectId } = req.query;
+        const tasks = await ProjectService.getChecklistTasks({
+            project_id: projectId as string,
+            category: result.data.query.category,
+            checklist_status: result.data.query.status as ChecklistStatus,
+            team_lead: result.data.query.team_lead,
+            search: result.data.query.search,
+            page: result.data.query.page,
+            limit: result.data.query.limit,
+        });
+        return sendSuccess(res, tasks, 'Checklist tasks retrieved successfully');
+    }),
+
+    updateChecklistStatus: asyncHandler(async (req: Request, res: Response) => {
+        const paramsResult = updateChecklistStatusSchema.shape.params.safeParse(req.params);
+        if (!paramsResult.success) {
+            throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid task ID');
+        }
+        const bodyResult = updateChecklistStatusSchema.shape.body.safeParse(req.body);
+        if (!bodyResult.success) {
+            throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid checklist data');
+        }
+        
+        const task = await ProjectService.updateChecklistStatus(
+            paramsResult.data.taskId,
+            {
+                checklist_status: bodyResult.data.checklist_status,
+                next_steps: nullToUndefined(bodyResult.data.next_steps),
+                team_lead: nullToUndefined(bodyResult.data.team_lead),
+            }
+        );
+        return sendSuccess(res, task, 'Checklist status updated successfully');
+    }),
+
+    bulkUpdateChecklist: asyncHandler(async (req: Request, res: Response) => {
+        const result = bulkUpdateChecklistSchema.safeParse({ body: req.body });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid bulk update data');
+        }
+        
+        await ProjectService.bulkUpdateChecklist(result.data.body.tasks);
+        return sendSuccess(res, null, 'Checklist items updated successfully');
+    }),
+
+    reorderChecklist: asyncHandler(async (req: Request, res: Response) => {
+        const result = reorderChecklistSchema.safeParse({ body: req.body });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid reorder data');
+        }
+        
+        await ProjectService.reorderChecklist(
+            result.data.body.tasks,
+            result.data.body.category
+        );
+        return sendSuccess(res, null, 'Checklist reordered successfully');
+    }),
+
+    getChecklistCategories: asyncHandler(async (req: Request, res: Response) => {
+        const { projectId } = req.query;
+        const categories = await ProjectService.getChecklistCategories(projectId as string);
+        return sendSuccess(res, categories, 'Checklist categories retrieved successfully');
+    }),
+
+    getTaskBySerialNumber: asyncHandler(async (req: Request, res: Response) => {
+        const result = taskBySerialNumberSchema.safeParse({ params: req.params });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid parameters');
+        }
+        
+        const task = await ProjectService.getTaskBySerialNumber(
+            result.data.params.projectId,
+            parseInt(result.data.params.serialNumber, 10)
+        );
+        
+        if (!task) throw new AppError(404, 'Task not found');
+        return sendSuccess(res, task, 'Task retrieved successfully');
     }),
 };

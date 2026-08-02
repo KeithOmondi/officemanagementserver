@@ -3,8 +3,9 @@ import { z } from 'zod';
 
 const statusEnum = z.enum(['todo', 'inprogress', 'done', 'overdue', 'pending_approval', 'blocked', 'review']);
 const priorityEnum = z.enum(['low', 'normal', 'high', 'urgent', 'critical']);
-const typeEnum = z.enum(['task', 'bug', 'feature', 'improvement', 'support', 'maintenance']);
+// Removed: typeEnum
 const visibilityEnum = z.enum(['public', 'private', 'team']);
+const checklistStatusEnum = z.enum(['completed', 'in_progress', 'no_progress', 'pending']);
 
 // ─── Project Validators ──────────────────────────────────────────────────────
 
@@ -43,7 +44,7 @@ export const createTaskSchema = z.object({
         description: z.string().optional().nullable(),
         status: statusEnum.default('todo'),
         priority: priorityEnum.default('normal'),
-        type: typeEnum.default('task'),
+        type: z.string().max(255).optional().nullable(), // Free text field
         assignee: z.string().uuid().optional().nullable(),
         deadline: z.string().datetime().optional().nullable(),
         start_date: z.string().datetime().optional().nullable(),
@@ -51,6 +52,13 @@ export const createTaskSchema = z.object({
         estimated_hours: z.number().min(0).optional().nullable(),
         parent_task_id: z.string().uuid().optional().nullable(),
         visibility: visibilityEnum.default('team'),
+        
+        // Checklist-specific fields
+        checklist_status: checklistStatusEnum.optional(),
+        next_steps: z.string().max(500).optional().nullable(),
+        team_lead: z.string().max(255).optional().nullable(),
+        serial_number: z.number().int().min(1).optional().nullable(),
+        category: z.string().max(255).optional().nullable(),
     }).strict(),
 });
 
@@ -64,7 +72,7 @@ export const updateTaskSchema = z.object({
         description: z.string().optional().nullable(),
         status: statusEnum.optional(),
         priority: priorityEnum.optional(),
-        type: typeEnum.optional(),
+        type: z.string().max(255).optional().nullable(), // Free text field
         assignee: z.string().uuid().optional().nullable(),
         deadline: z.string().datetime().optional().nullable(),
         start_date: z.string().datetime().optional().nullable(),
@@ -73,6 +81,13 @@ export const updateTaskSchema = z.object({
         actual_hours: z.number().min(0).optional().nullable(),
         parent_task_id: z.string().uuid().optional().nullable(),
         visibility: visibilityEnum.optional(),
+        
+        // Checklist-specific fields
+        checklist_status: checklistStatusEnum.optional(),
+        next_steps: z.string().max(500).optional().nullable(),
+        team_lead: z.string().max(255).optional().nullable(),
+        serial_number: z.number().int().min(1).optional().nullable(),
+        category: z.string().max(255).optional().nullable(),
     }).strict().refine((b) => Object.keys(b).length > 0, {
         message: 'At least one field must be provided',
     }),
@@ -85,7 +100,7 @@ export const taskFiltersSchema = z.object({
         project_id: z.string().uuid().optional(),
         status: statusEnum.optional(),
         priority: priorityEnum.optional(),
-        type: typeEnum.optional(),
+        type: z.string().max(255).optional(), // Free text field
         assignee: z.string().uuid().optional(),
         tags: z.string().optional(),
         search: z.string().max(100).optional(),
@@ -95,6 +110,11 @@ export const taskFiltersSchema = z.object({
         limit: z.string().regex(/^\d+$/).transform(Number).pipe(z.number().int().min(1).max(100)).optional(),
         sort_by: z.enum(['created_at', 'deadline', 'priority', 'status', 'title']).optional(),
         sort_order: z.enum(['ASC', 'DESC']).optional(),
+        
+        // Checklist-specific filters
+        checklist_status: checklistStatusEnum.optional(),
+        category: z.string().max(255).optional(),
+        team_lead: z.string().max(255).optional(),
     }),
 });
 
@@ -108,9 +128,6 @@ export const idParamSchema = z.object({
 
 // ─── Subtask Validators ─────────────────────────────────────────────────────
 
-// src/features/projects/projects.validator.ts
-
-// Update the createSubtaskSchema to handle null properly
 export const createSubtaskSchema = z.object({
     params: z.object({
         taskId: z.string().uuid('Invalid task ID'),
@@ -158,6 +175,65 @@ export const updateCommentSchema = z.object({
     }).strict(),
 });
 
+// ─── Checklist-Specific Validators ──────────────────────────────────────────
+
+export const checklistFiltersSchema = z.object({
+    query: z.object({
+        category: z.string().max(255).optional(),
+        status: checklistStatusEnum.optional(),
+        team_lead: z.string().max(255).optional(),
+        search: z.string().max(100).optional(),
+        page: z.string().regex(/^\d+$/).transform(Number).pipe(z.number().int().min(1)).optional(),
+        limit: z.string().regex(/^\d+$/).transform(Number).pipe(z.number().int().min(1).max(100)).optional(),
+    }),
+});
+
+export const updateChecklistStatusSchema = z.object({
+    params: z.object({
+        taskId: z.string().uuid('Invalid task ID'),
+    }),
+    body: z.object({
+        checklist_status: checklistStatusEnum,
+        next_steps: z.string().max(500).optional().nullable(),
+        team_lead: z.string().max(255).optional().nullable(),
+    }).strict(),
+});
+
+export const bulkUpdateChecklistSchema = z.object({
+    body: z.object({
+        tasks: z.array(
+            z.object({
+                task_id: z.string().uuid('Invalid task ID'),
+                checklist_status: checklistStatusEnum.optional(),
+                next_steps: z.string().max(500).optional().nullable(),
+                team_lead: z.string().max(255).optional().nullable(),
+                serial_number: z.number().int().min(1).optional().nullable(),
+            })
+        ).min(1, 'At least one task must be provided'),
+    }).strict(),
+});
+
+export const reorderChecklistSchema = z.object({
+    body: z.object({
+        tasks: z.array(
+            z.object({
+                task_id: z.string().uuid('Invalid task ID'),
+                serial_number: z.number().int().min(1),
+            })
+        ).min(1, 'At least one task must be provided'),
+        category: z.string().max(255).optional(),
+    }).strict(),
+});
+
+// ─── Task By Serial Number Validator ────────────────────────────────────────
+
+export const taskBySerialNumberSchema = z.object({
+    params: z.object({
+        projectId: z.string().uuid('Invalid project ID'),
+        serialNumber: z.string().regex(/^\d+$/, 'Serial number must be a number'),
+    }),
+});
+
 // ─── Inferred Types ─────────────────────────────────────────────────────────
 
 export type CreateProjectInput = z.infer<typeof createProjectSchema>['body'];
@@ -169,3 +245,10 @@ export type CreateProjectSubtaskInput = z.infer<typeof createSubtaskSchema>['bod
 export type UpdateProjectSubtaskInput = z.infer<typeof updateSubtaskSchema>['body'];
 export type CreateProjectCommentInput = z.infer<typeof createCommentSchema>['body'];
 export type UpdateProjectCommentInput = z.infer<typeof updateCommentSchema>['body'];
+
+// Checklist-specific types
+export type ChecklistFilters = z.infer<typeof checklistFiltersSchema>['query'];
+export type UpdateChecklistStatusInput = z.infer<typeof updateChecklistStatusSchema>['body'];
+export type BulkUpdateChecklistInput = z.infer<typeof bulkUpdateChecklistSchema>['body'];
+export type ReorderChecklistInput = z.infer<typeof reorderChecklistSchema>['body'];
+export type TaskBySerialNumberParams = z.infer<typeof taskBySerialNumberSchema>['params'];

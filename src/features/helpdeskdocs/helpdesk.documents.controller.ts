@@ -1,19 +1,15 @@
 // src/features/helpdesk/helpdesk.documents.controller.ts
 
 import { Request, Response, NextFunction } from 'express';
+import { pool } from '../../config/db';
 import { HelpdeskDocumentsService } from './helpdesk.documents.service';
 import type {
     SubmitDocumentForApprovalBody,
-    ApproveDocumentBody,
-    RejectDocumentBody,
-    ReturnDocumentBody,
     AddCommentBody,
     LinkDocumentBody,
     BatchUploadBody,
     BulkLinkDocumentsBody,
     BulkUpdateStatusBody,
-    UpdateEStampBody,
-    UpdateDocumentFileBody,
     // ─── Two-step approval types ──────────────────────────────────────────────
     InternalPreviewDocumentBody,
     InternalApproveDocumentBody,
@@ -84,32 +80,17 @@ function getQueryEnum<T extends string>(
 
 // ─── Helper: Clean form-data body ─────────────────────────────────────────────
 
-/**
- * Cleans form-data body by converting null/undefined/empty strings to undefined
- * and handling the entity_id field properly.
- *
- * IMPORTANT: this must run BEFORE Zod validation, not after. Multer parses every
- * multipart field as a string, so a form field the caller didn't fill in arrives
- * as '' rather than being absent from the body. Several optional schema fields
- * are `z.string().pipe(someEnum).optional()` — `.optional()` only bypasses
- * validation for `undefined`, not `''`, so an empty string still gets forced
- * through the enum and fails validation. Exported here so it can be used as
- * route middleware ahead of `validate(...)`, not just inside this controller.
- */
 export function cleanFormDataBody<T extends Record<string, unknown>>(body: T): T {
     const cleaned: Record<string, unknown> = {};
     
     for (const [key, value] of Object.entries(body)) {
-        // Skip undefined values
         if (value === undefined) continue;
         
-        // Convert null or empty string to undefined for optional fields
         if (value === null || value === '') {
             cleaned[key] = undefined;
             continue;
         }
         
-        // Handle entity_id specifically - ensure it's a string or undefined
         if (key === 'entity_id') {
             if (typeof value === 'string' && value.trim()) {
                 cleaned[key] = value.trim();
@@ -119,31 +100,21 @@ export function cleanFormDataBody<T extends Record<string, unknown>>(body: T): T
             continue;
         }
         
-        // Handle other string fields
         if (typeof value === 'string') {
-            // For status field, keep 'draft' default
             if (key === 'status' && !value.trim()) {
                 cleaned[key] = 'draft';
                 continue;
             }
-            // For other string fields, trim if provided
             cleaned[key] = value.trim() || undefined;
             continue;
         }
         
-        // Keep other values as-is
         cleaned[key] = value;
     }
     
     return cleaned as T;
 }
 
-/**
- * Express middleware wrapper around cleanFormDataBody, for use in route chains
- * BEFORE validate(...) on multipart/form-data endpoints (upload, updateDocumentFile).
- * Not needed on JSON endpoints — undefined/absent fields there are already
- * genuinely absent, not empty strings.
- */
 export function sanitizeFormDataBody(req: Request, _res: Response, next: NextFunction) {
     try {
         req.body = cleanFormDataBody(req.body ?? {});
@@ -154,10 +125,6 @@ export function sanitizeFormDataBody(req: Request, _res: Response, next: NextFun
     }
 }
 
-/**
- * Same idea, but for the batch-upload endpoint where req.body.documents is an
- * array of per-file metadata objects rather than a single flat body.
- */
 export function sanitizeBatchFormDataBody(req: Request, _res: Response, next: NextFunction) {
     try {
         const raw = req.body as BatchUploadBody | undefined;
@@ -181,28 +148,10 @@ export class HelpdeskDocumentsController {
 
     static async upload(req: Request, res: Response, next: NextFunction) {
         try {
-            console.log('🚀🚀🚀 UPLOAD CONTROLLER REACHED - NO ZOD VALIDATION 🚀🚀🚀');
+            console.log('🚀🚀🚀 UPLOAD CONTROLLER REACHED 🚀🚀🚀');
             
             const file = req.file;
 
-            // ─── DIAGNOSTIC ─────────────────────────────────────────────────
-            console.log('[UPLOAD-CONTROLLER] Request received:', {
-                timestamp: new Date().toISOString(),
-                hasFile: !!file,
-                fileInfo: file ? {
-                    originalname: file.originalname,
-                    mimetype: file.mimetype,
-                    size: file.size,
-                } : null,
-                body: req.body,
-                bodyKeys: req.body ? Object.keys(req.body) : [],
-                entityType: req.body?.entity_type,
-                entityId: req.body?.entity_id,
-                userId: (req as any).user?.id,
-            });
-            // ────────────────────────────────────────────────────────────────
-
-            // ─── VALIDATE: File exists ─────────────────────────────────────
             if (!file) {
                 return res.status(400).json({
                     success: false,
@@ -210,10 +159,8 @@ export class HelpdeskDocumentsController {
                 });
             }
 
-            // ─── VALIDATE: Required fields ──────────────────────────────────
             const body = req.body as Record<string, any>;
             
-            // Check required fields manually
             const requiredFields = ['ref', 'subject', 'entity_type', 'format'];
             const missingFields = requiredFields.filter(field => !body[field]);
             
@@ -225,7 +172,6 @@ export class HelpdeskDocumentsController {
                 });
             }
 
-            // ─── VALIDATE: Entity type is valid ─────────────────────────────
             const validEntityTypes = [
                 'circuit', 'bench', 'partHeard', 'serviceWeek', 
                 'otherPayment', 'ticket', 'medicalClaim', 
@@ -243,7 +189,6 @@ export class HelpdeskDocumentsController {
                 });
             }
 
-            // ─── VALIDATE: Format is valid ──────────────────────────────────
             const validFormats = ['pdf', 'docx', 'xlsx'];
             if (!validFormats.includes(body.format)) {
                 return res.status(400).json({
@@ -253,7 +198,6 @@ export class HelpdeskDocumentsController {
                 });
             }
 
-            // ─── VALIDATE: File type matches format ─────────────────────────
             const formatToMimeMap: Record<string, string[]> = {
                 'pdf': ['application/pdf'],
                 'docx': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
@@ -270,8 +214,7 @@ export class HelpdeskDocumentsController {
                 });
             }
 
-            // ─── VALIDATE: File size ─────────────────────────────────────────
-            const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+            const MAX_FILE_SIZE = 10 * 1024 * 1024;
             if (file.size > MAX_FILE_SIZE) {
                 return res.status(400).json({
                     success: false,
@@ -289,7 +232,6 @@ export class HelpdeskDocumentsController {
                 });
             }
 
-            // ─── Transform body to CreateHelpdeskDocumentInput ──────────────
             const input: CreateHelpdeskDocumentInput = {
                 ref: body.ref,
                 subject: body.subject,
@@ -312,17 +254,7 @@ export class HelpdeskDocumentsController {
                 sentry_status: body.sentry_status || undefined,
             };
 
-            console.log('📦 Uploading with input:', {
-                entity_type: input.entity_type,
-                entity_id: input.entity_id,
-                format: input.format,
-                ref: input.ref,
-                subject: input.subject,
-            });
-
             const doc = await HelpdeskDocumentsService.upload(file, input, userId);
-
-            console.log('✅ Upload successful:', { id: doc.id, ref: doc.ref });
 
             return sendSuccess(res, doc, 'Document saved successfully.', 201);
         } catch (err) {
@@ -345,7 +277,7 @@ export class HelpdeskDocumentsController {
                 });
             }
 
-            const body = req.body as UpdateDocumentFileBody;
+            const body = req.body as any;
             const userId = (req as any).user?.id as string;
 
             if (!userId) {
@@ -424,6 +356,22 @@ export class HelpdeskDocumentsController {
         }
     }
 
+    // ─── Submit for Approval ─────────────────────────────────────────────────
+
+    static async submitForApproval(req: Request, res: Response, next: NextFunction) {
+        try {
+            const id = getParam(req, 'id');
+            const userId = (req as any).user?.id as string;
+            const body = req.body as SubmitDocumentForApprovalBody || {};
+
+            const doc = await HelpdeskDocumentsService.submitForApproval(id, userId, body.comments);
+
+            return sendSuccess(res, doc, 'Document submitted for approval.');
+        } catch (err) {
+            next(err);
+        }
+    }
+
     // ─── List Documents ───────────────────────────────────────────────────────
 
     static async list(req: Request, res: Response, next: NextFunction) {
@@ -459,7 +407,6 @@ export class HelpdeskDocumentsController {
             const rank = getQueryParam(req, 'rank');
             const reporting_date = getQueryParam(req, 'reporting_date');
             
-            // ─── Two-step approval filters ──────────────────────────────────────
             const internal_approval_status = getQueryEnum(req, 'internal_approval_status', [
                 'pending', 'previewed', 'approved_internal', 'rejected_internal',
                 'changes_requested_internal', 'changes_ready'
@@ -595,22 +542,6 @@ export class HelpdeskDocumentsController {
         }
     }
 
-    // ─── Submit for Approval ─────────────────────────────────────────────────
-
-    static async submitForApproval(req: Request, res: Response, next: NextFunction) {
-        try {
-            const id = getParam(req, 'id');
-            const userId = (req as any).user?.id as string;
-            const { comments } = req.body as SubmitDocumentForApprovalBody || {};
-
-            const doc = await HelpdeskDocumentsService.submitForApproval(id, userId, comments);
-
-            return sendSuccess(res, doc, 'Document submitted for approval.');
-        } catch (err) {
-            next(err);
-        }
-    }
-
     // ─── TWO-STEP APPROVAL CONTROLLER METHODS ────────────────────────────────
 
     /**
@@ -644,7 +575,7 @@ export class HelpdeskDocumentsController {
 
     /**
      * POST /api/helpdesk/documents/:id/internal/approve
-     * Super admin approves internally
+     * Super admin approves internally with signature embedding
      * Requester still sees 'pending_approval' until send back
      */
     static async internalApprove(req: Request, res: Response, next: NextFunction) {
@@ -652,6 +583,16 @@ export class HelpdeskDocumentsController {
             const id = getParam(req, 'id');
             const userId = (req as any).user?.id as string;
             const body = req.body as InternalApproveDocumentBody;
+
+            // Check if the user has a signature uploaded
+            const { rows: userRows } = await pool.query(
+                `SELECT signature_url FROM users WHERE id = $1 AND is_active = true`,
+                [userId]
+            );
+            
+            if (!userRows[0]?.signature_url) {
+                console.warn(`[InternalApprove] User ${userId} has no signature uploaded. Signature will not be embedded.`);
+            }
 
             const doc = await HelpdeskDocumentsService.internalApprove(
                 id,
@@ -662,10 +603,18 @@ export class HelpdeskDocumentsController {
                     approved_by_name: body.approved_by_name || (req as any).user?.full_name,
                     comments: body.comments,
                     generate_e_stamp: body.generate_e_stamp ?? true,
+                    signature_position_x: body.signature_position_x,
+                    signature_position_y: body.signature_position_y,
+                    signature_position_width: body.signature_position_width,
+                    signature_position_height: body.signature_position_height,
                 }
             );
 
-            return sendSuccess(res, doc, 'Document approved internally. Send back to requester when ready.');
+            const signatureMessage = doc.is_signed 
+                ? 'Document approved and signed. Send back to requester when ready.' 
+                : 'Document approved (signature not embedded - no signature found). Send back to requester when ready.';
+
+            return sendSuccess(res, doc, signatureMessage);
         } catch (err) {
             next(err);
         }
@@ -779,7 +728,6 @@ export class HelpdeskDocumentsController {
                 throw new AppError(400, 'Final status is required');
             }
 
-            // Ensure final_status is one of the allowed values
             const validStatuses = ['approved', 'rejected', 'changes_requested'];
             if (!validStatuses.includes(body.final_status)) {
                 throw new AppError(400, `Final status must be one of: ${validStatuses.join(', ')}`);
@@ -799,7 +747,7 @@ export class HelpdeskDocumentsController {
             );
 
             const statusMessages: Record<string, string> = {
-                approved: 'Document approved and sent back to requester.',
+                approved: 'Document approved and sent back to requester with signature.',
                 rejected: 'Document rejected and sent back to requester.',
                 changes_requested: 'Changes requested and sent back to requester.',
             };
@@ -871,7 +819,6 @@ export class HelpdeskDocumentsController {
                 offset,
             });
 
-            // Also get summary for the dashboard
             const summary = await HelpdeskDocumentsService.getPendingInternalApprovalsSummary({
                 entity_type,
             });
@@ -940,7 +887,6 @@ export class HelpdeskDocumentsController {
                 offset,
             });
 
-            // Get summary stats for requester
             const allDocs = await HelpdeskDocumentsService.getRequesterDocuments(userId, {
                 requester_status,
                 entity_type,
@@ -959,88 +905,6 @@ export class HelpdeskDocumentsController {
                 documents: docs,
                 summary,
             }, `Found ${docs.length} documents for requester.`);
-        } catch (err) {
-            next(err);
-        }
-    }
-
-    // ─── LEGACY METHODS (Deprecated) ──────────────────────────────────────────
-
-    /**
-     * @deprecated Use internalApprove() and sendBackToRequester() instead
-     */
-    static async approve(req: Request, res: Response, next: NextFunction) {
-        try {
-            const id = getParam(req, 'id');
-            const userId = (req as any).user?.id as string;
-            const { comments, approved_by_name } = req.body as ApproveDocumentBody;
-
-            const doc = await HelpdeskDocumentsService.approveDocument(
-                id, 
-                userId, 
-                comments,
-                approved_by_name
-            );
-
-            return sendSuccess(res, doc, 'Document approved and e-stamped.');
-        } catch (err) {
-            next(err);
-        }
-    }
-
-    /**
-     * @deprecated Use internalReject() and sendBackToRequester() instead
-     */
-    static async reject(req: Request, res: Response, next: NextFunction) {
-        try {
-            const id = getParam(req, 'id');
-            const userId = (req as any).user?.id as string;
-            const { reason, comments } = req.body as RejectDocumentBody;
-
-            if (!reason) {
-                throw new AppError(400, 'Rejection reason is required');
-            }
-
-            const doc = await HelpdeskDocumentsService.rejectDocument(id, userId, reason, comments);
-
-            return sendSuccess(res, doc, 'Document rejected.');
-        } catch (err) {
-            next(err);
-        }
-    }
-
-    /**
-     * @deprecated Use internalRequestChanges() and sendBackToRequester() instead
-     */
-    static async returnDocument(req: Request, res: Response, next: NextFunction) {
-        try {
-            const id = getParam(req, 'id');
-            const userId = (req as any).user?.id as string;
-            const { comments, instructions } = req.body as ReturnDocumentBody;
-
-            const doc = await HelpdeskDocumentsService.returnDocument(id, userId, comments, instructions);
-
-            return sendSuccess(res, doc, 'Document returned for action.');
-        } catch (err) {
-            next(err);
-        }
-    }
-
-    // ─── Update E-Stamp ──────────────────────────────────────────────────────
-
-    static async updateEStamp(req: Request, res: Response, next: NextFunction) {
-        try {
-            const id = getParam(req, 'id');
-            const { e_stamp_url, e_stamp_public_id, e_stamp_status } = req.body as UpdateEStampBody;
-
-            const doc = await HelpdeskDocumentsService.updateEStamp(
-                id,
-                e_stamp_url,
-                e_stamp_public_id,
-                e_stamp_status || 'stamped'
-            );
-
-            return sendSuccess(res, doc, 'E-stamp updated successfully.');
         } catch (err) {
             next(err);
         }

@@ -239,6 +239,11 @@ export const updateDocumentFileSchema = z.object({
         rejection_reason: z.string().max(500).optional(),
         returned_by: z.string().uuid().optional(),
         returned_by_name: z.string().max(100).optional(),
+        // ─── Signature fields ──────────────────────────────────────────────────
+        is_signed: z.boolean().optional(),
+        signed_by: z.string().uuid().optional(),
+        signed_by_name: z.string().max(100).optional(),
+        signed_at: z.string().datetime().optional(),
     }),
 });
 
@@ -510,17 +515,22 @@ export const internalPreviewDocumentSchema = z.object({
 
 /**
  * POST /api/helpdesk/documents/:id/internal/approve
- * Super admin approves internally (requester doesn't see this yet)
+ * Super admin approves internally with signature embedding (requester doesn't see this yet)
  */
 export const internalApproveDocumentSchema = z.object({
     params: z.object({
         id: z.string().uuid('Document ID must be a valid UUID'),
     }),
     body: z.object({
-        approved_by: z.string().uuid().optional(),
+        approved_by: z.string().uuid('Approved by must be a valid UUID').optional(),
         approved_by_name: z.string().max(100).optional(),
         comments: z.string().max(500).optional(),
         generate_e_stamp: z.boolean().default(true),
+        // ─── Signature position (optional, for PDF embedding) ──────────────────
+        signature_position_x: z.number().optional(),
+        signature_position_y: z.number().optional(),
+        signature_position_width: z.number().optional(),
+        signature_position_height: z.number().optional(),
     }),
 });
 

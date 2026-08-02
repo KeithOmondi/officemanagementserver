@@ -140,6 +140,37 @@ const DEFAULT_NAME_PATTERN =
 const SIGNATURE_Y_OFFSET = 12;
 const SIGNATURE_X_OFFSET = -10;
 
+// ── "Title only" fallback safety buffer ─────────────────────────────────────
+// Pass 2 tries to find a printed name line directly above the title
+// ("REGISTRAR, HIGH COURT") and anchor above THAT. It only falls back to
+// "title only" (anchoring a flat SIGNATURE_Y_OFFSET above the TITLE's own
+// baseline) when no name line was detected above it.
+//
+// In practice this fallback fires far more often than "no name line
+// exists" would suggest — it also fires whenever a name line DOES exist
+// on the page but doesn't match the `namePatterns` built from `signerName`.
+// This happens routinely in this system: `signerName` passed into
+// embedSignatureIntoPDF is the approving super admin's own name (e.g.
+// "Keith Dennis"), but the name actually PRINTED on the memo is a fixed
+// signatory constant (e.g. "CLARA OTIENO-OMONDI") set independently by the
+// frontend template. Those two names are unrelated, so namePatterns never
+// matches the real printed line, Pass 2 silently falls through to "title
+// only", and the original flat 12pt offset — sized only to clear the
+// TITLE line — is nowhere near enough to also clear an entire unrecognized
+// name line sitting above it. The signature image then overlaps that name.
+//
+// This buffer adds the estimated height of one typical bold-caps text line
+// (matching the ~18pt line-height used for the name line in the PDF/DOCX
+// generators) on top of the normal offset, so the "title only" fallback
+// stays safe even when a name line is silently going undetected above it.
+// This does NOT replace fixing signerName at the call site (see
+// internalApprove in helpdesk.documents.service.ts) — passing the actual
+// printed signatory name (or omitting signerName so DEFAULT_NAME_PATTERN's
+// generic two-capitalized-word match can find it) lets Pass 2 anchor
+// precisely against the real name line instead of relying on this blind
+// buffer. But this keeps the fallback non-destructive either way.
+const TITLE_ONLY_NAME_LINE_BUFFER = 18;
+
 // ── Anchor-based placement (Pass 0) tuning ──────────────────────────────────
 // Padding kept clear above the next line (the title/name line right below
 // the anchor) and below the anchor line itself. The image's height is then
@@ -265,6 +296,14 @@ interface DetectedPosition {
   // put the signature well to the right of a left-margin-aligned name,
   // which read as misaligned even once the vertical gap was fixed.
   nextLineX?: number;
+  // True only for the Pass-2 "title only" fallback — i.e. a title line
+  // ("REGISTRAR, HIGH COURT") was found but no name line matching
+  // `signerName` (or DEFAULT_NAME_PATTERN) was detected above it. This
+  // does NOT mean there's no name printed there — see
+  // TITLE_ONLY_NAME_LINE_BUFFER above. Flagged so the caller can apply
+  // that extra safety buffer without threading a separate constant
+  // through the return value.
+  titleOnlyFallback?: boolean;
 }
 
 /**
@@ -477,11 +516,17 @@ function findSignatureBlockPosition(
         console.log(`[findSignatureBlockPosition] RETURNING (name above title): y=${signatureY}, x=${x + SIGNATURE_X_OFFSET}, page=${pageIndex + 1}`);
         return { y: signatureY, pageIndex, x: Math.max(10, x + SIGNATURE_X_OFFSET) };
       } else {
-        // Fallback: place above the title line itself
-        const signatureY = titleLine.y + SIGNATURE_Y_OFFSET;
+        // Fallback: place above the title line itself. See
+        // TITLE_ONLY_NAME_LINE_BUFFER above — this branch fires whenever a
+        // name line couldn't be matched, which in practice usually means
+        // `signerName` (the approver) doesn't match the name actually
+        // PRINTED on the document, not that no name line exists. Add the
+        // buffer so we clear that likely-but-undetected name line instead
+        // of assuming there's nothing there.
+        const signatureY = titleLine.y + SIGNATURE_Y_OFFSET + TITLE_ONLY_NAME_LINE_BUFFER;
         const x = titleLine.items.length > 0 ? Math.min(...titleLine.items.map(it => it.x)) : 60;
-        console.log(`[findSignatureBlockPosition] RETURNING (title only): y=${signatureY}, x=${x + SIGNATURE_X_OFFSET}, page=${pageIndex + 1}`);
-        return { y: signatureY, pageIndex, x: Math.max(10, x + SIGNATURE_X_OFFSET) };
+        console.log(`[findSignatureBlockPosition] RETURNING (title only, +${TITLE_ONLY_NAME_LINE_BUFFER}pt undetected-name buffer): y=${signatureY}, x=${x + SIGNATURE_X_OFFSET}, page=${pageIndex + 1}`);
+        return { y: signatureY, pageIndex, x: Math.max(10, x + SIGNATURE_X_OFFSET), titleOnlyFallback: true };
       }
     }
   }
@@ -516,7 +561,13 @@ function findSignatureBlockPosition(
  *                   where x,y are from TOP of the document (frontend coordinates)
  * @param signerName - Optional signer's full name; if provided, it is used to
  *                     build name-matching patterns; otherwise a default pattern
- *                     matching typical ORHC signatories is used.
+ *                     matching typical ORHC signatories is used. NOTE: this
+ *                     should be the name actually PRINTED on the document
+ *                     (e.g. the fixed memo signatory), not necessarily the
+ *                     account performing the internal approval — those can
+ *                     differ, and when they do, Pass 2 falls back to
+ *                     TITLE_ONLY_NAME_LINE_BUFFER above rather than
+ *                     anchoring precisely against the real name line.
  * @param anchorOnly - When true, only the explicit SIGNATURE_ANCHOR_TEXT marker
  *                     is trusted; if it's not found, no signature is embedded
  *                     rather than guessing via fuzzy name/title matching. Pass
@@ -711,7 +762,10 @@ export async function embedSignatureIntoPDF(
     } else {
       // Name/title-based passes (1 & 2): y is already meant to be the
       // image's bottom, sitting just above the printed name — unchanged
-      // from before.
+      // from before. When this came from the "title only" fallback
+      // (detected.titleOnlyFallback), y already includes
+      // TITLE_ONLY_NAME_LINE_BUFFER, so no extra handling is needed here —
+      // the buffer was baked into detected.y in findSignatureBlockPosition.
       sigDims = sigImage.scaleToFit(widthCap, ANCHOR_DEFAULT_MAX_HEIGHT);
 
       // For non-anchor detection, we need to check if x is -1 (center signal)
@@ -736,7 +790,7 @@ export async function embedSignatureIntoPDF(
       : (detected.x === -1 ? 'centered' : 'left-aligned');
     console.log(
       `[embedSignature] Text-detected position on page ${detected.pageIndex + 1}: x=${x.toFixed(0)}, y=${y.toFixed(0)}, ` +
-      `belowAnchor=${!!detected.belowAnchor}, imgHeight=${sigDims.height.toFixed(1)}, xAlignment=${xAlignment}`
+      `belowAnchor=${!!detected.belowAnchor}, titleOnlyFallback=${!!detected.titleOnlyFallback}, imgHeight=${sigDims.height.toFixed(1)}, xAlignment=${xAlignment}`
     );
 
     targetPage.drawImage(sigImage, {

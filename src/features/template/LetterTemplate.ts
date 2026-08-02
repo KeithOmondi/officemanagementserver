@@ -361,14 +361,14 @@ export function getLetterHTML(data: LetterData): string {
           margin-bottom: 12px;
         }
 
-        /* Essential for PDF text parsers: white text instead of transparent/zero-height */
         .signature-anchor {
           font-size: 1pt;
           color: #ffffff;
           line-height: 1;
           user-select: none;
           display: block;
-          margin-bottom: 4px;
+          height: 1px;
+          margin-bottom: 45px;
         }
 
         .signature-section img,

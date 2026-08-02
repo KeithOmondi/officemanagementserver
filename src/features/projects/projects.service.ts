@@ -19,6 +19,10 @@ import type {
     CreateProjectCommentInput,
     UpdateProjectCommentInput,
     ProjectUser,
+    ChecklistStatus,
+    ChecklistStats,
+    ChecklistSection,
+    ChecklistTask,
 } from './projects.types';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -58,9 +62,10 @@ const PROJECT_SELECT = `
 
 const TASK_SELECT = `
     t.id, t.project_id, t.title, t.description, t.status, t.priority, t.type,
-    t.assignee, t.assignee_name, t.deadline, t.start_date, t.tags,
+    t.assignee, au.full_name AS assignee_name, t.deadline, t.start_date, t.tags,
     t.estimated_hours, t.actual_hours, t.parent_task_id, t.visibility,
     t.is_active, t.created_by, t.created_by_name, t.created_at, t.updated_at,
+    t.checklist_status, t.next_steps, t.team_lead, t.serial_number, t.category,
     COALESCE((
         SELECT json_agg(jsonb_build_object(
             'id', s.id,
@@ -92,6 +97,7 @@ const TASK_SELECT = `
 
 const TASK_JOIN = `
     FROM project_tasks t
+    LEFT JOIN users au ON au.id = t.assignee
 `;
 
 const SUBTASK_SELECT = `
@@ -295,8 +301,9 @@ export class ProjectService {
             `INSERT INTO project_tasks
              (project_id, title, description, status, priority, type,
               assignee, deadline, start_date, tags, estimated_hours,
-              parent_task_id, visibility, created_by, created_by_name)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+              parent_task_id, visibility, created_by, created_by_name,
+              checklist_status, next_steps, team_lead, serial_number, category)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
              RETURNING id`,
             [
                 toDbValue(input.project_id),
@@ -304,7 +311,7 @@ export class ProjectService {
                 toDbValue(input.description),
                 input.status || 'todo',
                 input.priority || 'normal',
-                input.type || 'task',
+                input.type || null, // Free text, default to null
                 toDbValue(input.assignee),
                 toDbValue(input.deadline),
                 toDbValue(input.start_date),
@@ -314,6 +321,11 @@ export class ProjectService {
                 input.visibility || 'team',
                 userId,
                 userName || 'System',
+                toDbValue(input.checklist_status),
+                toDbValue(input.next_steps),
+                toDbValue(input.team_lead),
+                toDbValue(input.serial_number),
+                toDbValue(input.category),
             ]
         );
 
@@ -325,6 +337,7 @@ export class ProjectService {
             project_id, status, priority, type, assignee,
             tags, search,
             deadline_from, deadline_to,
+            checklist_status, category, team_lead,
             page = 1, limit = 20,
             sort_by = 'created_at', sort_order = 'DESC',
         } = filters;
@@ -346,8 +359,11 @@ export class ProjectService {
         if (project_id) { conditions.push(`t.project_id = $${p}`); values.push(project_id); p++; }
         if (status) { conditions.push(`t.status = $${p}`); values.push(status); p++; }
         if (priority) { conditions.push(`t.priority = $${p}`); values.push(priority); p++; }
-        if (type) { conditions.push(`t.type = $${p}`); values.push(type); p++; }
+        if (type) { conditions.push(`t.type ILIKE $${p}`); values.push(`%${type}%`); p++; } // Changed to ILIKE for partial matching
         if (assignee) { conditions.push(`t.assignee = $${p}`); values.push(assignee); p++; }
+        if (checklist_status) { conditions.push(`t.checklist_status = $${p}`); values.push(checklist_status); p++; }
+        if (category) { conditions.push(`t.category = $${p}`); values.push(category); p++; }
+        if (team_lead) { conditions.push(`t.team_lead = $${p}`); values.push(team_lead); p++; }
 
         if (tags) {
             const tagArray = parseTags(tags);
@@ -442,6 +458,13 @@ export class ProjectService {
         if (input.actual_hours !== undefined) { updates.push(`actual_hours = $${p++}`); values.push(toDbValue(input.actual_hours)); }
         if (input.parent_task_id !== undefined) { updates.push(`parent_task_id = $${p++}`); values.push(toDbValue(input.parent_task_id)); }
         if (input.visibility !== undefined) { updates.push(`visibility = $${p++}`); values.push(input.visibility); }
+        
+        // Checklist-specific fields
+        if (input.checklist_status !== undefined) { updates.push(`checklist_status = $${p++}`); values.push(toDbValue(input.checklist_status)); }
+        if (input.next_steps !== undefined) { updates.push(`next_steps = $${p++}`); values.push(toDbValue(input.next_steps)); }
+        if (input.team_lead !== undefined) { updates.push(`team_lead = $${p++}`); values.push(toDbValue(input.team_lead)); }
+        if (input.serial_number !== undefined) { updates.push(`serial_number = $${p++}`); values.push(toDbValue(input.serial_number)); }
+        if (input.category !== undefined) { updates.push(`category = $${p++}`); values.push(toDbValue(input.category)); }
 
         if (!updates.length) return existing;
 
@@ -649,5 +672,357 @@ export class ProjectService {
             [commentId, taskId]
         );
         if (!rows.length) throw new AppError(404, 'Comment not found');
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  CHECKLIST-SPECIFIC OPERATIONS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    static async getChecklistStats(projectId?: string, category?: string): Promise<ChecklistStats> {
+        const conditions: string[] = ['t.is_active = true', 't.checklist_status IS NOT NULL'];
+        const values: unknown[] = [];
+        let p = 1;
+
+        if (projectId) {
+            conditions.push(`t.project_id = $${p}`);
+            values.push(projectId);
+            p++;
+        }
+
+        if (category) {
+            conditions.push(`t.category = $${p}`);
+            values.push(category);
+            p++;
+        }
+
+        const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+        const { rows } = await pool.query(
+            `SELECT
+             COUNT(*) AS total,
+             COUNT(*) FILTER (WHERE t.checklist_status = 'completed') AS completed,
+             COUNT(*) FILTER (WHERE t.checklist_status = 'in_progress') AS in_progress,
+             COUNT(*) FILTER (WHERE t.checklist_status = 'no_progress') AS no_progress,
+             COUNT(*) FILTER (WHERE t.checklist_status = 'pending') AS pending
+             FROM project_tasks t
+             ${where}`,
+            values
+        );
+
+        const row = rows[0] || {};
+        
+        // Get section breakdown
+        const { rows: sectionRows } = await pool.query(
+            `SELECT
+             t.category,
+             COUNT(*) AS total,
+             COUNT(*) FILTER (WHERE t.checklist_status = 'completed') AS completed,
+             COUNT(*) FILTER (WHERE t.checklist_status = 'in_progress') AS in_progress,
+             COUNT(*) FILTER (WHERE t.checklist_status = 'no_progress') AS no_progress,
+             COUNT(*) FILTER (WHERE t.checklist_status = 'pending') AS pending
+             FROM project_tasks t
+             ${where}
+             GROUP BY t.category
+             ORDER BY t.category`,
+            values
+        );
+
+        const sections: ChecklistSection[] = sectionRows.map((row: any) => ({
+            category: row.category || 'Uncategorized',
+            total: parseInt(row.total || '0', 10),
+            completed: parseInt(row.completed || '0', 10),
+            in_progress: parseInt(row.in_progress || '0', 10),
+            no_progress: parseInt(row.no_progress || '0', 10),
+            pending: parseInt(row.pending || '0', 10),
+            tasks: [] // Empty array - tasks can be loaded separately if needed
+        }));
+
+        const total = parseInt(row.total || '0', 10);
+        const completed = parseInt(row.completed || '0', 10);
+
+        const stats: ChecklistStats = {
+            total,
+            completed,
+            in_progress: parseInt(row.in_progress || '0', 10),
+            no_progress: parseInt(row.no_progress || '0', 10),
+            pending: parseInt(row.pending || '0', 10),
+            sections,
+            completion_percentage: total > 0 ? Math.round((completed / total) * 100) : 0,
+        };
+
+        return stats;
+    }
+
+    static async getChecklistTasks(filters: {
+        project_id?: string;
+        category?: string;
+        checklist_status?: ChecklistStatus;
+        team_lead?: string;
+        search?: string;
+        page?: number;
+        limit?: number;
+    }): Promise<{ data: ChecklistTask[]; total: number; page: number; limit: number; totalPages: number }> {
+        const {
+            project_id, category, checklist_status, team_lead,
+            search, page = 1, limit = 20,
+        } = filters;
+
+        const offset = (page - 1) * limit;
+        const conditions: string[] = ['t.is_active = true', 't.checklist_status IS NOT NULL'];
+        const values: unknown[] = [];
+        let p = 1;
+
+        if (project_id) {
+            conditions.push(`t.project_id = $${p}`);
+            values.push(project_id);
+            p++;
+        }
+
+        if (category) {
+            conditions.push(`t.category = $${p}`);
+            values.push(category);
+            p++;
+        }
+
+        if (checklist_status) {
+            conditions.push(`t.checklist_status = $${p}`);
+            values.push(checklist_status);
+            p++;
+        }
+
+        if (team_lead) {
+            conditions.push(`t.team_lead ILIKE $${p}`);
+            values.push(`%${team_lead}%`);
+            p++;
+        }
+
+        if (search) {
+            conditions.push(`(t.title ILIKE $${p} OR t.description ILIKE $${p} OR t.next_steps ILIKE $${p})`);
+            values.push(`%${search}%`);
+            p++;
+        }
+
+        const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+        const [countResult, dataResult] = await Promise.all([
+            pool.query(`SELECT COUNT(*) AS total FROM project_tasks t ${where}`, values),
+           pool.query(
+    `SELECT
+     t.id AS task_id,
+     t.serial_number,
+     t.title AS activity,
+     t.checklist_status AS status,
+     t.next_steps,
+     t.team_lead,
+     t.category,
+     t.description,
+     t.deadline,
+     t.priority,
+     au.full_name AS assignee_name
+     FROM project_tasks t
+     LEFT JOIN users au ON au.id = t.assignee
+     ${where}
+     ORDER BY t.serial_number NULLS LAST, t.created_at ASC
+     LIMIT $${p} OFFSET $${p + 1}`,
+    [...values, limit, offset]
+),
+        ]);
+
+        const total = parseInt(countResult.rows[0]?.total ?? '0', 10);
+        return {
+            data: dataResult.rows.map((row: any) => ({
+                task_id: row.task_id,
+                serial_number: row.serial_number || 0,
+                activity: row.activity,
+                status: row.status,
+                next_steps: row.next_steps,
+                team_lead: row.team_lead,
+                category: row.category,
+                description: row.description,
+                deadline: row.deadline,
+                priority: row.priority,
+                assignee_name: row.assignee_name,
+            })),
+            total,
+            page,
+            limit,
+            totalPages: Math.ceil(total / limit),
+        };
+    }
+
+    static async updateChecklistStatus(
+        taskId: string, 
+        input: { checklist_status: ChecklistStatus; next_steps?: string | null; team_lead?: string | null }
+    ): Promise<ProjectTask> {
+        const existing = await this.findTaskById(taskId);
+        if (!existing) throw new AppError(404, 'Task not found');
+
+        const updates: string[] = [];
+        const values: unknown[] = [];
+        let p = 1;
+
+        if (input.checklist_status !== undefined) {
+            updates.push(`checklist_status = $${p++}`);
+            values.push(input.checklist_status);
+        }
+
+        if (input.next_steps !== undefined) {
+            updates.push(`next_steps = $${p++}`);
+            values.push(toDbValue(input.next_steps));
+        }
+
+        if (input.team_lead !== undefined) {
+            updates.push(`team_lead = $${p++}`);
+            values.push(toDbValue(input.team_lead));
+        }
+
+        if (!updates.length) return existing;
+
+        updates.push(`updated_at = NOW()`);
+        values.push(taskId);
+
+        await pool.query(
+            `UPDATE project_tasks SET ${updates.join(', ')} WHERE id = $${p} AND is_active = true`,
+            values
+        );
+
+        return (await this.findTaskById(taskId))!;
+    }
+
+    static async bulkUpdateChecklist(
+        updates: Array<{ task_id: string; checklist_status?: ChecklistStatus; next_steps?: string | null; team_lead?: string | null; serial_number?: number | null }>
+    ): Promise<void> {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            for (const update of updates) {
+                const { task_id, ...fields } = update;
+                const updates: string[] = [];
+                const values: unknown[] = [];
+                let p = 1;
+
+                if (fields.checklist_status !== undefined) {
+                    updates.push(`checklist_status = $${p++}`);
+                    values.push(fields.checklist_status);
+                }
+
+                if (fields.next_steps !== undefined) {
+                    updates.push(`next_steps = $${p++}`);
+                    values.push(toDbValue(fields.next_steps));
+                }
+
+                if (fields.team_lead !== undefined) {
+                    updates.push(`team_lead = $${p++}`);
+                    values.push(toDbValue(fields.team_lead));
+                }
+
+                if (fields.serial_number !== undefined) {
+                    updates.push(`serial_number = $${p++}`);
+                    values.push(fields.serial_number);
+                }
+
+                if (updates.length === 0) continue;
+
+                updates.push(`updated_at = NOW()`);
+                values.push(task_id);
+
+                await client.query(
+                    `UPDATE project_tasks SET ${updates.join(', ')} WHERE id = $${p} AND is_active = true`,
+                    values
+                );
+            }
+
+            await client.query('COMMIT');
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    static async reorderChecklist(
+        items: Array<{ task_id: string; serial_number: number }>,
+        category?: string | null
+    ): Promise<void> {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            // If category is provided, update all items in that category to have null serial_number first
+            if (category) {
+                await client.query(
+                    `UPDATE project_tasks 
+                     SET serial_number = NULL 
+                     WHERE category = $1 AND is_active = true`,
+                    [category]
+                );
+            }
+
+            // Update each task with its new serial number
+            for (const item of items) {
+                const updates: string[] = ['serial_number = $1'];
+                const values: unknown[] = [item.serial_number];
+
+                if (category) {
+                    updates.push('category = $2');
+                    values.push(category);
+                }
+
+                updates.push('updated_at = NOW()');
+                values.push(item.task_id);
+
+                await client.query(
+                    `UPDATE project_tasks SET ${updates.join(', ')} WHERE id = $${values.length}`,
+                    values
+                );
+            }
+
+            await client.query('COMMIT');
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    static async getChecklistCategories(projectId?: string): Promise<string[]> {
+        const conditions: string[] = ['t.is_active = true', 't.checklist_status IS NOT NULL'];
+        const values: unknown[] = [];
+        let p = 1;
+
+        if (projectId) {
+            conditions.push(`t.project_id = $${p}`);
+            values.push(projectId);
+            p++;
+        }
+
+        const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+        const { rows } = await pool.query(
+            `SELECT DISTINCT t.category
+             FROM project_tasks t
+             ${where}
+             ORDER BY t.category`,
+            values
+        );
+
+        return rows.map((row: any) => row.category).filter(Boolean);
+    }
+
+    static async getTaskBySerialNumber(projectId: string, serialNumber: number): Promise<ProjectTask | null> {
+        const { rows } = await pool.query(
+            `SELECT ${TASK_SELECT} ${TASK_JOIN} 
+             WHERE t.project_id = $1 AND t.serial_number = $2 AND t.is_active = true`,
+            [projectId, serialNumber]
+        );
+        if (!rows[0]) return null;
+        return {
+            ...rows[0],
+            subtasks: rows[0].subtasks || [],
+            comments: rows[0].comments || [],
+        };
     }
 }

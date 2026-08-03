@@ -1297,7 +1297,7 @@ export class DocumentService {
         position,
         signatoryName,
         isCertificate,
-        isCertificate ? certificateAnchorMaxHeight : undefined
+        { anchorMaxHeight: certificateAnchorMaxHeight }
       );
 
       if (doc.file_public_id) {

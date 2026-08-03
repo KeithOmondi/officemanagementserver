@@ -53,7 +53,6 @@ function formatBody(html: string): string {
 
 function formatAddressLine(line: string): string {
   const trimmed = line.trim();
-  // Auto-detect uppercase location lines like NAIROBI. or KITUI.
   const isLocationHeader = /^[A-Z\s.,-]+$/.test(trimmed) && /[A-Z]/.test(trimmed);
 
   if (isLocationHeader) {
@@ -163,7 +162,7 @@ export function getLetterHTML(data: LetterData): string {
 
         @page {
           size: A4;
-          margin: 12mm 20mm 10mm 20mm;
+          margin: 10mm 18mm 10mm 18mm;
         }
 
         * {
@@ -175,7 +174,7 @@ export function getLetterHTML(data: LetterData): string {
         html, body {
           background: white;
           font-family: 'Arimo', Arial, Helvetica, sans-serif;
-          font-size: 11pt;
+          font-size: 10.5pt;
           color: #000;
         }
 
@@ -185,13 +184,13 @@ export function getLetterHTML(data: LetterData): string {
         }
 
         .page-footer-space {
-          height: 120px;
+          height: 100px;
         }
 
         /* Header */
         .first-page-header {
-          padding-bottom: 8px;
-          margin-bottom: 14px;
+          padding-bottom: 6px;
+          margin-bottom: 10px;
           border-bottom: 1.5px solid #C29B38;
         }
 
@@ -202,9 +201,9 @@ export function getLetterHTML(data: LetterData): string {
         }
 
         .header-banner img {
-          max-height: 95px;
+          max-height: 85px;
           width: auto;
-          margin-right: 20px;
+          margin-right: 18px;
         }
 
         .header-text {
@@ -213,19 +212,19 @@ export function getLetterHTML(data: LetterData): string {
         }
 
         .header-text .judiciary {
-          font-size: 14pt;
+          font-size: 13pt;
           font-weight: bold;
           text-transform: uppercase;
           letter-spacing: 0.5px;
         }
 
         .header-text .office-name {
-          font-size: 11pt;
+          font-size: 10.5pt;
           font-weight: bold;
           text-transform: uppercase;
           font-style: normal;
           letter-spacing: 0.3px;
-          margin-top: 3px;
+          margin-top: 2px;
         }
 
         /* Fixed Footer */
@@ -251,14 +250,14 @@ export function getLetterHTML(data: LetterData): string {
         }
 
         .footer-emblem-cell {
-          width: 175px;
+          width: 160px;
           vertical-align: middle;
           padding-right: 10px;
         }
 
         .footer-emblem-cell img {
-          width: 165px;
-          max-height: 60px;
+          width: 150px;
+          max-height: 55px;
           height: auto;
           object-fit: contain;
           display: block;
@@ -267,9 +266,9 @@ export function getLetterHTML(data: LetterData): string {
         .footer-text-cell {
           text-align: right;
           vertical-align: middle;
-          font-size: 8pt;
+          font-size: 7.5pt;
           color: #333333;
-          line-height: 1.3;
+          line-height: 1.25;
         }
 
         .footer-text-cell p {
@@ -278,7 +277,7 @@ export function getLetterHTML(data: LetterData): string {
 
         .footer-tagline-top {
           font-weight: bold;
-          font-size: 8.5pt;
+          font-size: 8pt;
           color: #1E4620;
           margin-bottom: 2px;
         }
@@ -286,9 +285,9 @@ export function getLetterHTML(data: LetterData): string {
         .footer-tagline-bottom {
           text-align: right;
           font-weight: bold;
-          font-size: 9.5pt;
+          font-size: 9pt;
           color: #1E4620;
-          margin-top: 4px;
+          margin-top: 3px;
         }
 
         /* Ref & Date Row */
@@ -296,8 +295,8 @@ export function getLetterHTML(data: LetterData): string {
           display: flex;
           justify-content: normal;
           align-items: flex-start;
-          margin-bottom: 12px;
-          font-size: 11pt;
+          margin-bottom: 10px;
+          font-size: 10.5pt;
         }
 
         .ref-date-row .ref {
@@ -311,20 +310,20 @@ export function getLetterHTML(data: LetterData): string {
 
         /* Body Content Styles */
         .body-content {
-          line-height: 1.35;
+          line-height: 1.3;
         }
 
         .to-block {
-          margin-bottom: 8px;
+          margin-bottom: 6px;
         }
 
         .to-block p {
           margin: 0;
-          line-height: 1.25;
+          line-height: 1.2;
         }
 
         .to-salutation {
-          margin-bottom: 12px;
+          margin-bottom: 10px;
           font-weight: normal;
         }
 
@@ -332,21 +331,23 @@ export function getLetterHTML(data: LetterData): string {
           font-weight: bold;
           text-decoration: underline;
           text-transform: uppercase;
-          margin: 10px 0;
-          line-height: 1.3;
+          margin: 8px 0;
+          line-height: 1.25;
         }
 
         .body-content p {
-          margin-bottom: 6px;
+          margin-bottom: 5px;
           text-align: left;
           orphans: 2;
           widows: 2;
         }
 
-        /* Signature Section */
+        /* Signature Block (Locked Together Across Multi-Page Documents) */
         .signature-section {
-          margin-top: 14px;
-          page-break-inside: avoid;
+          margin-top: 10px;
+          position: relative;
+          page-break-inside: avoid !important;
+          break-inside: avoid !important;
         }
 
         .signature-anchor {
@@ -355,69 +356,69 @@ export function getLetterHTML(data: LetterData): string {
           line-height: 1;
           user-select: none;
           display: block;
-          width: 220px;
-          height: 60px;
-          margin-bottom: 6px;
+          height: 1px;
+          margin-bottom: 4px;
         }
 
         .signature-section img,
         .signature img {
-          height: 60px !important;
+          height: 55px !important;
           width: auto !important;
-          max-width: 220px;
+          max-width: 200px;
           object-fit: contain;
           display: block;
-          margin-bottom: 6px;
+          margin-bottom: 4px;
         }
 
         .signature {
-          margin-top: 6px;
+          margin-top: 2px;
         }
 
         .signature .name {
           font-weight: bold;
-          font-size: 11.5pt;
+          font-size: 11pt;
           text-transform: uppercase;
           letter-spacing: 0.3px;
         }
 
         .signature .title {
           font-weight: bold;
-          font-size: 11.5pt;
+          font-size: 11pt;
           text-transform: uppercase;
           letter-spacing: 0.3px;
-          margin-top: 2px;
+          margin-top: 1px;
         }
 
         /* CC & Enclosure Blocks */
         .cc-block {
-          margin-top: 10px;
-          font-size: 10.5pt;
-          page-break-inside: avoid;
+          margin-top: 8px;
+          font-size: 10pt;
+          page-break-inside: avoid !important;
+          break-inside: avoid !important;
         }
 
         .cc-label {
-          margin-bottom: 4px;
+          margin-bottom: 3px;
           display: block;
         }
 
         .cc-entry {
           display: flex;
-          margin-bottom: 4px;
+          margin-bottom: 2px;
         }
 
         .cc-entry .cc-number {
-          width: 24px;
+          width: 22px;
         }
 
         .cc-entry .cc-text p {
           margin: 0;
-          line-height: 1.25;
+          line-height: 1.2;
         }
 
         .enclosures-block {
-          margin-top: 10px;
-          font-size: 10.5pt;
+          margin-top: 8px;
+          font-size: 10pt;
           font-weight: bold;
           text-decoration: underline;
         }

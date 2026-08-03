@@ -177,7 +177,7 @@ export function getLetterHTML(data: LetterData): string {
           height: 120px;
         }
 
-        /* Flow Header (Appears only on Page 1) */
+        /* Flow Header */
         .first-page-header {
           padding-bottom: 8px;
           margin-bottom: 14px;
@@ -353,7 +353,7 @@ export function getLetterHTML(data: LetterData): string {
           font-weight: bold;
         }
 
-        /* Signature Section - Optimized Production Spacing */
+        /* Signature Section - Fixed Anchor Sizing */
         .signature-section {
           margin-top: 14px;
           page-break-inside: avoid;
@@ -365,24 +365,27 @@ export function getLetterHTML(data: LetterData): string {
 
         .signature-anchor {
           font-size: 1pt;
-          color: #ffffff;
+          color: transparent;
           line-height: 1;
           user-select: none;
           display: block;
-          height: 1px;
-          margin-bottom: 8px;
+          width: 220px;
+          height: 60px;
+          margin-bottom: 6px;
         }
 
         .signature-section img,
         .signature img {
-          max-height: 115px !important;
-          width: auto;
+          height: 60px !important;
+          width: auto !important;
+          max-width: 220px;
+          object-fit: contain;
           display: block;
-          margin-bottom: 4px;
+          margin-bottom: 6px;
         }
 
         .signature {
-          margin-top: 8px;
+          margin-top: 6px;
         }
 
         .signature .name {
@@ -440,7 +443,6 @@ export function getLetterHTML(data: LetterData): string {
         <tbody>
           <tr>
             <td>
-              <!-- Header rendered inline on page 1 only -->
               <div class="first-page-header">
                 <div class="header-banner">
                   <img src="${escapeHtml(logoUrl)}" alt="Republic of Kenya & Judiciary Logos" />

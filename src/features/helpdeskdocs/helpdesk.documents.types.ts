@@ -140,6 +140,11 @@ export interface HelpdeskDocument {
     stamp_position_width?: number | null;  // Width of stamp on PDF
     stamp_position_height?: number | null; // Height of stamp on PDF
 
+    // ─── NEW: Final Generated PDF Fields ───────────────────────────────────────
+    stamped_file_url?: string | null;      // The URL to the fully generated PDF containing both the signature and stamp
+    stamped_file_public_id?: string | null;// Cloud public ID for the final generated PDF
+    stamped_file_size?: number | null;     // Size of the final generated PDF
+
     // ─── Aide Request Fields ──────────────────────────────────────────────────
     officer_rank?: string | null;
     officer_name?: string | null;
@@ -194,6 +199,9 @@ export interface CreateHelpdeskDocumentInput {
     request_type?: string | null;
     judge_name?: string | null;
     
+    // ─── NEW: Stamp field for initial creation ────────────────────────────────
+    stamp_type?: StampType | null; // Pre-select a specific stamp type if needed at creation
+
     // ─── Aide Request Fields ──────────────────────────────────────────────
     officer_rank?: string | null;
     officer_name?: string | null;
@@ -248,6 +256,10 @@ export interface UpdateDocumentFileInput {
     stamp_position_y?: number;
     stamp_position_width?: number;
     stamp_position_height?: number;
+    // ─── NEW: Final generated PDF fields ──────────────────────────────────────
+    stamped_file_url?: string;
+    stamped_file_public_id?: string;
+    stamped_file_size?: number;
 }
 
 export interface HelpdeskDocumentFilters {
@@ -316,6 +328,12 @@ export interface InternalApprovalRequest {
     signature_position_y?: number;
     signature_position_width?: number;
     signature_position_height?: number;
+    // ─── NEW: Stamp position ──────────────────────────────────────────────────
+    stamp_position_x?: number;
+    stamp_position_y?: number;
+    stamp_position_width?: number;
+    stamp_position_height?: number;
+    stamp_type?: StampType; // Allow admin to choose/override the stamp type during approval
 }
 
 /**
@@ -437,6 +455,8 @@ export interface RequesterDocumentView {
     stamped_by_name?: string;
     stamped_at?: string;
     stamp_type?: StampType;
+    // ─── NEW: Final file info ──────────────────────────────────────────────────
+    stamped_file_url?: string | null; // Requester will download/view this if approved
 }
 
 // ─── Notification Types ──────────────────────────────────────────────────────
@@ -1242,7 +1262,12 @@ export const TWO_STEP_APPROVAL_TABLE_COLUMNS = `
     stamp_position_x FLOAT,
     stamp_position_y FLOAT,
     stamp_position_width FLOAT,
-    stamp_position_height FLOAT
+    stamp_position_height FLOAT,
+
+    -- ─── NEW: Final Generated PDF fields ───────────────────────────────────────
+    stamped_file_url VARCHAR(255),
+    stamped_file_public_id VARCHAR(255),
+    stamped_file_size INTEGER
 `;
 
 export const PREVIEW_HISTORY_TABLE_SCHEMA = `

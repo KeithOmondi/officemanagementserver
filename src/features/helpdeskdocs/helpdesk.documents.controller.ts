@@ -252,6 +252,8 @@ export class HelpdeskDocumentsController {
                 aide_status: body.aide_status || undefined,
                 residence_location: body.residence_location || undefined,
                 sentry_status: body.sentry_status || undefined,
+                // ─── NEW: Stamp Type for initial upload ──────────────────────────
+                stamp_type: body.stamp_type || undefined,
             };
 
             const doc = await HelpdeskDocumentsService.upload(file, input, userId);
@@ -582,7 +584,7 @@ export class HelpdeskDocumentsController {
 
     /**
      * POST /api/helpdesk/documents/:id/internal/approve
-     * Super admin approves internally with signature embedding
+     * Super admin approves internally with signature AND stamp embedding
      * Requester still sees 'pending_approval' until send back
      */
     static async internalApprove(req: Request, res: Response, next: NextFunction) {
@@ -601,6 +603,7 @@ export class HelpdeskDocumentsController {
                 console.warn(`[InternalApprove] User ${userId} has no signature uploaded. Signature will not be embedded.`);
             }
 
+            // 🔴 FIX: Pass stamp positions to the service!
             const doc = await HelpdeskDocumentsService.internalApprove(
                 id,
                 {
@@ -614,6 +617,12 @@ export class HelpdeskDocumentsController {
                     signature_position_y: body.signature_position_y,
                     signature_position_width: body.signature_position_width,
                     signature_position_height: body.signature_position_height,
+                    // ─── NEW: Pass stamp positioning and type ──────────────────
+                    stamp_position_x: body.stamp_position_x,
+                    stamp_position_y: body.stamp_position_y,
+                    stamp_position_width: body.stamp_position_width,
+                    stamp_position_height: body.stamp_position_height,
+                    stamp_type: body.stamp_type,
                 }
             );
 
@@ -1123,65 +1132,63 @@ export class HelpdeskDocumentsController {
         }
     }
 
-  // ─── Delete Document ─────────────────────────────────────────────────────
+    // ─── Delete Document ─────────────────────────────────────────────────────
 
-// ─── Delete Document ─────────────────────────────────────────────────────
+    static async remove(req: Request, res: Response, next: NextFunction) {
+        try {
+            const id = getParam(req, 'id');
+            const userId = (req as any).user?.id;
+            const userRole = (req as any).user?.role;
 
-static async remove(req: Request, res: Response, next: NextFunction) {
-    try {
-        const id = getParam(req, 'id');
-        const userId = (req as any).user?.id;
-        const userRole = (req as any).user?.role;
+            const doc = await HelpdeskDocumentsService.findById(id);
+            if (!doc) {
+                throw new AppError(404, 'Document not found');
+            }
 
-        const doc = await HelpdeskDocumentsService.findById(id);
-        if (!doc) {
-            throw new AppError(404, 'Document not found');
+            if (!doc.is_active) {
+                throw new AppError(400, 'Document is already deleted');
+            }
+
+            const isOwner = doc.uploaded_by === userId;
+            const isDeptHead = userRole === 'dept_head';
+            const isSuperAdmin = userRole === 'super_admin';
+            const isStaff = userRole === 'staff';
+
+            // ─── Permission Matrix ───────────────────────────────────────────
+            // | Role        | Draft | Returned | Rejected | Pending | Approved |
+            // |-------------|-------|----------|----------|---------|----------|
+            // | Super Admin | ✅    | ✅       | ✅       | ✅      | ✅       |
+            // | Dept Head   | ✅    | ✅       | ✅       | ✅      | ✅       |
+            // | Staff (own) | ✅    | ✅       | ✅       | ❌      | ❌       |
+            // | Staff (other)| ❌   | ❌       | ❌       | ❌      | ❌       |
+            // ───────────────────────────────────────────────────────────────────
+
+            // Check if user has ANY delete permission
+            if (!isSuperAdmin && !isDeptHead && !isStaff) {
+                throw new AppError(403, 'You do not have permission to delete documents');
+            }
+
+            // Staff can only delete their own documents
+            if (isStaff && !isOwner) {
+                throw new AppError(403, 'You can only delete documents you uploaded');
+            }
+
+            // Staff can only delete draft, returned, or rejected documents
+            if (isStaff && !['draft', 'returned', 'rejected'].includes(doc.status)) {
+                throw new AppError(403, 'You can only delete draft, returned, or rejected documents');
+            }
+
+            // Dept head and super admin can delete any document
+            // (including approved and pending)
+
+            await HelpdeskDocumentsService.delete(id);
+
+            return sendSuccess(res, null, 'Document deleted successfully.');
+        } catch (err) {
+            console.error('[DELETE] Error:', err);
+            next(err);
         }
-
-        if (!doc.is_active) {
-            throw new AppError(400, 'Document is already deleted');
-        }
-
-        const isOwner = doc.uploaded_by === userId;
-        const isDeptHead = userRole === 'dept_head';
-        const isSuperAdmin = userRole === 'super_admin';
-        const isStaff = userRole === 'staff';
-
-        // ─── Permission Matrix ───────────────────────────────────────────
-        // | Role        | Draft | Returned | Rejected | Pending | Approved |
-        // |-------------|-------|----------|----------|---------|----------|
-        // | Super Admin | ✅    | ✅       | ✅       | ✅      | ✅       |
-        // | Dept Head   | ✅    | ✅       | ✅       | ✅      | ✅       |
-        // | Staff (own) | ✅    | ✅       | ✅       | ❌      | ❌       |
-        // | Staff (other)| ❌   | ❌       | ❌       | ❌      | ❌       |
-        // ───────────────────────────────────────────────────────────────────
-
-        // Check if user has ANY delete permission
-        if (!isSuperAdmin && !isDeptHead && !isStaff) {
-            throw new AppError(403, 'You do not have permission to delete documents');
-        }
-
-        // Staff can only delete their own documents
-        if (isStaff && !isOwner) {
-            throw new AppError(403, 'You can only delete documents you uploaded');
-        }
-
-        // Staff can only delete draft, returned, or rejected documents
-        if (isStaff && !['draft', 'returned', 'rejected'].includes(doc.status)) {
-            throw new AppError(403, 'You can only delete draft, returned, or rejected documents');
-        }
-
-        // Dept head and super admin can delete any document
-        // (including approved and pending)
-
-        await HelpdeskDocumentsService.delete(id);
-
-        return sendSuccess(res, null, 'Document deleted successfully.');
-    } catch (err) {
-        console.error('[DELETE] Error:', err);
-        next(err);
     }
-}
 
     // ─── Hard Delete (Admin Only) ───────────────────────────────────────────
 

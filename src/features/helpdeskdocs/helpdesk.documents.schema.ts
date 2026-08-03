@@ -1,5 +1,3 @@
-// src/features/helpdesk/helpdesk.documents.schema.ts
-
 import { z } from 'zod';
 
 // ─── Base Enums ──────────────────────────────────────────────────────────────
@@ -138,6 +136,9 @@ export const uploadHelpdeskDocumentSchema = z.object({
         request_type: z.string().pipe(requestTypeEnum).optional().nullable(),
         judge_name: z.string().max(100).optional().nullable(),
         
+        // ─── NEW: Stamp type on initial creation ──────────────────────────────────
+        stamp_type: stampTypeEnum.optional().nullable(),
+        
         // ─── Aide Request Fields ──────────────────────────────────────────────
         officer_rank: z.string().pipe(officerRankEnum).optional().nullable(),
         officer_name: z.string().max(100).optional().nullable(),
@@ -232,9 +233,6 @@ export const getDocumentByIdSchema = z.object({
 });
 
 // ─── PATCH /api/helpdesk/documents/:id/file ──────────────────────────────────
-// src/features/helpdesk/helpdesk.documents.schema.ts
-
-// ─── PATCH /api/helpdesk/documents/:id/file ──────────────────────────────────
 export const updateDocumentFileSchema = z.object({
     params: z.object({
         id: z.string().uuid('Document ID must be a valid UUID'),
@@ -262,7 +260,7 @@ export const updateDocumentFileSchema = z.object({
         signed_by: z.string().uuid().optional(),
         signed_by_name: z.string().max(100).optional(),
         signed_at: z.string().datetime().optional(),
-        // ─── NEW: Stamp fields ────────────────────────────────────────────────────
+        // ─── Stamp fields ──────────────────────────────────────────────────────
         is_stamped: z.preprocess(
             (val) => {
                 if (val === 'true') return true;
@@ -309,6 +307,20 @@ export const updateDocumentFileSchema = z.object({
             (val) => {
                 if (typeof val === 'string') {
                     const num = parseFloat(val);
+                    return isNaN(num) ? val : num;
+                }
+                return val;
+            },
+            z.number().optional()
+        ),
+        
+        // ─── NEW: Final Generated PDF fields ────────────────────────────────────
+        stamped_file_url: z.string().url().optional(),
+        stamped_file_public_id: z.string().optional(),
+        stamped_file_size: z.preprocess(
+            (val) => {
+                if (typeof val === 'string') {
+                    const num = parseInt(val, 10);
                     return isNaN(num) ? val : num;
                 }
                 return val;
@@ -543,6 +555,7 @@ export const batchUploadSchema = z.object({
                 status: documentStatusEnum.default('draft'),
                 request_type: requestTypeEnum.optional(),
                 judge_name: z.string().max(100).optional(),
+                stamp_type: stampTypeEnum.optional().nullable(), // Added to batch upload as well
                 
                 // ─── Aide Request Fields ──────────────────────────────────────────────
                 officer_rank: z.string().pipe(officerRankEnum).optional().nullable(),
@@ -586,7 +599,7 @@ export const internalPreviewDocumentSchema = z.object({
 
 /**
  * POST /api/helpdesk/documents/:id/internal/approve
- * Super admin approves internally with signature embedding (requester doesn't see this yet)
+ * Super admin approves internally with signature AND stamp embedding (requester doesn't see this yet)
  */
 export const internalApproveDocumentSchema = z.object({
     params: z.object({
@@ -597,11 +610,19 @@ export const internalApproveDocumentSchema = z.object({
         approved_by_name: z.string().max(100).optional(),
         comments: z.string().max(500).optional(),
         generate_e_stamp: z.boolean().default(true),
-        // ─── Signature position (optional, for PDF embedding) ──────────────────
+        
+        // ─── Signature position ──────────────────────────────────────────────────
         signature_position_x: z.number().optional(),
         signature_position_y: z.number().optional(),
         signature_position_width: z.number().optional(),
         signature_position_height: z.number().optional(),
+        
+        // ─── NEW: Stamp position (Applies the stamp during internal approval) ───
+        stamp_position_x: z.number().optional(),
+        stamp_position_y: z.number().optional(),
+        stamp_position_width: z.number().optional(),
+        stamp_position_height: z.number().optional(),
+        stamp_type: stampTypeEnum.optional(), // Override stamp type during approval
     }),
 });
 

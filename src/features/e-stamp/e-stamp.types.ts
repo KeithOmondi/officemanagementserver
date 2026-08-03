@@ -1,6 +1,11 @@
 // src/features/e-stamp/e-stamp.types.ts
 
-export type EStampType = 'approved' | 'received';
+/**
+ * E-Stamp Types - Supported stamp types
+ * Updated to include 'official' to match the helpdesk module.
+ */
+export type EStampType = 'approved' | 'received' | 'official';
+
 export type EStampStatus = 'pending' | 'stamped' | 'failed' | 'revoked';
 
 export interface EStamp {
@@ -9,8 +14,14 @@ export interface EStamp {
     stamp_type: EStampType;
     stamped_by: string;
     stamped_by_name?: string;
+    
+    // Stamp image metadata (links to the original PDF or standalone PNG if needed)
     stamp_image_url: string;
     stamp_public_id: string;
+
+    // 🔴 NEW: Store the original PDF URL for reference/auditing
+    original_pdf_url?: string;
+
     stamp_data: {
         reference_no: string;
         document_title: string;
@@ -45,7 +56,16 @@ export interface EStamp {
 export interface GenerateEStampInput {
     document_id: string;
     stamp_type: EStampType;
-    signature_url: string;
+    /** 
+     * URL of the original raw PDF (uploaded by the frontend) 
+     * The EStampService will fetch this internally.
+     */
+    original_pdf_url: string; 
+    /** 
+     * URL of the user's signature image. 
+     * If null/undefined, the stamp generator will draw a squiggle.
+     */
+    signature_url?: string | null;
     metadata?: {
         ip_address?: string;
         user_agent?: string;
@@ -74,11 +94,13 @@ export interface EStampVerificationResult {
 export const E_STAMP_TYPE_LABELS: Record<EStampType, string> = {
     approved: 'Approved',
     received: 'Received',
+    official: 'Official',
 };
 
 export const E_STAMP_TYPE_COLORS: Record<EStampType, string> = {
     approved: 'emerald',
     received: 'blue',
+    official: 'purple',
 };
 
 export const E_STAMP_STATUS_LABELS: Record<EStampStatus, string> = {

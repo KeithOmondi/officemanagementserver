@@ -25,6 +25,13 @@ function getParam(req: Request, key: string): string {
 export class EStampController {
 
     // ── POST /api/e-stamps/generate ──────────────────────────────────────────
+    /**
+     * ⚠️ DEPRECATED: This endpoint is kept for internal/admin testing only.
+     * In production, E-Stamps are generated automatically by the 
+     * HelpdeskDocumentsService.internalApprove() flow.
+     * 
+     * Frontend should NOT call this directly.
+     */
     static async generateEStamp(req: Request, res: Response, next: NextFunction) {
         try {
             const body = req.body;
@@ -37,16 +44,18 @@ export class EStampController {
                 });
             }
 
-            const stamp = await EStampService.generateEStamp(body, userId);
+            // Destructure the result to get the database record
+            const { eStampRecord } = await EStampService.generateEStamp(body, userId);
 
-            console.log(`📜 E-Stamp generated:`, {
-                id: stamp.id,
-                document_id: stamp.document_id,
-                stamp_type: stamp.stamp_type,
+            console.log(`📜 E-Stamp generated (Manual/Admin):`, {
+                id: eStampRecord.id,
+                document_id: eStampRecord.document_id,
+                stamp_type: eStampRecord.stamp_type,
                 userId,
             });
 
-            return sendSuccess(res, stamp, 'E-Stamp generated successfully', 201);
+            // Return only the database record (not the massive PDF buffer!)
+            return sendSuccess(res, eStampRecord, 'E-Stamp generated successfully', 201);
         } catch (err) {
             next(err);
         }

@@ -1,9 +1,6 @@
-// src/features/helpdesk/helpdesk.documents.service.ts
-
 import { pool } from '../../config/db';
 import { AppError } from '../../utils/response';
 import { uploadToCloudinary, deleteFromCloudinary } from '../../config/cloudinary';
-import { embedSignatureIntoPDF } from '../../utils/embedSignature';
 import axios from 'axios';
 import type {
     HelpdeskDocument,
@@ -18,7 +15,7 @@ import type {
     DocumentStatus,
     EStampStatus,
     UpdateDocumentFileInput,
-    InternalApprovalStatus,
+    //InternalApprovalStatus,
     RequesterVisibleStatus,
     InternalApprovalRequest,
     InternalPreviewRequest,
@@ -29,11 +26,13 @@ import type {
     RequesterDocumentView,
     StampType,
 } from './helpdesk.documents.types';
+import { EStampService } from '../e-stamp/e-stamp.service';
+import { embedSignatureBlockIntoPDF } from '../../utils/signatureBlock';
 
 const FOLDER = 'orhc/helpdesk-documents';
 const E_STAMP_FOLDER = 'orhc/helpdesk-documents/e-stamps';
 
-// ─── SELECT Fragment ──────────────────────────────────────────────────────────
+// ─── SELECT Fragment (UPDATED: Added stamped_file columns) ──────────────────
 
 const DOC_SELECT = `
     d.id, d.ref, d.subject, d.entity_type, d.entity_id, d.format,
@@ -59,10 +58,12 @@ const DOC_SELECT = `
     d.is_signed, d.signed_by, d.signed_by_name, d.signed_at,
     d.signature_position_x, d.signature_position_y,
     d.signature_position_width, d.signature_position_height,
-    -- NEW: Stamp fields
+    -- Stamp fields
     d.is_stamped, d.stamped_by, d.stamped_by_name, d.stamped_at,
     d.stamp_type, d.stamp_position_x, d.stamp_position_y,
     d.stamp_position_width, d.stamp_position_height,
+    -- NEW: Final Generated PDF fields
+    d.stamped_file_url, d.stamped_file_public_id, d.stamped_file_size,
     u.full_name as uploaded_by_name,
     au.full_name as approved_by_name,
     ru.full_name as returned_by_name,
@@ -93,6 +94,7 @@ function cleanInput(input: CreateHelpdeskDocumentInput): CreateHelpdeskDocumentI
         aide_status: input.aide_status === null ? undefined : input.aide_status?.trim() || undefined,
         residence_location: input.residence_location === null ? undefined : input.residence_location?.trim() || undefined,
         sentry_status: input.sentry_status === null ? undefined : input.sentry_status?.trim() || undefined,
+        stamp_type: input.stamp_type === null ? undefined : input.stamp_type,
     };
     return cleaned;
 }
@@ -199,7 +201,7 @@ export class HelpdeskDocumentsService {
                     'pending',
                     'pending_approval',
                     false, // is_stamped
-                    null, // stamp_type
+                    cleaned.stamp_type || null, // stamp_type
                 ]
             );
 
@@ -214,7 +216,7 @@ export class HelpdeskDocumentsService {
         }
     }
 
-    // ─── Update Document File ─────────────────────────────────────────────────
+    // ─── Update Document File (UPDATED: Save Stamped File Metadata) ────────────
 
     static async updateDocumentFile(
         id: string,
@@ -361,7 +363,7 @@ export class HelpdeskDocumentsService {
                 p++;
             }
 
-            // ─── NEW: Stamp fields ──────────────────────────────────────────────
+            // ─── Stamp fields ──────────────────────────────────────────────
             if (input.is_stamped !== undefined) {
                 updates.push(`is_stamped = $${p}`);
                 values.push(input.is_stamped);
@@ -413,6 +415,25 @@ export class HelpdeskDocumentsService {
             if (input.stamp_position_height !== undefined) {
                 updates.push(`stamp_position_height = $${p}`);
                 values.push(input.stamp_position_height);
+                p++;
+            }
+
+            // ─── NEW: Final Stamped PDF fields ──────────────────────────────────────
+            if (input.stamped_file_url !== undefined) {
+                updates.push(`stamped_file_url = $${p}`);
+                values.push(input.stamped_file_url);
+                p++;
+            }
+
+            if (input.stamped_file_public_id !== undefined) {
+                updates.push(`stamped_file_public_id = $${p}`);
+                values.push(input.stamped_file_public_id);
+                p++;
+            }
+
+            if (input.stamped_file_size !== undefined) {
+                updates.push(`stamped_file_size = $${p}`);
+                values.push(input.stamped_file_size);
                 p++;
             }
 
@@ -663,7 +684,7 @@ export class HelpdeskDocumentsService {
             query += ` AND d.status = 'pending_approval'`;
         }
 
-        // ─── NEW: Stamp filters ──────────────────────────────────────────────────
+        // ─── Stamp filters ──────────────────────────────────────────────────
         if (filters.is_stamped !== undefined) {
             query += ` AND d.is_stamped = $${p}`;
             params.push(filters.is_stamped);
@@ -815,7 +836,6 @@ export class HelpdeskDocumentsService {
         `;
         const { rows: internalStatsRows } = await pool.query(internalStatsQuery, params);
 
-        // ─── NEW: Stamp stats ──────────────────────────────────────────────────
         const stampStatsQuery = `
             SELECT 
                 COUNT(CASE WHEN d.is_stamped = true THEN 1 END) as stamped_count,
@@ -888,7 +908,6 @@ export class HelpdeskDocumentsService {
                 COUNT(CASE WHEN d.requester_status = 'changes_requested' THEN 1 END) as requester_changes_requested,
                 COUNT(CASE WHEN d.requester_status = 'in_revision' THEN 1 END) as requester_in_revision,
                 COUNT(CASE WHEN d.is_signed = true THEN 1 END) as signed_count,
-                -- ─── NEW: Stamp summary ──────────────────────────────────────────
                 COUNT(CASE WHEN d.is_stamped = true THEN 1 END) as stamped_count,
                 COUNT(CASE WHEN d.is_signed = true AND d.is_stamped = true THEN 1 END) as signed_and_stamped_count
             FROM helpdesk_documents d
@@ -1091,8 +1110,8 @@ export class HelpdeskDocumentsService {
         }
     }
 
-    /**
-     * Internal Approve - Super admin approves internally with signature embedding
+       /**
+     * Internal Approve - Super admin approves internally with signature AND STAMP embedding
      * Requester still sees 'pending_approval' until send back
      */
     static async internalApprove(
@@ -1139,33 +1158,41 @@ export class HelpdeskDocumentsService {
         try {
             await client.query('BEGIN');
 
-            let signedFileUrl = doc.file_url;
-            let signedPublicId = doc.public_id;
-            let wasSigned = false;
+            let finalFileUrl = doc.file_url;
+            let finalPublicId = doc.public_id;
+            let finalFileSize: number | null = null;
+            let wasSigned = false; // Tracks if the file was modified (stamp or signature)
+            let eStampRecordId: string | null = null;
 
-            // ─── EMBED SIGNATURE INTO PDF ──────────────────────────────────────────────
-            if (doc.file_url && doc.format === 'pdf' && signer?.signature_url) {
+            // ─── BRANCH: E-STAMP OR SIGNATURE BLOCK ────────────────────────────────────
+            if (input.generate_e_stamp) {
+                // ─── APPROVE & STAMP ──────────────────────────────────────────────────
                 try {
-                    console.log(`[InternalApprove] Embedding signature for document ${id}...`);
-                    
-                    const response = await axios.get<ArrayBuffer>(doc.file_url, { 
-                        responseType: 'arraybuffer' 
-                    });
-                    const originalPdf = Buffer.from(response.data);
+                    console.log(`[InternalApprove] Generating E-Stamp for document ${id}...`);
 
-                    const signedPdf = await embedSignatureIntoPDF(
-                        originalPdf,
-                        signer.signature_url,
-                        null,
-                        signer.full_name || 'Registrar, High Court',
-                        false
+                    // Call the updated EStampService (which returns a PDF buffer)
+                    const { stampedPdfBuffer, eStampRecord } = await EStampService.generateEStamp(
+                        {
+                            document_id: id,
+                            stamp_type: input.stamp_type || 'approved',
+                            original_pdf_url: doc.file_url,      // The raw memo URL
+                            signature_url: signer.signature_url, // The real signature
+                            metadata: {
+                                department_name: 'Office of the Registrar',
+                                station_name: 'High Court',
+                            },
+                        },
+                        input.approved_by || 'system'
                     );
 
+                    eStampRecordId = eStampRecord.id;
+
+                    // Upload the final merged PDF to Cloudinary
                     const multerFile: Express.Multer.File = {
-                        buffer: signedPdf,
+                        buffer: stampedPdfBuffer,
                         mimetype: 'application/pdf',
-                        originalname: doc.file_url.split('/').pop() || 'signed-document.pdf',
-                        size: signedPdf.length,
+                        originalname: doc.file_url.split('/').pop() || 'stamped-document.pdf',
+                        size: stampedPdfBuffer.length,
                         fieldname: 'file',
                         encoding: '7bit',
                         stream: null as any,
@@ -1174,26 +1201,74 @@ export class HelpdeskDocumentsService {
                         path: '',
                     };
                     const uploaded = await uploadToCloudinary(multerFile, FOLDER);
-                    signedFileUrl = uploaded.secure_url;
-                    signedPublicId = uploaded.public_id;
+
+                    finalFileUrl = uploaded.secure_url;
+                    finalPublicId = uploaded.public_id;
+                    finalFileSize = uploaded.bytes || uploaded.size || stampedPdfBuffer.length;
                     wasSigned = true;
 
-                    console.log(`[InternalApprove] Signature embedded successfully for document ${id}`);
-                } catch (embedError) {
-                    console.error(`[InternalApprove] Failed to embed signature for document ${id}:`, embedError);
+                    console.log(`[InternalApprove] Successfully generated & uploaded stamped PDF for ${id}`);
+
+                } catch (stampError) {
+                    console.error(`[InternalApprove] Failed to generate e-stamp for ${id}:`, stampError);
+                    let errorMessage = 'Unknown error during e-stamp generation';
+                    if (stampError instanceof Error) {
+                        errorMessage = stampError.message;
+                    } else if (typeof stampError === 'string') {
+                        errorMessage = stampError;
+                    }
+                    throw new AppError(500, `Failed to generate e-stamp: ${errorMessage}`);
+                }
+            } else {
+                // ─── APPROVE & SIGN (No stamp, just a clean signature block) ──────────
+                try {
+                    console.log(`[InternalApprove] Generating Signature Block for document ${id}...`);
+
+                    // Call the new signature block utility
+                    const signedPdfBuffer = await embedSignatureBlockIntoPDF(
+                        doc.file_url,
+                        signer.signature_url!,
+                        signer.full_name || 'Registrar, High Court',
+                        'Registrar, High Court',
+                        new Date()
+                    );
+
+                    // Upload the signed PDF to Cloudinary
+                    const multerFile: Express.Multer.File = {
+                        buffer: signedPdfBuffer,
+                        mimetype: 'application/pdf',
+                        originalname: doc.file_url.split('/').pop() || 'signed-document.pdf',
+                        size: signedPdfBuffer.length,
+                        fieldname: 'file',
+                        encoding: '7bit',
+                        stream: null as any,
+                        destination: '',
+                        filename: '',
+                        path: '',
+                    };
+                    const uploaded = await uploadToCloudinary(multerFile, FOLDER);
+
+                    finalFileUrl = uploaded.secure_url;
+                    finalPublicId = uploaded.public_id;
+                    finalFileSize = uploaded.bytes || uploaded.size || signedPdfBuffer.length;
+                    wasSigned = true; // Document is now signed
+
+                    console.log(`[InternalApprove] Successfully generated & uploaded signed PDF for ${id}`);
+
+                } catch (signError) {
+                    console.error(`[InternalApprove] Failed to generate signature block for ${id}:`, signError);
+                    let errorMessage = 'Unknown error during signature block generation';
+                    if (signError instanceof Error) {
+                        errorMessage = signError.message;
+                    } else if (typeof signError === 'string') {
+                        errorMessage = signError;
+                    }
+                    throw new AppError(500, `Failed to generate signature block: ${errorMessage}`);
                 }
             }
 
-            // Generate e-stamp if requested
-            let eStampUrl: string | null = null;
-            let eStampPublicId: string | null = null;
-            if (input.generate_e_stamp) {
-                const eStamp = await this.generateEStamp(doc);
-                eStampUrl = eStamp.secure_url;
-                eStampPublicId = eStamp.public_id;
-            }
-
-            // ─── UPDATE with signature and stamp fields ──────────────────────────────
+            // ─── UPDATE THE DOCUMENT IN THE DATABASE ──────────────────────────────────
+            // Note: We always update the document regardless of which path was taken.
             const updateQuery = `
                 UPDATE helpdesk_documents
                 SET internal_approval_status = 'approved_internal',
@@ -1211,24 +1286,43 @@ export class HelpdeskDocumentsService {
                     signed_at = CASE WHEN $6::boolean THEN NOW() ELSE signed_at END,
                     file_url = $7::text,
                     public_id = $8::varchar,
+                    is_stamped = $9::boolean,
+                    stamped_by = CASE WHEN $9::boolean THEN $1::uuid ELSE stamped_by END,
+                    stamped_by_name = CASE WHEN $9::boolean THEN $2::varchar ELSE stamped_by_name END,
+                    stamped_at = CASE WHEN $9::boolean THEN NOW() ELSE stamped_at END,
+                    stamp_type = $10::varchar,
+                    stamp_position_x = $11::float,
+                    stamp_position_y = $12::float,
+                    stamp_position_width = $13::float,
+                    stamp_position_height = $14::float,
+                    stamped_file_url = CASE WHEN $6::boolean THEN $7::text ELSE stamped_file_url END,
+                    stamped_file_public_id = CASE WHEN $6::boolean THEN $8::varchar ELSE stamped_file_public_id END,
+                    stamped_file_size = CASE WHEN $6::boolean THEN $15::int ELSE stamped_file_size END,
                     updated_at = NOW()
-                WHERE id = $9::uuid AND is_active = true
+                WHERE id = $16::uuid AND is_active = true
             `;
 
             await client.query(updateQuery, [
                 input.approved_by || null,
                 input.approved_by_name || null,
                 input.comments || null,
-                eStampUrl,
-                eStampPublicId,
+                doc.e_stamp_url, // Keep existing or null
+                doc.e_stamp_public_id, // Keep existing or null
                 wasSigned,
-                signedFileUrl,
-                signedPublicId,
+                finalFileUrl,
+                finalPublicId,
+                wasSigned && input.generate_e_stamp, // is_stamped only true if we went the stamp path
+                input.stamp_type || 'approved',
+                input.stamp_position_x || null,
+                input.stamp_position_y || null,
+                input.stamp_position_width || null,
+                input.stamp_position_height || null,
+                finalFileSize,
                 id
             ]);
 
             // Delete old file if it was replaced
-            if (doc.public_id && doc.public_id !== signedPublicId && signedFileUrl !== doc.file_url) {
+            if (doc.public_id && doc.public_id !== finalPublicId && finalFileUrl !== doc.file_url) {
                 try {
                     await deleteFromCloudinary(doc.public_id, 'raw');
                     console.log(`[InternalApprove] Deleted old file ${doc.public_id}`);
@@ -1242,7 +1336,7 @@ export class HelpdeskDocumentsService {
                 input.approved_by || 'system',
                 'approved',
                 doc.uploaded_by || undefined,
-                input.comments || `Document approved internally${wasSigned ? ' and signed' : ''} (pending send back)`
+                input.comments || `Document approved internally${wasSigned ? (input.generate_e_stamp ? ', stamped, and signed' : ', signed') : ''} (pending send back)`
             );
 
             await client.query('COMMIT');
@@ -1250,6 +1344,7 @@ export class HelpdeskDocumentsService {
             const updatedDoc = await this.findById(id);
             if (!updatedDoc) throw new AppError(500, 'Failed to retrieve updated document');
             return updatedDoc;
+
         } catch (err) {
             await client.query('ROLLBACK');
             console.error('[InternalApprove] Error:', err);
@@ -1713,21 +1808,13 @@ export class HelpdeskDocumentsService {
             is_signed: doc.is_signed || false,
             signed_by_name: doc.signed_by_name,
             signed_at: doc.signed_at,
-            // ─── NEW: Stamp info ──────────────────────────────────────────────
             is_stamped: doc.is_stamped || false,
             stamped_by_name: doc.stamped_by_name,
             stamped_at: doc.stamped_at,
             stamp_type: doc.stamp_type as StampType | undefined,
+            // ─── NEW: Pass the final file URL to the requester view ─────────────
+            stamped_file_url: doc.stamped_file_url || null,
         }));
-    }
-
-    // ─── Generate E-Stamp ────────────────────────────────────────────────────
-
-    private static async generateEStamp(doc: HelpdeskDocument): Promise<{ secure_url: string; public_id: string }> {
-        return {
-            secure_url: doc.file_url,
-            public_id: doc.public_id || 'estampt-placeholder',
-        };
     }
 
     // ─── Link to Entity ──────────────────────────────────────────────────────
@@ -2148,7 +2235,7 @@ export class HelpdeskDocumentsService {
 
             await client.query('COMMIT');
 
-            // Delete the file from Cloudinary
+            // Delete the original file from Cloudinary
             if (doc.public_id) {
                 try {
                     await deleteFromCloudinary(doc.public_id, 'raw');
@@ -2165,6 +2252,16 @@ export class HelpdeskDocumentsService {
                     console.log(`[Delete] Deleted e-stamp ${doc.e_stamp_public_id} from Cloudinary`);
                 } catch (error) {
                     console.error('Failed to delete e-stamp from Cloudinary:', error);
+                }
+            }
+            
+            // ─── NEW: Delete the final generated stamped file ──────────────────────
+            if (doc.stamped_file_public_id) {
+                try {
+                    await deleteFromCloudinary(doc.stamped_file_public_id, 'raw');
+                    console.log(`[Delete] Deleted final stamped file ${doc.stamped_file_public_id} from Cloudinary`);
+                } catch (error) {
+                    console.error('Failed to delete stamped file from Cloudinary:', error);
                 }
             }
 
@@ -2212,7 +2309,7 @@ export class HelpdeskDocumentsService {
 
             await client.query('COMMIT');
 
-            // Delete the file from Cloudinary
+            // Delete the original file from Cloudinary
             if (doc.public_id) {
                 try {
                     await deleteFromCloudinary(doc.public_id, 'raw');
@@ -2226,6 +2323,15 @@ export class HelpdeskDocumentsService {
                     await deleteFromCloudinary(doc.e_stamp_public_id, 'raw');
                 } catch (error) {
                     console.error('Failed to delete e-stamp from Cloudinary:', error);
+                }
+            }
+
+            // ─── NEW: Delete the final generated stamped file ──────────────────────
+            if (doc.stamped_file_public_id) {
+                try {
+                    await deleteFromCloudinary(doc.stamped_file_public_id, 'raw');
+                } catch (error) {
+                    console.error('Failed to delete stamped file from Cloudinary:', error);
                 }
             }
 

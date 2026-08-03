@@ -2,7 +2,8 @@
 
 import { z } from 'zod';
 
-const stampTypeEnum = z.enum(['approved', 'received']);
+// 🔴 FIX: Added 'official' to match the updated EStampType
+const stampTypeEnum = z.enum(['approved', 'received', 'official']);
 const stampStatusEnum = z.enum(['pending', 'stamped', 'failed', 'revoked']);
 
 // IP address validation using regex
@@ -14,7 +15,8 @@ export const generateEStampSchema = z.object({
     body: z.object({
         document_id: z.string().uuid('Document ID must be a valid UUID'),
         stamp_type: stampTypeEnum,
-        signature_url: z.string().url('Signature URL must be a valid URL'),
+        original_pdf_url: z.string().url('Original PDF URL must be a valid URL'),
+        signature_url: z.string().url('Signature URL must be a valid URL').optional().nullable(),
         metadata: z.object({
             ip_address: z.string().regex(ipAddressRegex, 'Invalid IP address format').optional(),
             user_agent: z.string().optional(),

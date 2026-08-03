@@ -1,5 +1,3 @@
-// src/utils/embedSignature.ts
-
 import { PDFDocument } from 'pdf-lib';
 import sharp from 'sharp';
 import axios from 'axios';
@@ -574,18 +572,9 @@ function findSignatureBlockPosition(
  *                     true for templates (e.g. Certificate) where the signer's
  *                     name may appear earlier in the body, or where the closing
  *                     block has no name line for the fuzzy passes to anchor on.
- * @param anchorMaxHeight - Only affects the anchor-marker path (belowAnchor).
- *                     Caps how tall the signature image is allowed to be when
- *                     placed below the anchor, both when a real gap was
- *                     measured AND in the no-next-line-found fallback.
- *                     Defaults to 65pt, which matches Letter/Memo's real,
- *                     measured ~46pt anchor-to-name gap comfortably — leave
- *                     this at the default for those. Pass a smaller value
- *                     (e.g. ~35) for templates with a tighter traditional
- *                     signature envelope, such as Certificate's ~32pt gap —
- *                     otherwise the no-next-line fallback can compute a y
- *                     so low it gets clamped to the page bottom, landing on
- *                     top of the footer.
+ * @param stampOptions - Optional object containing stamp coordinates and type.
+ *                     If passed, it will override `anchorMaxHeight` behavior
+ *                     and apply custom stamp placement.
  * @returns The modified PDF buffer, or the original if placement failed.
  */
 export async function embedSignatureIntoPDF(
@@ -594,9 +583,14 @@ export async function embedSignatureIntoPDF(
   position?: { x: number; y: number; width: number; height: number } | null,
   signerName?: string | null,
   anchorOnly: boolean = false,
-  anchorMaxHeight: number = ANCHOR_DEFAULT_MAX_HEIGHT
+  // 👇 RECEIVE THE OPTIONS OBJECT
+  stampOptions?: { x?: number; y?: number; width?: number; height?: number; type?: string; anchorMaxHeight?: number } | null
 ): Promise<Buffer> {
-  console.log(`[embedSignature] signer: ${signerName ?? '(none provided)'}, anchorOnly: ${anchorOnly}, anchorMaxHeight: ${anchorMaxHeight}`);
+  // 🔴 FIX: Replace anchorMaxHeight with the value from stampOptions, or fall back to default
+  const effectiveAnchorMaxHeight = stampOptions?.anchorMaxHeight || ANCHOR_DEFAULT_MAX_HEIGHT;
+
+  console.log(`[embedSignature] signer: ${signerName ?? '(none provided)'}, anchorOnly: ${anchorOnly}, anchorMaxHeight: ${effectiveAnchorMaxHeight}`);
+  console.log(`[embedSignature] stampOptions:`, stampOptions);
 
   const pdfDoc = await PDFDocument.load(pdfBuffer);
   const pages = pdfDoc.getPages();
@@ -614,7 +608,7 @@ export async function embedSignatureIntoPDF(
   const sigPng = await sharp(trimmedSigBuffer).png().toBuffer();
   const sigImage = await pdfDoc.embedPng(sigPng);
 
-  // ── If custom position is provided ──────────────────────────────────────────
+  // ── If custom position is provided (Backwards compatibility) ──────────────
   if (position) {
     console.log(`[embedSignature] Using custom position: x=${position.x}, y=${position.y}, w=${position.width}, h=${position.height}`);
 
@@ -687,24 +681,12 @@ export async function embedSignatureIntoPDF(
     if (detected.belowAnchor) {
       // Measure the actual gap between the anchor and whatever line comes
       // after it (the signatory block's first line), and size the image to
-      // fit inside it — rather than assuming a fixed max height, which
-      // works for a spacious template (e.g. Letter's measured ~46pt gap)
-      // but overlaps a tight one. anchorMaxHeight is also the ceiling here
-      // (not just ANCHOR_DEFAULT_MAX_HEIGHT), so a template with a smaller
-      // traditional envelope (e.g. Certificate's ~32pt) doesn't end up with
-      // an oversized signature even when a generous gap happens to measure
-      // larger than that template's authentic proportions.
-      //
-      // nextLineY is a BASELINE, not the line's visible top, so
-      // NEXT_LINE_CAP_HEIGHT_ESTIMATE is subtracted from the available gap
-      // here (and added back below when placing y) — otherwise the image
-      // is sized/placed as if the glyphs' cap-height were free space, and
-      // its bottom edge cuts through the top of the next line's text.
-      let heightCap = anchorMaxHeight;
+      // fit inside it — rather than assuming a fixed max height.
+      let heightCap = effectiveAnchorMaxHeight;
       if (detected.nextLineY !== undefined) {
         const availableGap =
           detected.y - detected.nextLineY - ANCHOR_TOP_GAP - ANCHOR_BOTTOM_GAP - NEXT_LINE_CAP_HEIGHT_ESTIMATE;
-        heightCap = Math.max(ANCHOR_MIN_HEIGHT, Math.min(anchorMaxHeight, availableGap));
+        heightCap = Math.max(ANCHOR_MIN_HEIGHT, Math.min(effectiveAnchorMaxHeight, availableGap));
         if (availableGap < ANCHOR_MIN_HEIGHT) {
           console.warn(
             `[embedSignature] Anchor-to-next-line gap (${availableGap.toFixed(1)}pt, after accounting for ` +
@@ -714,30 +696,16 @@ export async function embedSignatureIntoPDF(
           );
         }
       } else {
-        // No next line was found on the anchor's page — most likely the
-        // signatory block got paginated onto a different page than the
-        // anchor. This is the scenario that previously let the fallback
-        // compute a y low enough to clamp to the page bottom, landing on
-        // the footer. Capping to anchorMaxHeight here (35pt for
-        // certificates, passed from DocumentService.sign) instead of the
-        // old flat 65pt keeps this fallback from reaching nearly that far
-        // down in the first place.
+        // No next line was found on the anchor's page.
         console.warn(
           '[embedSignature] No next line found below the anchor on its page — using the ' +
-          `no-next-line fallback with anchorMaxHeight=${anchorMaxHeight}pt. If this fires ` +
-          'regularly for a given template, its anchor and signatory block are likely being ' +
-          'split across pages; check that they are wrapped together with page-break-inside: avoid.'
+          `no-next-line fallback with anchorMaxHeight=${effectiveAnchorMaxHeight}pt.`
         );
-        heightCap = anchorMaxHeight;
+        heightCap = effectiveAnchorMaxHeight;
       }
       sigDims = sigImage.scaleToFit(widthCap, heightCap);
 
-      // ALIGN TO THE NAME'S LEFT EDGE when we know it (nextLineX), matching
-      // where "CLARA OTIENO-OMONDI, OGW" / "REGISTRAR, HIGH COURT" actually
-      // starts on the page. Page-centering the signature independent of
-      // that left margin was what made it read as floating off to the
-      // right of the name. Only fall back to page-centering if no next
-      // line was found at all (nextLineX undefined).
+      // ALIGN TO THE NAME'S LEFT EDGE when we know it (nextLineX)
       if (detected.nextLineX !== undefined) {
         x = detected.nextLineX + SIGNATURE_X_OFFSET;
       } else {
@@ -748,24 +716,10 @@ export async function embedSignatureIntoPDF(
       x = Math.max(10, Math.min(x, width - sigDims.width - 10));
 
       y = detected.nextLineY !== undefined
-        // Anchor bottom edge just above the next line's actual ink — the
-        // next line's baseline PLUS its estimated cap-height, plus the
-        // usual clearance gap. Without the cap-height term this sits at
-        // the baseline, i.e. underneath the glyphs, which let the image's
-        // bottom edge (sized above using the un-corrected gap) overlap the
-        // top of "HIGH COURT SUPPORT OFFICE"-style bold caps lines.
         ? detected.nextLineY + ANCHOR_BOTTOM_GAP + NEXT_LINE_CAP_HEIGHT_ESTIMATE
-        // No next line was found (anchor was the last line on the page) —
-        // fall back to placing it a fixed gap below the anchor, using the
-        // (now correctly capped) sigDims.height computed above.
         : detected.y - ANCHOR_TOP_GAP - sigDims.height;
     } else {
-      // Name/title-based passes (1 & 2): y is already meant to be the
-      // image's bottom, sitting just above the printed name — unchanged
-      // from before. When this came from the "title only" fallback
-      // (detected.titleOnlyFallback), y already includes
-      // TITLE_ONLY_NAME_LINE_BUFFER, so no extra handling is needed here —
-      // the buffer was baked into detected.y in findSignatureBlockPosition.
+      // Name/title-based passes (1 & 2)
       sigDims = sigImage.scaleToFit(widthCap, ANCHOR_DEFAULT_MAX_HEIGHT);
 
       // For non-anchor detection, we need to check if x is -1 (center signal)

@@ -2,8 +2,7 @@
 
 import { pool } from '../../config/db';
 import { AppError } from '../../utils/response';
-import { uploadToCloudinary, deleteFromCloudinary } from '../../config/cloudinary';
-import QRCode from 'qrcode';
+import { deleteFromCloudinary } from '../../config/cloudinary';
 import crypto from 'crypto';
 import type {
     EStamp,
@@ -12,10 +11,12 @@ import type {
     EStampType,
 } from './e-stamp.types';
 import { E_STAMP_TYPE_LABELS } from './e-stamp.types';
+import { generateStampOnPdf } from '../../utils/stampGenerator';
+import axios from "axios";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const E_STAMP_FOLDER = 'registrar/e-stamps';
+// (E_STAMP_FOLDER is no longer needed since we are not uploading standalone stamps)
 
 // ─── E-Stamp Service ─────────────────────────────────────────────────────────
 
@@ -26,13 +27,18 @@ export class EStampService {
     static async generateEStamp(
         input: GenerateEStampInput,
         userId: string
-    ): Promise<EStamp> {
-        // Check if document exists
+    ): Promise<{
+        stampedPdfBuffer: Buffer;
+        verificationCode: string;
+        verificationHash: string;
+        eStampRecord: EStamp;
+    }> {
+        // 1. Check if the helpdesk_document exists
         const docResult = await pool.query(
-            `SELECT d.id, d.title, d.reference_no, d.type, d.status,
+            `SELECT d.id, d.subject as title, d.ref as reference_no, d.entity_type as type, d.status,
                     u.full_name as stamped_by_name,
                     u.signature_url
-             FROM documents d
+             FROM helpdesk_documents d
              LEFT JOIN users u ON u.id = $1
              WHERE d.id = $2 AND d.is_active = true`,
             [userId, input.document_id]
@@ -44,7 +50,7 @@ export class EStampService {
 
         const doc = docResult.rows[0];
 
-        // Check if document already has this type of e-stamp
+        // 2. Check if document already has this type of e-stamp
         const existingStamp = await pool.query(
             `SELECT id FROM document_e_stamps 
              WHERE document_id = $1 AND stamp_type = $2 AND is_active = true`,
@@ -55,55 +61,75 @@ export class EStampService {
             throw new AppError(409, `Document already has an active ${E_STAMP_TYPE_LABELS[input.stamp_type]} e-stamp`);
         }
 
-        // Use provided signature or get from user
-        const signatureUrl = input.signature_url || doc.signature_url;
+        // 3. Generate unique verification code & hash
+        const verificationCode = this.generateVerificationCode(doc.id, input.stamp_type);
+        const verificationHash = crypto.createHash('sha256').update(verificationCode).digest('hex');
 
-        if (!signatureUrl) {
-            throw new AppError(400, 'No signature found. Please upload a signature first.');
+        // 4. Fetch the raw PDF and the signature image from Cloudinary
+        let pdfBuffer: Buffer;
+        let signatureBuffer: Buffer | null = null;
+
+        try {
+            // Fetch PDF
+            const pdfRes = await axios.get<ArrayBuffer>(input.original_pdf_url, { 
+                responseType: 'arraybuffer' 
+            });
+            pdfBuffer = Buffer.from(pdfRes.data);
+
+            // Fetch Signature (if provided)
+            if (input.signature_url) {
+                try {
+                    const sigRes = await axios.get<ArrayBuffer>(input.signature_url, { 
+                        responseType: 'arraybuffer' 
+                    });
+                    signatureBuffer = Buffer.from(sigRes.data);
+                } catch (sigError) {
+                    console.warn('[EStampService] Failed to fetch signature, using fallback squiggle:', sigError);
+                }
+            }
+        } catch (fetchError) {
+            console.error('[EStampService] Failed to fetch assets:', fetchError);
+            throw new AppError(500, 'Failed to fetch required assets for stamp generation');
         }
 
-        // Generate unique verification code
-        const verificationCode = this.generateVerificationCode(doc.id, input.stamp_type);
-
-        // Create stamp image with signature
-        const stampImageBuffer = await this.createStampImage({
-            documentId: doc.id,
-            referenceNo: doc.reference_no || 'N/A',
-            title: doc.title,
-            stampedBy: doc.stamped_by_name || 'Unknown',
-            stampedAt: new Date().toISOString(),
-            verificationCode,
-            stampType: input.stamp_type,
-            signatureUrl: signatureUrl,
-            metadata: input.metadata,
+        // 5. Generate the stamped PDF using pdf-lib
+        const stampedPdfBuffer = await generateStampOnPdf({
+            pdfBuffer,
+            date: new Date(),
+            label: 'APPROVED',
+            issuer: 'REGISTRAR HIGH COURT',
+            signatureBuffer: signatureBuffer,
+            approverName: input.metadata?.department_name || 'REGISTRAR',
+            verticalAnchorFraction: 0.16,
+            angle: -16,
         });
 
-        // Upload stamp to Cloudinary
-        const uploaded = await this.uploadStampImage(stampImageBuffer, doc.id, input.stamp_type);
-
-        // Save stamp to database
+        // 6. Save stamp metadata to database
+        // 🔴 FIX: Added original_pdf_url to the column list and values list
         const { rows } = await pool.query(
             `INSERT INTO document_e_stamps
                 (document_id, stamp_type, stamped_by, stamp_image_url, stamp_public_id,
-                 stamp_data, metadata, verification_code, verification_hash)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                 original_pdf_url, stamp_data, metadata, verification_code, verification_hash)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              RETURNING *`,
             [
                 input.document_id,
                 input.stamp_type,
                 userId,
-                uploaded.secure_url,
-                uploaded.public_id,
+                input.original_pdf_url, // Saved here as a reference
+                'stamp-placeholder',     // No standalone PNG public ID
+                input.original_pdf_url,  // 🔴 Added explicit column for original_pdf_url
                 JSON.stringify({
                     reference_no: doc.reference_no,
                     document_title: doc.title,
                     stamped_at: new Date().toISOString(),
                     stamped_by: userId,
                     stamp_type: input.stamp_type,
-                    signature_url: signatureUrl,
+                    signature_url: input.signature_url || null,
                     department_name: input.metadata?.department_name || null,
                     station_name: input.metadata?.station_name || null,
                     document_type: doc.type,
+                    verification_code: verificationCode,
                 }),
                 JSON.stringify({
                     ip_address: input.metadata?.ip_address || null,
@@ -114,20 +140,30 @@ export class EStampService {
                     department_name: input.metadata?.department_name || null,
                 }),
                 verificationCode,
-                crypto.createHash('sha256').update(verificationCode).digest('hex'),
+                verificationHash,
             ]
         );
 
-        // Update document e_stamp_status
+        const eStampRecord = rows[0];
+
+        // 7. Update helpdesk_documents e_stamp_status (just for tracking)
         await pool.query(
-            `UPDATE documents 
+            `UPDATE helpdesk_documents 
              SET e_stamp_status = 'stamped',
                  updated_at = NOW()
              WHERE id = $1`,
             [input.document_id]
         );
 
-        return rows[0];
+        console.log(`[EStampService] E-Stamp metadata saved successfully for ${input.document_id}`);
+
+        // 8. Return the buffer and metadata to the caller (Helpdesk service)
+        return {
+            stampedPdfBuffer,   // <--- The final PDF with the stamp and signature embedded
+            verificationCode,
+            verificationHash,
+            eStampRecord,
+        };
     }
 
     // ── Verify E-Stamp ──────────────────────────────────────────────────────
@@ -210,9 +246,10 @@ export class EStampService {
         );
 
         // Update document e_stamp_status if no other stamps exist
+        // 🔴 FIX: Changed 'documents' to 'helpdesk_documents'
         if (otherStamps.rows.length === 0) {
             await pool.query(
-                `UPDATE documents 
+                `UPDATE helpdesk_documents 
                  SET e_stamp_status = 'failed',
                      updated_at = NOW()
                  WHERE id = $1`,
@@ -220,14 +257,8 @@ export class EStampService {
             );
         }
 
-        // Delete stamp from Cloudinary
-        const stamp = await pool.query(
-            `SELECT stamp_public_id FROM document_e_stamps WHERE id = $1`,
-            [id]
-        );
-        if (stamp.rows[0]?.stamp_public_id) {
-            await deleteFromCloudinary(stamp.rows[0].stamp_public_id).catch(console.error);
-        }
+        // We no longer delete a standalone PNG from Cloudinary because the stamp is embedded in the PDF.
+        // If we ever need to clean up the original PDF, that is handled by the Helpdesk service.
     }
 
     // ── Get E-Stamp by Document ──────────────────────────────────────────────
@@ -339,185 +370,5 @@ export class EStampService {
         const random = crypto.randomBytes(4).toString('hex').toUpperCase();
         const docHash = documentId.slice(0, 8).toUpperCase();
         return `${prefix}-${docHash}-${timestamp.slice(-6)}-${random}`;
-    }
-
-    private static async createStampImage(data: {
-        documentId: string;
-        referenceNo: string;
-        title: string;
-        stampedBy: string;
-        stampedAt: string;
-        verificationCode: string;
-        stampType: EStampType;
-        signatureUrl: string;
-        metadata?: any;
-    }): Promise<Buffer> {
-        const {
-            referenceNo,
-            title,
-            stampedBy,
-            stampedAt,
-            verificationCode,
-            stampType,
-            signatureUrl,
-            metadata
-        } = data;
-
-        const isApproved = stampType === 'approved';
-        const color = isApproved ? '#1E4620' : '#1a56db';
-        const accentColor = isApproved ? '#C29B38' : '#60a5fa';
-        const typeLabel = isApproved ? 'APPROVED' : 'RECEIVED';
-        const typeSubLabel = isApproved ? 'Registration High Court' : 'Registration High Court';
-        const stationName = metadata?.station_name || '';
-        const departmentName = metadata?.department_name || 'Office of the Registrar';
-
-        // Fetch the signature image
-        let signatureBase64 = '';
-        try {
-            const response = await fetch(signatureUrl);
-            const buffer = await response.arrayBuffer();
-            signatureBase64 = Buffer.from(buffer).toString('base64');
-        } catch (error) {
-            console.error('Failed to fetch signature:', error);
-        }
-
-        // Create QR Code for verification
-        let qrCodeBase64 = '';
-        try {
-            const qrData = {
-                verification_code: verificationCode,
-                document_id: data.documentId,
-                reference_no: referenceNo,
-                stamp_type: stampType,
-                issued_at: new Date().toISOString(),
-            };
-            qrCodeBase64 = await QRCode.toDataURL(JSON.stringify(qrData), {
-                errorCorrectionLevel: 'H',
-                margin: 1,
-                width: 50,
-            });
-        } catch (error) {
-            console.error('QR Code generation failed:', error);
-        }
-
-        // Create SVG stamp with signature
-        const svg = `
-            <svg xmlns="http://www.w3.org/2000/svg" width="500" height="300">
-                <!-- Background -->
-                <rect width="500" height="300" fill="${color}" rx="15" ry="15"/>
-                
-                <!-- Border -->
-                <rect x="8" y="8" width="484" height="284" fill="none" stroke="${accentColor}" stroke-width="3" rx="12" ry="12"/>
-                
-                <!-- Inner border -->
-                <rect x="16" y="16" width="468" height="268" fill="none" stroke="${accentColor}" stroke-width="1" rx="10" ry="10" opacity="0.3"/>
-                
-                <!-- Header -->
-                <text x="250" y="35" font-family="Georgia, serif" font-size="16" font-weight="bold" fill="${accentColor}" text-anchor="middle">
-                    OFFICE OF THE REGISTRAR HIGH COURT
-                </text>
-                
-                <!-- Subtitle -->
-                <text x="250" y="52" font-family="Georgia, serif" font-size="11" fill="#CCCCCC" text-anchor="middle" font-style="italic">
-                    ${departmentName}
-                </text>
-                
-                <!-- Divider line -->
-                <line x1="80" y1="60" x2="420" y2="60" stroke="${accentColor}" stroke-width="1" opacity="0.5"/>
-                
-                <!-- Main Stamp Type -->
-                <text x="250" y="95" font-family="Arial, sans-serif" font-size="28" font-weight="bold" fill="${accentColor}" text-anchor="middle" letter-spacing="4">
-                    ${typeLabel}
-                </text>
-                
-                <!-- Sub-type -->
-                <text x="250" y="115" font-family="Arial, sans-serif" font-size="12" fill="#FFFFFF" text-anchor="middle" letter-spacing="2">
-                    ${typeSubLabel}
-                </text>
-                
-                <!-- Document Reference -->
-                <text x="250" y="138" font-family="Arial, sans-serif" font-size="10" fill="#CCCCCC" text-anchor="middle">
-                    Ref: ${referenceNo}
-                </text>
-                
-                <!-- Document Title -->
-                <text x="250" y="155" font-family="Arial, sans-serif" font-size="9" fill="#AAAAAA" text-anchor="middle">
-                    ${title.length > 50 ? title.slice(0, 50) + '...' : title}
-                </text>
-                
-                ${stationName ? `
-                    <text x="250" y="172" font-family="Arial, sans-serif" font-size="10" fill="#CCCCCC" text-anchor="middle">
-                        ${stationName}
-                    </text>
-                ` : ''}
-                
-                <!-- Signature Section -->
-                ${signatureBase64 ? `
-                    <image x="130" y="${stationName ? 185 : 175}" width="240" height="45" 
-                           href="data:image/png;base64,${signatureBase64}" 
-                           preserveAspectRatio="xMidYMid meet"/>
-                ` : `
-                    <text x="250" y="${stationName ? 210 : 195}" font-family="Arial, sans-serif" font-size="10" fill="#888888" text-anchor="middle" font-style="italic">
-                        [Signature]
-                    </text>
-                `}
-                
-                <!-- Stamped By -->
-                <text x="250" y="${stationName ? 215 : 200}" font-family="Arial, sans-serif" font-size="9" fill="#AAAAAA" text-anchor="middle">
-                    ${isApproved ? 'Approved' : 'Received'} By: ${stampedBy}
-                </text>
-                
-                <!-- Date and Time -->
-                <text x="250" y="${stationName ? 232 : 217}" font-family="Arial, sans-serif" font-size="9" fill="#AAAAAA" text-anchor="middle">
-                    Date: ${new Date(stampedAt).toLocaleDateString()} • Time: ${new Date(stampedAt).toLocaleTimeString()}
-                </text>
-                
-                <!-- Time Stamp Label -->
-                <text x="250" y="${stationName ? 247 : 232}" font-family="Arial, sans-serif" font-size="8" fill="#888888" text-anchor="middle">
-                    Time Stamp
-                </text>
-                
-                <!-- Verification Code -->
-                <text x="250" y="${stationName ? 262 : 247}" font-family="Arial, sans-serif" font-size="8" fill="#666666" text-anchor="middle">
-                    Code: ${verificationCode}
-                </text>
-                
-                ${qrCodeBase64 ? `
-                    <!-- QR Code -->
-                    <image x="440" y="240" width="40" height="40" 
-                           href="${qrCodeBase64}" 
-                           preserveAspectRatio="xMidYMid meet"/>
-                ` : ''}
-                
-                <!-- Decorative corners -->
-                <circle cx="25" cy="25" r="5" fill="${accentColor}" opacity="0.3"/>
-                <circle cx="475" cy="25" r="5" fill="${accentColor}" opacity="0.3"/>
-                <circle cx="25" cy="275" r="5" fill="${accentColor}" opacity="0.3"/>
-                <circle cx="475" cy="275" r="5" fill="${accentColor}" opacity="0.3"/>
-            </svg>
-        `;
-
-        return Buffer.from(svg);
-    }
-
-    private static async uploadStampImage(
-        imageBuffer: Buffer,
-        documentId: string,
-        stampType: EStampType
-    ): Promise<{ secure_url: string; public_id: string }> {
-        const multerFile: Express.Multer.File = {
-            buffer: imageBuffer,
-            originalname: `${stampType}-stamp-${documentId}.png`,
-            mimetype: 'image/png',
-            size: imageBuffer.length,
-            fieldname: 'file',
-            encoding: '7bit',
-            stream: null as any,
-            destination: '',
-            filename: '',
-            path: '',
-        };
-
-        return await uploadToCloudinary(multerFile, `${E_STAMP_FOLDER}/${stampType}`);
     }
 }

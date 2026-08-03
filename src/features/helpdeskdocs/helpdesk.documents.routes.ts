@@ -295,10 +295,11 @@ router.delete(
     HelpdeskDocumentsController.remove
 );
 
+// 🔴 CLEANUP: Removed 'staff' from hard delete, only Super Admin allowed.
 router.delete(
     '/:id/permanent',
     validate(documentIdSchema),
-    requireRole('super_admin', 'staff'),
+    requireRole('super_admin'),
     HelpdeskDocumentsController.hardRemove
 );
 

@@ -24,7 +24,7 @@
     "@getbrevo/brevo": "^5.0.4",
     "@sparticuz/chromium": "^138.0.1",
     "adm-zip": "^0.5.18",
-    "axios": "^1.18.0",
+    "axios": "^1.19.0",
     "bcrypt": "^6.0.0",
     "cloudinary": "^2.10.0",
     "cookie-parser": "^1.4.7",

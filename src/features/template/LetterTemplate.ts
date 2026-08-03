@@ -342,36 +342,38 @@ export function getLetterHTML(data: LetterData): string {
           widows: 2;
         }
 
-        /* Signature Block (Locked Together Across Multi-Page Documents) */
+        /* Signature Section - Reserved Box for Stamper */
         .signature-section {
-          margin-top: 10px;
-          position: relative;
+          margin-top: 8px;
           page-break-inside: avoid !important;
           break-inside: avoid !important;
         }
 
         .signature-anchor {
+          display: block;
+          width: 220px;
+          height: 65px;
+          margin-top: 6px;
+          margin-bottom: 4px;
           font-size: 1pt;
           color: transparent;
           line-height: 1;
           user-select: none;
-          display: block;
-          height: 1px;
-          margin-bottom: 4px;
+          overflow: hidden;
         }
 
-        .signature-section img,
-        .signature img {
-          height: 55px !important;
+        /* Styling if stamp injects an <img> tag into .signature-anchor */
+        .signature-anchor img,
+        .signature-section img {
+          height: 60px !important;
           width: auto !important;
-          max-width: 200px;
+          max-width: 220px;
           object-fit: contain;
           display: block;
-          margin-bottom: 4px;
         }
 
         .signature {
-          margin-top: 2px;
+          margin-top: 0;
         }
 
         .signature .name {
@@ -391,7 +393,7 @@ export function getLetterHTML(data: LetterData): string {
 
         /* CC & Enclosure Blocks */
         .cc-block {
-          margin-top: 8px;
+          margin-top: 10px;
           font-size: 10pt;
           page-break-inside: avoid !important;
           break-inside: avoid !important;

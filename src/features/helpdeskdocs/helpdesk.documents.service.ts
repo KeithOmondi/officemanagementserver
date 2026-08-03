@@ -1230,7 +1230,7 @@ export class HelpdeskDocumentsService {
                         signer.signature_url!,
                         signer.full_name || 'Registrar, High Court',
                         'Registrar, High Court',
-                        new Date()
+                        
                     );
 
                     // Upload the signed PDF to Cloudinary

@@ -5,8 +5,7 @@ export async function embedSignatureBlockIntoPDF(
     originalPdfUrl: string,
     signatureImageUrl: string,
     signatoryName: string,
-    signatoryTitle: string,
-    date: Date = new Date()
+    signatoryTitle: string
 ): Promise<Buffer> {
     // 1. Fetch original PDF
     const pdfRes = await axios.get<ArrayBuffer>(originalPdfUrl, { responseType: 'arraybuffer' });
@@ -20,16 +19,10 @@ export async function embedSignatureBlockIntoPDF(
     const REQUIRED_SIGNATURE_HEIGHT = 180;
     const BOTTOM_MARGIN = 40; // minimum distance from bottom of page
 
-    // Place top of signature block relative to page layout
-    // If you already know where existing text ends, pass that Y coordinate.
-    // Otherwise, calculate whether to draw at the bottom of lastPage or on a new page.
-    
     let targetPage: PDFPage = lastPage;
     let sigTopY = 220; // Default height position from bottom for the top of the sig block
 
-    // If using a fixed top position (e.g. height - 250) overlaps with content,
-    // or if the remaining space is less than required + bottom margin:
-    const availableSpace = height - 250; // Replace with your target initial Y position logic if dynamic
+    const availableSpace = height - 250;
 
     if (availableSpace < (REQUIRED_SIGNATURE_HEIGHT + BOTTOM_MARGIN)) {
         // Not enough space on current page -> Append a new page
@@ -89,16 +82,7 @@ export async function embedSignatureBlockIntoPDF(
         color: black,
     });
 
-    // 7. Draw Date
-    const dateY = titleY - 20;
-    const dateStr = date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
-    targetPage.drawText(`Date: ${dateStr}`, {
-        x: marginX,
-        y: dateY,
-        size: 10,
-        font: boldFont,
-        color: black,
-    });
+    // ❌ REMOVED: Date section - the date is already in the memo header
 
     return Buffer.from(await pdfDoc.save());
 }

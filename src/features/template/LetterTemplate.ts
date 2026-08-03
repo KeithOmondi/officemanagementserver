@@ -148,9 +148,11 @@ export function getLetterHTML(data: LetterData): string {
       <meta charset="UTF-8">
       <title>LETTER</title>
       <style>
+        @import url('https://fonts.googleapis.com/css2?family=Arimo:ital,wght@0,400;0,700;1,400;1,700&display=swap');
+
         @page {
           size: A4;
-          margin: 15mm 20mm 10mm 20mm;
+          margin: 12mm 20mm 10mm 20mm;
         }
 
         * {
@@ -161,7 +163,7 @@ export function getLetterHTML(data: LetterData): string {
 
         html, body {
           background: white;
-          font-family: Arial, Helvetica, sans-serif;
+          font-family: 'Arimo', Arial, Helvetica, sans-serif;
           font-size: 11pt;
           color: #000;
         }
@@ -177,8 +179,8 @@ export function getLetterHTML(data: LetterData): string {
 
         /* Flow Header (Appears only on Page 1) */
         .first-page-header {
-          padding-bottom: 10px;
-          margin-bottom: 20px;
+          padding-bottom: 8px;
+          margin-bottom: 14px;
           border-bottom: 1.5px solid #C29B38;
         }
 
@@ -189,7 +191,7 @@ export function getLetterHTML(data: LetterData): string {
         }
 
         .header-banner img {
-          max-height: 105px;
+          max-height: 95px;
           width: auto;
           margin-right: 20px;
         }
@@ -283,7 +285,7 @@ export function getLetterHTML(data: LetterData): string {
           display: flex;
           justify-content: normal;
           align-items: flex-start;
-          margin-bottom: 16px;
+          margin-bottom: 12px;
           font-size: 11pt;
         }
 
@@ -298,20 +300,20 @@ export function getLetterHTML(data: LetterData): string {
 
         /* Body Content Styles */
         .body-content {
-          line-height: 1.4;
+          line-height: 1.35;
         }
 
         .to-block {
-          margin-bottom: 12px;
+          margin-bottom: 8px;
         }
 
         .to-block p {
           margin: 0;
-          line-height: 1.3;
+          line-height: 1.25;
         }
 
         .to-salutation {
-          margin-bottom: 16px;
+          margin-bottom: 12px;
           font-weight: normal;
         }
 
@@ -319,15 +321,15 @@ export function getLetterHTML(data: LetterData): string {
           font-weight: bold;
           text-decoration: underline;
           text-transform: uppercase;
-          margin: 16px 0;
-          line-height: 1.35;
+          margin: 10px 0;
+          line-height: 1.3;
         }
 
         .body-content p {
-          margin-bottom: 10px;
+          margin-bottom: 6px;
           text-align: left;
-          orphans: 3;
-          widows: 3;
+          orphans: 2;
+          widows: 2;
         }
 
         /* Tables inside body */
@@ -335,13 +337,13 @@ export function getLetterHTML(data: LetterData): string {
           width: 100%;
           border-collapse: collapse;
           font-size: 10pt;
-          margin: 14px 0;
+          margin: 10px 0;
         }
 
         .body-content th,
         .body-content td {
           border: 1px solid #000;
-          padding: 6px 8px;
+          padding: 5px 7px;
           text-align: left;
           vertical-align: top;
         }
@@ -351,35 +353,32 @@ export function getLetterHTML(data: LetterData): string {
           font-weight: bold;
         }
 
-        /* Signature Section - UPDATED FIXES */
+        /* Signature Section - Optimized Production Spacing */
         .signature-section {
-          margin-top: 28px;
+          margin-top: 14px;
           page-break-inside: avoid;
         }
 
         .valediction {
-          margin-bottom: 12px;
+          margin-bottom: 8px;
         }
 
         .signature-anchor {
           font-size: 1pt;
-          color: transparent;
-          display: block;
-          width: 220px;
-          height: 65px;
+          color: #ffffff;
           line-height: 1;
           user-select: none;
+          display: block;
+          height: 1px;
           margin-bottom: 8px;
         }
 
         .signature-section img,
         .signature img {
-          height: 65px !important;
-          width: auto !important;
-          max-width: 220px;
-          object-fit: contain;
+          max-height: 115px !important;
+          width: auto;
           display: block;
-          margin-bottom: 6px;
+          margin-bottom: 4px;
         }
 
         .signature {
@@ -403,20 +402,20 @@ export function getLetterHTML(data: LetterData): string {
 
         /* CC & Enclosure Blocks */
         .cc-block {
-          margin-top: 16px;
+          margin-top: 10px;
           font-size: 10.5pt;
           page-break-inside: avoid;
         }
 
         .cc-label {
           font-weight: normal;
-          margin-bottom: 4px;
+          margin-bottom: 2px;
           display: block;
         }
 
         .cc-entry {
           display: flex;
-          margin-bottom: 4px;
+          margin-bottom: 2px;
         }
 
         .cc-entry .cc-number {
@@ -428,7 +427,7 @@ export function getLetterHTML(data: LetterData): string {
         }
 
         .enclosures-block {
-          margin-top: 12px;
+          margin-top: 8px;
           font-size: 10.5pt;
           font-weight: bold;
         }

@@ -51,6 +51,17 @@ function formatBody(html: string): string {
     .replace(/(?:<br\s*\/?>\s*){3,}/gi, "<br/><br/>");
 }
 
+function formatAddressLine(line: string): string {
+  const trimmed = line.trim();
+  // Auto-detect uppercase location lines like NAIROBI. or KITUI.
+  const isLocationHeader = /^[A-Z\s.,-]+$/.test(trimmed) && /[A-Z]/.test(trimmed);
+
+  if (isLocationHeader) {
+    return `<p class="address-location"><strong><u>${escapeHtml(trimmed)}</u></strong></p>`;
+  }
+  return `<p>${escapeHtml(trimmed)}</p>`;
+}
+
 function formatToBlock(toText: string): string {
   if (!toText) return "";
   const lines = toText
@@ -71,7 +82,7 @@ function formatToBlock(toText: string): string {
   }
 
   const bodyHtml = bodyLines
-    .map((line) => `<p class="to-line">${escapeHtml(line)}</p>`)
+    .map((line) => formatAddressLine(line))
     .join("");
 
   const salutationHtml = salutationLine
@@ -102,7 +113,7 @@ function formatCC(cc: string): string {
         .filter(Boolean);
 
       const linesHtml = lines
-        .map((line) => `<p>${escapeHtml(line)}</p>`)
+        .map((line) => formatAddressLine(line))
         .join("");
 
       return `
@@ -116,7 +127,7 @@ function formatCC(cc: string): string {
 
   return `
     <div class="cc-block">
-      <span class="cc-label">Copy to:</span>
+      <span class="cc-label"><u>Copy to:</u></span>
       <div class="cc-entries">${entriesHtml}</div>
     </div>
   `;
@@ -177,7 +188,7 @@ export function getLetterHTML(data: LetterData): string {
           height: 120px;
         }
 
-        /* Flow Header */
+        /* Header */
         .first-page-header {
           padding-bottom: 8px;
           margin-bottom: 14px;
@@ -280,7 +291,7 @@ export function getLetterHTML(data: LetterData): string {
           margin-top: 4px;
         }
 
-        /* Ref & Date Layout */
+        /* Ref & Date Row */
         .ref-date-row {
           display: flex;
           justify-content: normal;
@@ -332,35 +343,10 @@ export function getLetterHTML(data: LetterData): string {
           widows: 2;
         }
 
-        /* Tables inside body */
-        .body-content table {
-          width: 100%;
-          border-collapse: collapse;
-          font-size: 10pt;
-          margin: 10px 0;
-        }
-
-        .body-content th,
-        .body-content td {
-          border: 1px solid #000;
-          padding: 5px 7px;
-          text-align: left;
-          vertical-align: top;
-        }
-
-        .body-content th {
-          background-color: #f2f2f2;
-          font-weight: bold;
-        }
-
-        /* Signature Section - Fixed Anchor Sizing */
+        /* Signature Section */
         .signature-section {
           margin-top: 14px;
           page-break-inside: avoid;
-        }
-
-        .valediction {
-          margin-bottom: 8px;
         }
 
         .signature-anchor {
@@ -411,34 +397,34 @@ export function getLetterHTML(data: LetterData): string {
         }
 
         .cc-label {
-          font-weight: normal;
-          margin-bottom: 2px;
+          margin-bottom: 4px;
           display: block;
         }
 
         .cc-entry {
           display: flex;
-          margin-bottom: 2px;
+          margin-bottom: 4px;
         }
 
         .cc-entry .cc-number {
-          width: 20px;
+          width: 24px;
         }
 
         .cc-entry .cc-text p {
           margin: 0;
+          line-height: 1.25;
         }
 
         .enclosures-block {
-          margin-top: 8px;
+          margin-top: 10px;
           font-size: 10.5pt;
           font-weight: bold;
+          text-decoration: underline;
         }
       </style>
     </head>
     <body>
 
-      <!-- Main Page Flow with Foot Spacer -->
       <table class="page-table">
         <tbody>
           <tr>
@@ -473,7 +459,7 @@ export function getLetterHTML(data: LetterData): string {
                 </div>
               </div>
 
-              ${enclosures ? `<div class="enclosures-block">Encl</div>` : ""}
+              ${enclosures ? `<div class="enclosures-block"><u>Encl</u></div>` : ""}
               ${cc ? formatCC(cc) : ""}
             </td>
           </tr>
@@ -486,7 +472,6 @@ export function getLetterHTML(data: LetterData): string {
         </tfoot>
       </table>
 
-      <!-- Fixed Printable Footer -->
       <div class="footer-wrapper">
         <div class="footer">
           <table class="footer-table" cellpadding="0" cellspacing="0">

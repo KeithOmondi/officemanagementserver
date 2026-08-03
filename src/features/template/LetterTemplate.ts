@@ -351,7 +351,7 @@ export function getLetterHTML(data: LetterData): string {
           font-weight: bold;
         }
 
-        /* Signature Section */
+        /* Signature Section - UPDATED FIXES */
         .signature-section {
           margin-top: 28px;
           page-break-inside: avoid;
@@ -363,24 +363,27 @@ export function getLetterHTML(data: LetterData): string {
 
         .signature-anchor {
           font-size: 1pt;
-          color: #ffffff;
+          color: transparent;
+          display: block;
+          width: 220px;
+          height: 65px;
           line-height: 1;
           user-select: none;
-          display: block;
-          height: 1px;
-          margin-bottom: 45px;
+          margin-bottom: 8px;
         }
 
         .signature-section img,
         .signature img {
-          max-height: 115px !important;
-          width: auto;
+          height: 65px !important;
+          width: auto !important;
+          max-width: 220px;
+          object-fit: contain;
           display: block;
           margin-bottom: 6px;
         }
 
         .signature {
-          margin-top: 14px;
+          margin-top: 8px;
         }
 
         .signature .name {

@@ -428,6 +428,10 @@ export class HelpdeskDocumentsController {
             const residence_location = getQueryParam(req, 'residence_location');
             const sentry_status = getQueryParam(req, 'sentry_status');
 
+            // ─── NEW: Stamp filters ───────────────────────────────────────────
+            const is_stamped = getQueryBoolean(req, 'is_stamped');
+            const stamp_type = getQueryEnum(req, 'stamp_type', ['approved', 'received', 'official'] as const);
+
             const docs = await HelpdeskDocumentsService.findAll({
                 entity_type,
                 entity_id,
@@ -459,6 +463,9 @@ export class HelpdeskDocumentsController {
                 aide_status,
                 residence_location,
                 sentry_status,
+                // ─── NEW: Stamp filters ──────────────────────────────────────
+                is_stamped,
+                stamp_type,
             });
 
             return sendSuccess(res, docs, `Found ${docs.length} documents.`);
@@ -899,6 +906,10 @@ export class HelpdeskDocumentsController {
                     return acc;
                 }, {} as Record<string, number>),
                 can_resubmit: allDocs.filter(doc => doc.can_resubmit).length,
+                // ─── NEW: Stamp summary for requester ──────────────────────────
+                stamped_count: allDocs.filter(doc => doc.is_stamped).length,
+                signed_count: allDocs.filter(doc => doc.is_signed).length,
+                signed_and_stamped_count: allDocs.filter(doc => doc.is_signed && doc.is_stamped).length,
             };
 
             return sendSuccess(res, {
@@ -1112,46 +1123,65 @@ export class HelpdeskDocumentsController {
         }
     }
 
-    // ─── Delete Document ─────────────────────────────────────────────────────
+  // ─── Delete Document ─────────────────────────────────────────────────────
 
-    static async remove(req: Request, res: Response, next: NextFunction) {
-        try {
-            const id = getParam(req, 'id');
-            const userId = (req as any).user?.id;
-            const userRole = (req as any).user?.role;
+// ─── Delete Document ─────────────────────────────────────────────────────
 
-            const doc = await HelpdeskDocumentsService.findById(id);
-            if (!doc) {
-                throw new AppError(404, 'Document not found');
-            }
+static async remove(req: Request, res: Response, next: NextFunction) {
+    try {
+        const id = getParam(req, 'id');
+        const userId = (req as any).user?.id;
+        const userRole = (req as any).user?.role;
 
-            if (!doc.is_active) {
-                throw new AppError(400, 'Document is already deleted');
-            }
-
-            const isOwner = doc.uploaded_by === userId;
-            const isDeptHead = userRole === 'dept_head';
-            const isSuperAdmin = userRole === 'super_admin';
-
-            if (!isOwner && !isDeptHead && !isSuperAdmin) {
-                throw new AppError(403, 'You do not have permission to delete this document');
-            }
-
-            if (doc.status === 'approved' && !isSuperAdmin) {
-                throw new AppError(403, 'Only super admins can delete approved documents');
-            }
-
-            if (doc.status === 'pending_approval' && !isSuperAdmin && !isDeptHead) {
-                throw new AppError(403, 'Only super admins or department heads can delete pending documents');
-            }
-
-            await HelpdeskDocumentsService.delete(id);
-
-            return sendSuccess(res, null, 'Document deleted successfully.');
-        } catch (err) {
-            next(err);
+        const doc = await HelpdeskDocumentsService.findById(id);
+        if (!doc) {
+            throw new AppError(404, 'Document not found');
         }
+
+        if (!doc.is_active) {
+            throw new AppError(400, 'Document is already deleted');
+        }
+
+        const isOwner = doc.uploaded_by === userId;
+        const isDeptHead = userRole === 'dept_head';
+        const isSuperAdmin = userRole === 'super_admin';
+        const isStaff = userRole === 'staff';
+
+        // ─── Permission Matrix ───────────────────────────────────────────
+        // | Role        | Draft | Returned | Rejected | Pending | Approved |
+        // |-------------|-------|----------|----------|---------|----------|
+        // | Super Admin | ✅    | ✅       | ✅       | ✅      | ✅       |
+        // | Dept Head   | ✅    | ✅       | ✅       | ✅      | ✅       |
+        // | Staff (own) | ✅    | ✅       | ✅       | ❌      | ❌       |
+        // | Staff (other)| ❌   | ❌       | ❌       | ❌      | ❌       |
+        // ───────────────────────────────────────────────────────────────────
+
+        // Check if user has ANY delete permission
+        if (!isSuperAdmin && !isDeptHead && !isStaff) {
+            throw new AppError(403, 'You do not have permission to delete documents');
+        }
+
+        // Staff can only delete their own documents
+        if (isStaff && !isOwner) {
+            throw new AppError(403, 'You can only delete documents you uploaded');
+        }
+
+        // Staff can only delete draft, returned, or rejected documents
+        if (isStaff && !['draft', 'returned', 'rejected'].includes(doc.status)) {
+            throw new AppError(403, 'You can only delete draft, returned, or rejected documents');
+        }
+
+        // Dept head and super admin can delete any document
+        // (including approved and pending)
+
+        await HelpdeskDocumentsService.delete(id);
+
+        return sendSuccess(res, null, 'Document deleted successfully.');
+    } catch (err) {
+        console.error('[DELETE] Error:', err);
+        next(err);
     }
+}
 
     // ─── Hard Delete (Admin Only) ───────────────────────────────────────────
 

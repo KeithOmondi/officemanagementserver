@@ -39,6 +39,10 @@ console.log('[SCHEMA-LOAD] helpdesk.documents.schema.ts', {
 
 const documentStatusEnum = z.enum(['draft', 'pending_approval', 'approved', 'rejected', 'returned']);
 
+// ─── Stamp Type Enum ─────────────────────────────────────────────────────────
+
+const stampTypeEnum = z.enum(['approved', 'received', 'official']);
+
 // ─── Two-Step Approval Enums ─────────────────────────────────────────────────
 
 const internalApprovalStatusEnum = z.enum([
@@ -213,6 +217,10 @@ export const listHelpdeskDocumentsSchema = z.object({
         // ─── Legacy fields ──────────────────────────────────────────────────────
         rank: z.string().optional(),
         reporting_date: dateStringSchema.optional(),
+
+        // ─── NEW: Stamp Filters ──────────────────────────────────────────────────
+        is_stamped: z.string().transform((val) => val === 'true').optional(),
+        stamp_type: stampTypeEnum.optional(),
     }).strict(),
 });
 
@@ -222,6 +230,9 @@ export const getDocumentByIdSchema = z.object({
         id: z.string().uuid('Document ID must be a valid UUID'),
     }),
 });
+
+// ─── PATCH /api/helpdesk/documents/:id/file ──────────────────────────────────
+// src/features/helpdesk/helpdesk.documents.schema.ts
 
 // ─── PATCH /api/helpdesk/documents/:id/file ──────────────────────────────────
 export const updateDocumentFileSchema = z.object({
@@ -240,10 +251,70 @@ export const updateDocumentFileSchema = z.object({
         returned_by: z.string().uuid().optional(),
         returned_by_name: z.string().max(100).optional(),
         // ─── Signature fields ──────────────────────────────────────────────────
-        is_signed: z.boolean().optional(),
+        is_signed: z.preprocess(
+            (val) => {
+                if (val === 'true') return true;
+                if (val === 'false') return false;
+                return val;
+            },
+            z.boolean().optional()
+        ),
         signed_by: z.string().uuid().optional(),
         signed_by_name: z.string().max(100).optional(),
         signed_at: z.string().datetime().optional(),
+        // ─── NEW: Stamp fields ────────────────────────────────────────────────────
+        is_stamped: z.preprocess(
+            (val) => {
+                if (val === 'true') return true;
+                if (val === 'false') return false;
+                return val;
+            },
+            z.boolean().optional()
+        ),
+        stamped_by: z.string().uuid().optional(),
+        stamped_by_name: z.string().max(100).optional(),
+        stamped_at: z.string().datetime().optional(),
+        stamp_type: stampTypeEnum.optional(),
+        stamp_position_x: z.preprocess(
+            (val) => {
+                if (typeof val === 'string') {
+                    const num = parseFloat(val);
+                    return isNaN(num) ? val : num;
+                }
+                return val;
+            },
+            z.number().optional()
+        ),
+        stamp_position_y: z.preprocess(
+            (val) => {
+                if (typeof val === 'string') {
+                    const num = parseFloat(val);
+                    return isNaN(num) ? val : num;
+                }
+                return val;
+            },
+            z.number().optional()
+        ),
+        stamp_position_width: z.preprocess(
+            (val) => {
+                if (typeof val === 'string') {
+                    const num = parseFloat(val);
+                    return isNaN(num) ? val : num;
+                }
+                return val;
+            },
+            z.number().optional()
+        ),
+        stamp_position_height: z.preprocess(
+            (val) => {
+                if (typeof val === 'string') {
+                    const num = parseFloat(val);
+                    return isNaN(num) ? val : num;
+                }
+                return val;
+            },
+            z.number().optional()
+        ),
     }),
 });
 
@@ -702,11 +773,15 @@ export type ResubmitDocumentBody = z.infer<typeof resubmitDocumentSchema>['body'
 export type PendingInternalApprovalsQuery = z.infer<typeof pendingInternalApprovalsSchema>['query'];
 export type RequesterDashboardQuery = z.infer<typeof requesterDashboardSchema>['query'];
 
+// ─── NEW: Stamp Type ──────────────────────────────────────────────────────────
+export type StampType = z.infer<typeof stampTypeEnum>;
+
 // Export enums for use in routes
 export {
     documentFormatEnum,
     documentEntityEnum,
     documentStatusEnum,
+    stampTypeEnum,
     internalApprovalStatusEnum,
     requesterVisibleStatusEnum,
     requestTypeEnum,

@@ -27,6 +27,7 @@ import type {
     CancelInternalApprovalRequest,
     PendingInternalApprovalsSummary,
     RequesterDocumentView,
+    StampType,
 } from './helpdesk.documents.types';
 
 const FOLDER = 'orhc/helpdesk-documents';
@@ -58,10 +59,15 @@ const DOC_SELECT = `
     d.is_signed, d.signed_by, d.signed_by_name, d.signed_at,
     d.signature_position_x, d.signature_position_y,
     d.signature_position_width, d.signature_position_height,
+    -- NEW: Stamp fields
+    d.is_stamped, d.stamped_by, d.stamped_by_name, d.stamped_at,
+    d.stamp_type, d.stamp_position_x, d.stamp_position_y,
+    d.stamp_position_width, d.stamp_position_height,
     u.full_name as uploaded_by_name,
     au.full_name as approved_by_name,
     ru.full_name as returned_by_name,
-    su.full_name as signed_by_name
+    su.full_name as signed_by_name,
+    stu.full_name as stamped_by_name
 `;
 
 // ─── Helper: Clean input for database ─────────────────────────────────────────
@@ -161,9 +167,10 @@ export class HelpdeskDocumentsService {
                      officer_rank, officer_name, employment_number,
                      current_station, current_unit, proposed_assignment, aide_status,
                      residence_location, sentry_status,
-                     internal_approval_status, requester_status)
+                     internal_approval_status, requester_status,
+                     is_stamped, stamp_type)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 
-                         $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+                         $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
                  RETURNING id`,
                 [
                     cleaned.ref.trim(),
@@ -191,6 +198,8 @@ export class HelpdeskDocumentsService {
                     cleaned.sentry_status || null,
                     'pending',
                     'pending_approval',
+                    false, // is_stamped
+                    null, // stamp_type
                 ]
             );
 
@@ -352,6 +361,61 @@ export class HelpdeskDocumentsService {
                 p++;
             }
 
+            // ─── NEW: Stamp fields ──────────────────────────────────────────────
+            if (input.is_stamped !== undefined) {
+                updates.push(`is_stamped = $${p}`);
+                values.push(input.is_stamped);
+                p++;
+            }
+
+            if (input.stamped_by !== undefined) {
+                updates.push(`stamped_by = $${p}`);
+                values.push(input.stamped_by);
+                p++;
+            }
+
+            if (input.stamped_by_name !== undefined) {
+                updates.push(`stamped_by_name = $${p}`);
+                values.push(input.stamped_by_name);
+                p++;
+            }
+
+            if (input.stamped_at !== undefined) {
+                updates.push(`stamped_at = $${p}`);
+                values.push(input.stamped_at);
+                p++;
+            }
+
+            if (input.stamp_type !== undefined) {
+                updates.push(`stamp_type = $${p}`);
+                values.push(input.stamp_type);
+                p++;
+            }
+
+            if (input.stamp_position_x !== undefined) {
+                updates.push(`stamp_position_x = $${p}`);
+                values.push(input.stamp_position_x);
+                p++;
+            }
+
+            if (input.stamp_position_y !== undefined) {
+                updates.push(`stamp_position_y = $${p}`);
+                values.push(input.stamp_position_y);
+                p++;
+            }
+
+            if (input.stamp_position_width !== undefined) {
+                updates.push(`stamp_position_width = $${p}`);
+                values.push(input.stamp_position_width);
+                p++;
+            }
+
+            if (input.stamp_position_height !== undefined) {
+                updates.push(`stamp_position_height = $${p}`);
+                values.push(input.stamp_position_height);
+                p++;
+            }
+
             updates.push(`updated_at = NOW()`);
 
             if (input.status === 'approved') {
@@ -436,6 +500,7 @@ export class HelpdeskDocumentsService {
              LEFT JOIN users au ON d.approved_by = au.id
              LEFT JOIN users ru ON d.returned_by = ru.id
              LEFT JOIN users su ON d.signed_by = su.id
+             LEFT JOIN users stu ON d.stamped_by = stu.id
              WHERE d.id = $1 AND d.is_active = true`,
             [id]
         );
@@ -462,6 +527,7 @@ export class HelpdeskDocumentsService {
             LEFT JOIN users au ON d.approved_by = au.id
             LEFT JOIN users ru ON d.returned_by = ru.id
             LEFT JOIN users su ON d.signed_by = su.id
+            LEFT JOIN users stu ON d.stamped_by = stu.id
             WHERE d.is_active = true
         `;
         const params: unknown[] = [];
@@ -571,6 +637,7 @@ export class HelpdeskDocumentsService {
             p++;
         }
 
+        // ─── Two-step approval filters ──────────────────────────────────────────
         if (filters.internal_approval_status) {
             query += ` AND d.internal_approval_status = $${p}`;
             params.push(filters.internal_approval_status);
@@ -594,6 +661,18 @@ export class HelpdeskDocumentsService {
         }
         if (filters.pending_my_approval && filters.uploaded_by) {
             query += ` AND d.status = 'pending_approval'`;
+        }
+
+        // ─── NEW: Stamp filters ──────────────────────────────────────────────────
+        if (filters.is_stamped !== undefined) {
+            query += ` AND d.is_stamped = $${p}`;
+            params.push(filters.is_stamped);
+            p++;
+        }
+        if (filters.stamp_type) {
+            query += ` AND d.stamp_type = $${p}`;
+            params.push(filters.stamp_type);
+            p++;
         }
 
         query += ` ORDER BY d.created_at DESC`;
@@ -635,6 +714,7 @@ export class HelpdeskDocumentsService {
             LEFT JOIN users au ON d.approved_by = au.id
             LEFT JOIN users ru ON d.returned_by = ru.id
             LEFT JOIN users su ON d.signed_by = su.id
+            LEFT JOIN users stu ON d.stamped_by = stu.id
             WHERE d.is_active = true
               AND d.entity_type = $1
               AND d.entity_id = $2
@@ -671,64 +751,6 @@ export class HelpdeskDocumentsService {
         );
 
         return docs;
-    }
-
-    // ─── Consolidated Memo Helpers ─────────────────────────────────────
-
-    static async findConsolidatedMemo(
-        type: 'all' | 'fuel',
-        date: Date = new Date()
-    ): Promise<HelpdeskDocument | null> {
-        const entityType = type === 'fuel' ? 'consolidated_fuel_memo' : 'consolidated_utility_memo';
-        const entityId = `cons-${type}-${date.toISOString().slice(0, 7)}`;
-
-        const { rows } = await pool.query(
-            `SELECT ${DOC_SELECT}
-             FROM helpdesk_documents d
-             LEFT JOIN users u ON d.uploaded_by = u.id
-             LEFT JOIN users au ON d.approved_by = au.id
-             LEFT JOIN users ru ON d.returned_by = ru.id
-             LEFT JOIN users su ON d.signed_by = su.id
-             WHERE d.is_active = true
-               AND d.entity_type = $1
-               AND d.entity_id = $2
-             ORDER BY d.created_at DESC
-             LIMIT 1`,
-            [entityType, entityId]
-        );
-
-        if (rows.length === 0) return null;
-
-        const history = await this.getApprovalHistory(rows[0].id);
-        const comments = await this.getComments(rows[0].id);
-
-        return {
-            ...rows[0],
-            approval_history: history,
-            comments: comments,
-        };
-    }
-
-    static async getConsolidatedMemos(
-        type?: 'all' | 'fuel'
-    ): Promise<HelpdeskDocument[]> {
-        let entityTypes: DocumentEntityType[];
-        if (type === 'fuel') {
-            entityTypes = ['consolidated_fuel_memo'];
-        } else if (type === 'all') {
-            entityTypes = ['consolidated_utility_memo'];
-        } else {
-            entityTypes = ['consolidated_utility_memo', 'consolidated_fuel_memo'];
-        }
-
-        const result: HelpdeskDocument[] = [];
-        for (const et of entityTypes) {
-            const docs = await this.findAll({ entity_type: et });
-            result.push(...docs);
-        }
-
-        result.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-        return result;
     }
 
     // ─── Get Statistics ──────────────────────────────────────────────────────
@@ -793,6 +815,17 @@ export class HelpdeskDocumentsService {
         `;
         const { rows: internalStatsRows } = await pool.query(internalStatsQuery, params);
 
+        // ─── NEW: Stamp stats ──────────────────────────────────────────────────
+        const stampStatsQuery = `
+            SELECT 
+                COUNT(CASE WHEN d.is_stamped = true THEN 1 END) as stamped_count,
+                COUNT(CASE WHEN d.is_signed = true THEN 1 END) as signed_count,
+                COUNT(CASE WHEN d.is_signed = true AND d.is_stamped = true THEN 1 END) as signed_and_stamped_count
+            FROM helpdesk_documents d
+            ${whereClause}
+        `;
+        const { rows: stampStatsRows } = await pool.query(stampStatsQuery, params);
+
         return {
             total,
             pending_approval: statusCounts.pending_approval || 0,
@@ -816,6 +849,9 @@ export class HelpdeskDocumentsService {
             })),
             pending_internal: Number(internalStatsRows[0]?.pending_internal) || 0,
             ready_to_send_back: Number(internalStatsRows[0]?.ready_to_send_back) || 0,
+            stamped_count: Number(stampStatsRows[0]?.stamped_count) || 0,
+            signed_count: Number(stampStatsRows[0]?.signed_count) || 0,
+            signed_and_stamped_count: Number(stampStatsRows[0]?.signed_and_stamped_count) || 0,
         };
     }
 
@@ -851,7 +887,10 @@ export class HelpdeskDocumentsService {
                 COUNT(CASE WHEN d.requester_status = 'rejected' THEN 1 END) as requester_rejected,
                 COUNT(CASE WHEN d.requester_status = 'changes_requested' THEN 1 END) as requester_changes_requested,
                 COUNT(CASE WHEN d.requester_status = 'in_revision' THEN 1 END) as requester_in_revision,
-                COUNT(CASE WHEN d.is_signed = true THEN 1 END) as signed_count
+                COUNT(CASE WHEN d.is_signed = true THEN 1 END) as signed_count,
+                -- ─── NEW: Stamp summary ──────────────────────────────────────────
+                COUNT(CASE WHEN d.is_stamped = true THEN 1 END) as stamped_count,
+                COUNT(CASE WHEN d.is_signed = true AND d.is_stamped = true THEN 1 END) as signed_and_stamped_count
             FROM helpdesk_documents d
             ${whereClause}
         `;
@@ -922,6 +961,9 @@ export class HelpdeskDocumentsService {
                 changes_ready: Number(summary.internal_changes_ready) || 0,
             },
             requester_status_summary: requesterStatusSummary,
+            signed_count: Number(summary.signed_count) || 0,
+            stamped_count: Number(summary.stamped_count) || 0,
+            signed_and_stamped_count: Number(summary.signed_and_stamped_count) || 0,
         };
     }
 
@@ -1049,188 +1091,173 @@ export class HelpdeskDocumentsService {
         }
     }
 
-   // src/features/helpdeskdocs/helpdesk.documents.service.ts - Updated internalApprove method
+    /**
+     * Internal Approve - Super admin approves internally with signature embedding
+     * Requester still sees 'pending_approval' until send back
+     */
+    static async internalApprove(
+        id: string,
+        input: InternalApprovalRequest
+    ): Promise<HelpdeskDocument> {
+        const doc = await this.findById(id);
+        if (!doc) {
+            throw new AppError(404, 'Document not found');
+        }
 
-/**
- * Internal Approve - Super admin approves internally with signature embedding
- * Requester still sees 'pending_approval' until send back
- */
-static async internalApprove(
-  id: string,
-  input: InternalApprovalRequest
-): Promise<HelpdeskDocument> {
-  const doc = await this.findById(id);
-  if (!doc) {
-    throw new AppError(404, 'Document not found');
-  }
+        if (doc.status !== 'pending_approval') {
+            throw new AppError(400, `Cannot approve document with status: ${doc.status}`);
+        }
 
-  if (doc.status !== 'pending_approval') {
-    throw new AppError(400, `Cannot approve document with status: ${doc.status}`);
-  }
+        if (!doc.entity_id) {
+            throw new AppError(400, 'Document must be linked to an entity before approval');
+        }
 
-  if (!doc.entity_id) {
-    throw new AppError(400, 'Document must be linked to an entity before approval');
-  }
+        if (!['pending', 'previewed', 'changes_ready'].includes(doc.internal_approval_status)) {
+            throw new AppError(400, `Cannot approve from internal status: ${doc.internal_approval_status}`);
+        }
 
-  if (!['pending', 'previewed', 'changes_ready'].includes(doc.internal_approval_status)) {
-    throw new AppError(400, `Cannot approve from internal status: ${doc.internal_approval_status}`);
-  }
-
-  // ─── FETCH SIGNER'S SIGNATURE ──────────────────────────────────────────────
-  const { rows: userRows } = await pool.query(
-    `SELECT full_name, signature_url FROM users 
-     WHERE id = $1 AND is_active = true`,
-    [input.approved_by]
-  );
-  const signer = userRows[0];
-  
-  console.log('[InternalApprove] Signer details:', {
-    id: input.approved_by,
-    found: !!signer,
-    hasSignature: signer?.signature_url ? true : false,
-    signatureUrl: signer?.signature_url || 'null',
-  });
-  
-  if (!signer) {
-    throw new AppError(404, 'User not found');
-  }
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-
-    let signedFileUrl = doc.file_url;
-    let signedPublicId = doc.public_id;
-    let wasSigned = false;
-
-    // ─── EMBED SIGNATURE INTO PDF ──────────────────────────────────────────────
-    if (doc.file_url && doc.format === 'pdf' && signer?.signature_url) {
-      try {
-        console.log(`[InternalApprove] Embedding signature for document ${id}...`);
-        
-        const response = await axios.get<ArrayBuffer>(doc.file_url, { 
-          responseType: 'arraybuffer' 
-        });
-        const originalPdf = Buffer.from(response.data);
-
-        const signedPdf = await embedSignatureIntoPDF(
-          originalPdf,
-          signer.signature_url,
-          null,
-          signer.full_name || 'Registrar, High Court',
-          false
+        // ─── FETCH SIGNER'S SIGNATURE ──────────────────────────────────────────────
+        const { rows: userRows } = await pool.query(
+            `SELECT full_name, signature_url FROM users 
+             WHERE id = $1 AND is_active = true`,
+            [input.approved_by]
         );
+        const signer = userRows[0];
+        
+        console.log('[InternalApprove] Signer details:', {
+            id: input.approved_by,
+            found: !!signer,
+            hasSignature: signer?.signature_url ? true : false,
+            signatureUrl: signer?.signature_url || 'null',
+        });
+        
+        if (!signer) {
+            throw new AppError(404, 'User not found');
+        }
 
-        const multerFile: Express.Multer.File = {
-          buffer: signedPdf,
-          mimetype: 'application/pdf',
-          originalname: doc.file_url.split('/').pop() || 'signed-document.pdf',
-          size: signedPdf.length,
-          fieldname: 'file',
-          encoding: '7bit',
-          stream: null as any,
-          destination: '',
-          filename: '',
-          path: '',
-        };
-        const uploaded = await uploadToCloudinary(multerFile, FOLDER);
-        signedFileUrl = uploaded.secure_url;
-        signedPublicId = uploaded.public_id;
-        wasSigned = true;
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
 
-        console.log(`[InternalApprove] Signature embedded successfully for document ${id}`);
-      } catch (embedError) {
-        console.error(`[InternalApprove] Failed to embed signature for document ${id}:`, embedError);
-      }
+            let signedFileUrl = doc.file_url;
+            let signedPublicId = doc.public_id;
+            let wasSigned = false;
+
+            // ─── EMBED SIGNATURE INTO PDF ──────────────────────────────────────────────
+            if (doc.file_url && doc.format === 'pdf' && signer?.signature_url) {
+                try {
+                    console.log(`[InternalApprove] Embedding signature for document ${id}...`);
+                    
+                    const response = await axios.get<ArrayBuffer>(doc.file_url, { 
+                        responseType: 'arraybuffer' 
+                    });
+                    const originalPdf = Buffer.from(response.data);
+
+                    const signedPdf = await embedSignatureIntoPDF(
+                        originalPdf,
+                        signer.signature_url,
+                        null,
+                        signer.full_name || 'Registrar, High Court',
+                        false
+                    );
+
+                    const multerFile: Express.Multer.File = {
+                        buffer: signedPdf,
+                        mimetype: 'application/pdf',
+                        originalname: doc.file_url.split('/').pop() || 'signed-document.pdf',
+                        size: signedPdf.length,
+                        fieldname: 'file',
+                        encoding: '7bit',
+                        stream: null as any,
+                        destination: '',
+                        filename: '',
+                        path: '',
+                    };
+                    const uploaded = await uploadToCloudinary(multerFile, FOLDER);
+                    signedFileUrl = uploaded.secure_url;
+                    signedPublicId = uploaded.public_id;
+                    wasSigned = true;
+
+                    console.log(`[InternalApprove] Signature embedded successfully for document ${id}`);
+                } catch (embedError) {
+                    console.error(`[InternalApprove] Failed to embed signature for document ${id}:`, embedError);
+                }
+            }
+
+            // Generate e-stamp if requested
+            let eStampUrl: string | null = null;
+            let eStampPublicId: string | null = null;
+            if (input.generate_e_stamp) {
+                const eStamp = await this.generateEStamp(doc);
+                eStampUrl = eStamp.secure_url;
+                eStampPublicId = eStamp.public_id;
+            }
+
+            // ─── UPDATE with signature and stamp fields ──────────────────────────────
+            const updateQuery = `
+                UPDATE helpdesk_documents
+                SET internal_approval_status = 'approved_internal',
+                    internal_approved_by = $1::uuid,
+                    internal_approved_by_name = $2::varchar,
+                    internal_approved_at = NOW(),
+                    internal_comments = COALESCE($3::text, internal_comments),
+                    is_internal_approval_complete = true,
+                    e_stamp_url = $4::text,
+                    e_stamp_public_id = $5::varchar,
+                    e_stamp_status = CASE WHEN $4::text IS NOT NULL THEN 'stamped' ELSE e_stamp_status END,
+                    is_signed = $6::boolean,
+                    signed_by = CASE WHEN $6::boolean THEN $1::uuid ELSE signed_by END,
+                    signed_by_name = CASE WHEN $6::boolean THEN $2::varchar ELSE signed_by_name END,
+                    signed_at = CASE WHEN $6::boolean THEN NOW() ELSE signed_at END,
+                    file_url = $7::text,
+                    public_id = $8::varchar,
+                    updated_at = NOW()
+                WHERE id = $9::uuid AND is_active = true
+            `;
+
+            await client.query(updateQuery, [
+                input.approved_by || null,
+                input.approved_by_name || null,
+                input.comments || null,
+                eStampUrl,
+                eStampPublicId,
+                wasSigned,
+                signedFileUrl,
+                signedPublicId,
+                id
+            ]);
+
+            // Delete old file if it was replaced
+            if (doc.public_id && doc.public_id !== signedPublicId && signedFileUrl !== doc.file_url) {
+                try {
+                    await deleteFromCloudinary(doc.public_id, 'raw');
+                    console.log(`[InternalApprove] Deleted old file ${doc.public_id}`);
+                } catch (error) {
+                    console.error('Failed to delete old file from Cloudinary:', error);
+                }
+            }
+
+            await this.addApprovalHistory(
+                id,
+                input.approved_by || 'system',
+                'approved',
+                doc.uploaded_by || undefined,
+                input.comments || `Document approved internally${wasSigned ? ' and signed' : ''} (pending send back)`
+            );
+
+            await client.query('COMMIT');
+
+            const updatedDoc = await this.findById(id);
+            if (!updatedDoc) throw new AppError(500, 'Failed to retrieve updated document');
+            return updatedDoc;
+        } catch (err) {
+            await client.query('ROLLBACK');
+            console.error('[InternalApprove] Error:', err);
+            throw err;
+        } finally {
+            client.release();
+        }
     }
-
-    // Generate e-stamp if requested
-    let eStampUrl: string | null = null;
-    let eStampPublicId: string | null = null;
-    if (input.generate_e_stamp) {
-      const eStamp = await this.generateEStamp(doc);
-      eStampUrl = eStamp.secure_url;
-      eStampPublicId = eStamp.public_id;
-    }
-
-    // ─── FIX: Use proper SQL with explicit type casting ──────────────────────
-    // Build the update query with proper parameter handling
-   const updateQuery = `
-  UPDATE helpdesk_documents
-  SET internal_approval_status = 'approved_internal',
-      internal_approved_by = $1::uuid,
-      internal_approved_by_name = $2::varchar,
-      internal_approved_at = NOW(),
-      internal_comments = COALESCE($3::text, internal_comments),
-      is_internal_approval_complete = true,
-      e_stamp_url = $4::text,
-      e_stamp_public_id = $5::varchar,
-      e_stamp_status = CASE WHEN $4::text IS NOT NULL THEN 'stamped' ELSE e_stamp_status END,
-      is_signed = $6::boolean,
-      signed_by = CASE WHEN $6::boolean THEN $1::uuid ELSE signed_by END,
-      signed_by_name = CASE WHEN $6::boolean THEN $2::varchar ELSE signed_by_name END,
-      signed_at = CASE WHEN $6::boolean THEN NOW() ELSE signed_at END,
-      file_url = $7::text,
-      public_id = $8::varchar,
-      updated_at = NOW()
-  WHERE id = $9::uuid AND is_active = true
-`;
-
-    console.log('[InternalApprove] Update params:', {
-      approved_by: input.approved_by,
-      approved_by_name: input.approved_by_name,
-      comments: input.comments,
-      eStampUrl,
-      eStampPublicId,
-      wasSigned,
-      signedFileUrl,
-      signedPublicId,
-      id,
-    });
-
-    await client.query(updateQuery, [
-      input.approved_by || null,
-      input.approved_by_name || null,
-      input.comments || null,
-      eStampUrl,
-      eStampPublicId,
-      wasSigned,
-      signedFileUrl,
-      signedPublicId,
-      id
-    ]);
-
-    // Delete old file if it was replaced
-    if (doc.public_id && doc.public_id !== signedPublicId && signedFileUrl !== doc.file_url) {
-      try {
-        await deleteFromCloudinary(doc.public_id, 'raw');
-        console.log(`[InternalApprove] Deleted old file ${doc.public_id}`);
-      } catch (error) {
-        console.error('Failed to delete old file from Cloudinary:', error);
-      }
-    }
-
-    await this.addApprovalHistory(
-      id,
-      input.approved_by || 'system',
-      'approved',
-      doc.uploaded_by || undefined,
-      input.comments || `Document approved internally${wasSigned ? ' and signed' : ''} (pending send back)`
-    );
-
-    await client.query('COMMIT');
-
-    const updatedDoc = await this.findById(id);
-    if (!updatedDoc) throw new AppError(500, 'Failed to retrieve updated document');
-    return updatedDoc;
-  } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('[InternalApprove] Error:', err);
-    throw err;
-  } finally {
-    client.release();
-  }
-}
 
     /**
      * Internal Reject - Super admin rejects internally
@@ -1686,6 +1713,11 @@ static async internalApprove(
             is_signed: doc.is_signed || false,
             signed_by_name: doc.signed_by_name,
             signed_at: doc.signed_at,
+            // ─── NEW: Stamp info ──────────────────────────────────────────────
+            is_stamped: doc.is_stamped || false,
+            stamped_by_name: doc.stamped_by_name,
+            stamped_at: doc.stamped_at,
+            stamp_type: doc.stamp_type as StampType | undefined,
         }));
     }
 
@@ -2027,7 +2059,7 @@ static async internalApprove(
     private static async addApprovalHistory(
         documentId: string,
         fromUserId: string,
-        action: 'submitted' | 'approved' | 'rejected' | 'returned' | 'previewed' | 'sent_back' | 'resubmitted' | 'signed',
+        action: 'submitted' | 'approved' | 'rejected' | 'returned' | 'previewed' | 'sent_back' | 'resubmitted' | 'signed' | 'stamped',
         toUserId?: string,
         comments?: string
     ): Promise<void> {
@@ -2074,6 +2106,10 @@ static async internalApprove(
 
     // ─── Delete Document ─────────────────────────────────────────────────────
 
+    /**
+     * Soft delete a document - sets is_active to false
+     * Permission checks should be handled by the controller
+     */
     static async delete(id: string): Promise<void> {
         const doc = await this.findById(id);
         if (!doc) {
@@ -2084,18 +2120,16 @@ static async internalApprove(
             throw new AppError(400, 'Document is already deleted');
         }
 
-        if (doc.status === 'approved') {
-            throw new AppError(400, 'Cannot delete approved documents. Return them first.');
-        }
-
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
 
+            // Soft delete - set is_active to false
             const { rowCount } = await client.query(
                 `UPDATE helpdesk_documents 
                  SET is_active = false, 
-                     updated_at = NOW() 
+                     deleted_at = NOW(),
+                     updated_at = NOW()
                  WHERE id = $1 AND is_active = true`,
                 [id]
             );
@@ -2104,6 +2138,7 @@ static async internalApprove(
                 throw new AppError(404, 'Document not found or already deleted');
             }
 
+            // Soft delete comments
             await client.query(
                 `UPDATE helpdesk_document_comments
                  SET is_active = false
@@ -2113,17 +2148,21 @@ static async internalApprove(
 
             await client.query('COMMIT');
 
+            // Delete the file from Cloudinary
             if (doc.public_id) {
                 try {
                     await deleteFromCloudinary(doc.public_id, 'raw');
+                    console.log(`[Delete] Deleted file ${doc.public_id} from Cloudinary`);
                 } catch (error) {
                     console.error('Failed to delete file from Cloudinary:', error);
                 }
             }
 
+            // Delete e-stamp from Cloudinary if exists
             if (doc.e_stamp_public_id) {
                 try {
                     await deleteFromCloudinary(doc.e_stamp_public_id, 'raw');
+                    console.log(`[Delete] Deleted e-stamp ${doc.e_stamp_public_id} from Cloudinary`);
                 } catch (error) {
                     console.error('Failed to delete e-stamp from Cloudinary:', error);
                 }
@@ -2149,16 +2188,19 @@ static async internalApprove(
         try {
             await client.query('BEGIN');
 
+            // Delete comments
             await client.query(
                 `DELETE FROM helpdesk_document_comments WHERE document_id = $1`,
                 [id]
             );
 
+            // Delete approval history
             await client.query(
                 `DELETE FROM helpdesk_document_approval_history WHERE document_id = $1`,
                 [id]
             );
 
+            // Delete the document
             const { rowCount } = await client.query(
                 `DELETE FROM helpdesk_documents WHERE id = $1`,
                 [id]
@@ -2170,6 +2212,7 @@ static async internalApprove(
 
             await client.query('COMMIT');
 
+            // Delete the file from Cloudinary
             if (doc.public_id) {
                 try {
                     await deleteFromCloudinary(doc.public_id, 'raw');

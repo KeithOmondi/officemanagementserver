@@ -84,7 +84,7 @@ router.get(
  */
 router.post(
   '/aide',
-  requireRole('super_admin', 'dept_head'),
+  requireRole('super_admin', 'dept_head', 'staff'),
   validate(createAideRequestSchema),
   aideController.createAideRequest
 );
@@ -98,7 +98,7 @@ router.post(
  */
 router.put(
   '/aide/:id',
-  requireRole('super_admin', 'dept_head'),
+  requireRole('super_admin', 'dept_head', 'staff'),
   validate(updateAideRequestSchema),
   aideController.updateAideRequest
 );
@@ -138,7 +138,7 @@ router.put(
  */
 router.delete(
   '/aide/:id',
-  requireRole('super_admin', 'dept_head'),
+  requireRole('super_admin', 'dept_head', 'staff'),
   validate(deleteAideRequestSchema),
   aideController.deleteAideRequest
 );
@@ -192,7 +192,7 @@ router.get(
  */
 router.post(
   '/sentry',
-  requireRole('super_admin', 'dept_head'),
+  requireRole('super_admin', 'dept_head', 'staff'),
   validate(createSentryRequestSchema),
   aideController.createSentryRequest
 );
@@ -206,7 +206,7 @@ router.post(
  */
 router.put(
   '/sentry/:id',
-  requireRole('super_admin', 'dept_head'),
+  requireRole('super_admin', 'dept_head', 'staff'),
   validate(updateSentryRequestSchema),
   aideController.updateSentryRequest
 );
@@ -246,7 +246,7 @@ router.put(
  */
 router.delete(
   '/sentry/:id',
-  requireRole('super_admin', 'dept_head'),
+  requireRole('super_admin', 'dept_head', 'staff'),
   validate(deleteSentryRequestSchema),
   aideController.deleteSentryRequest
 );

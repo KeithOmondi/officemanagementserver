@@ -151,31 +151,22 @@ export const aideController = {
     return sendSuccess(res, aideRequest, 'Aide request retrieved successfully');
   }),
 
-  /**
-   * Update Aide Request
-   */
-  updateAideRequest: asyncHandler(async (req: Request, res: Response) => {
+updateAideRequest: asyncHandler(async (req: Request, res: Response) => {
     logRequest('Update aide request body', req.body, req.user);
 
-    const paramsValidated = validateRequest<{ params: any }>(
-      getAideRequestSchema,
-      { params: req.params },
-      'Invalid ID'
-    );
-
-    const bodyValidated = validateRequest<{ body: any }>(
-      updateAideRequestSchema,
-      { body: req.body },
-      'Invalid update data'
+    const validated = validateRequest<{ params: any; body: any }>(
+        updateAideRequestSchema,
+        { params: req.params, body: req.body },   // ← both keys now
+        'Invalid update data'
     );
 
     const updated = await AideService.updateAideRequest(
-      paramsValidated.params.id,
-      bodyValidated.body
+        validated.params.id,
+        validated.body
     );
 
     return sendSuccess(res, updated, 'Aide request updated successfully');
-  }),
+}),
 
   /**
    * Approve Aide Request (Super Admin only)

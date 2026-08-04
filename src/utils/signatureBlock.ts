@@ -25,9 +25,13 @@ export async function embedSignatureBlockIntoPDF(
     const SIG_HEIGHT = 120; // Height of image + name + title block
     const COPY_TO_HEADER_HEIGHT = copyToRecipients.length > 0 ? 25 : 0;
     const COPY_TO_LIST_HEIGHT = copyToRecipients.length * 16;
-    
+
     const TOTAL_BLOCK_HEIGHT = SIG_HEIGHT + COPY_TO_HEADER_HEIGHT + COPY_TO_LIST_HEIGHT;
     const BOTTOM_MARGIN = 40;
+
+    // 👇 NEW: extra lift so the block doesn't hug the footer when content is short.
+    // Increase this to push everything further up the page.
+    const BLOCK_LIFT = 140;
 
     let targetPage: PDFPage = lastPage;
     let currentY = 0;
@@ -35,13 +39,13 @@ export async function embedSignatureBlockIntoPDF(
     // Check if total block fits on last page
     const availableSpace = height - 250; // Distance from current content baseline
 
-    if (availableSpace < (TOTAL_BLOCK_HEIGHT + BOTTOM_MARGIN)) {
+    if (availableSpace < (TOTAL_BLOCK_HEIGHT + BOTTOM_MARGIN + BLOCK_LIFT)) {
         // Force to new page if combined blocks don't fit
         targetPage = pdfDoc.addPage([width, height]);
         currentY = height - 80; // Start near top of new page
     } else {
-        // Fits on existing last page above bottom margin
-        currentY = TOTAL_BLOCK_HEIGHT + BOTTOM_MARGIN; 
+        // Fits on existing last page — anchor higher up, above the bottom margin
+        currentY = TOTAL_BLOCK_HEIGHT + BOTTOM_MARGIN + BLOCK_LIFT;
     }
 
     // --- 4. DRAW SIGNATURE BLOCK (TOP) ---
@@ -50,7 +54,7 @@ export async function embedSignatureBlockIntoPDF(
 
     const sigDims = sigImage.scaleToFit(200, 50);
     const sigImageY = currentY - sigDims.height;
-    
+
     // Draw Signature Image
     targetPage.drawImage(sigImage, {
         x: marginX,

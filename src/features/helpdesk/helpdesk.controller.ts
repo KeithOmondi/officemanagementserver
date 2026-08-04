@@ -156,24 +156,74 @@ export const helpDeskController = {
     }),
 
     /**
-     * POST /api/helpdesk/general
-     * Create a new general request (supports all 7 types: Driver, Bodyguard, Firearm, 
-     * Current Station, Force Number, Residence Security, Sentry)
-     * 
-     * Firearm rule: firearm_type is optional unless officer_assigned is provided.
-     */
-    createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
-        const result = createGeneralRequestSchema.safeParse({ body: req.body });
-        if (!result.success) {
-            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
-        }
-        const request = await HelpDeskService.createGeneralRequest(result.data.body, req.user!.id);
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
+ * POST /api/helpdesk/general
+ * Create a new general request (supports all 7 types: Driver, Bodyguard, Firearm, 
+ * Current Station, Force Number, Residence Security, Sentry)
+ * 
+ * Firearm rule: firearm_type is optional unless officer_assigned is provided.
+ */
+createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
+    console.log('\n[createGeneralRequest] ─── START ───────────────────────────────');
+    console.log('[createGeneralRequest] Incoming user:', {
+        id: req.user?.id,
+        role: (req.user as any)?.role,
+        full_name: (req.user as any)?.full_name,
+    });
+    console.log('[createGeneralRequest] Raw req.body:', JSON.stringify(req.body, null, 2));
+
+    const result = createGeneralRequestSchema.safeParse({ body: req.body });
+
+    if (!result.success) {
+        console.error('[createGeneralRequest] ❌ Validation FAILED');
+        console.error('[createGeneralRequest] Zod issues:', JSON.stringify(result.error.issues, null, 2));
+        throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
+    }
+
+    console.log('[createGeneralRequest] ✅ Validation passed');
+    console.log('[createGeneralRequest] Parsed body:', JSON.stringify(result.data.body, null, 2));
+    console.log('[createGeneralRequest] request_type:', result.data.body.request_type);
+
+    // Firearm-specific rule check (visibility into that special case)
+    if (result.data.body.request_type === 'Firearm') {
+        console.log('[createGeneralRequest] Firearm rule check:', {
+            firearm_type: (result.data.body as any).firearm_type,
+            officer_assigned: (result.data.body as any).officer_assigned,
+        });
+    }
+
+    console.time('[createGeneralRequest] service duration');
+    let request;
+    try {
+        request = await HelpDeskService.createGeneralRequest(result.data.body, req.user!.id);
+    } catch (err) {
+        console.error('[createGeneralRequest] ❌ Service threw:', err);
+        throw err;
+    } finally {
+        console.timeEnd('[createGeneralRequest] service duration');
+    }
+
+    console.log('[createGeneralRequest] ✅ Service returned request:', {
+        id: request?.id,
+        ref: (request as any)?.ref,
+        request_type: (request as any)?.request_type,
+        status: (request as any)?.status,
+    });
+    console.log('[createGeneralRequest] Full request payload:', JSON.stringify(request, null, 2));
+
+    // ── Emit real-time event ──────────────────────────────────────────────────
+    console.log('[createGeneralRequest] Broadcasting realtime event: general_request_created');
+    try {
         safeRealtimeBroadcast(req, 'general_request_created', request);
-        
-        return sendSuccess(res, request, 'General request created', 201);
-    }),
+        console.log('[createGeneralRequest] ✅ Realtime broadcast sent');
+    } catch (broadcastErr) {
+        console.error('[createGeneralRequest] ⚠️ Realtime broadcast failed (non-fatal):', broadcastErr);
+    }
+
+    console.log('[createGeneralRequest] Sending 201 response');
+    console.log('[createGeneralRequest] ─── END ─────────────────────────────────────\n');
+
+    return sendSuccess(res, request, 'General request created', 201);
+}),
 
     /**
      * PUT /api/helpdesk/general/:id

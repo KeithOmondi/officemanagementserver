@@ -1136,6 +1136,7 @@ export class HelpdeskDocumentsController {
 
 // ─── Delete Document ─────────────────────────────────────────────────────
 
+
 static async remove(req: Request, res: Response, next: NextFunction) {
     try {
         const id = getParam(req, 'id');
@@ -1179,14 +1180,12 @@ static async remove(req: Request, res: Response, next: NextFunction) {
         // ✅ Allowed: draft, returned, rejected, pending_approval
         // ❌ Restricted: approved
         if (isStaff) {
-            // Allow deletion of draft, returned, rejected, or pending_approval
             if (!['draft', 'returned', 'rejected', 'pending_approval'].includes(doc.status)) {
                 throw new AppError(403, 'You can only delete draft, returned, rejected, or pending approval documents. Approved documents must be deleted by a department head or super admin.');
             }
         }
 
         // Dept head and super admin can delete any document
-        // (including approved and pending)
 
         await HelpdeskDocumentsService.delete(id);
 

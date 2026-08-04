@@ -1,7 +1,7 @@
 import { pool } from '../../config/db';
 import { AppError } from '../../utils/response';
 import { uploadToCloudinary, deleteFromCloudinary } from '../../config/cloudinary';
-import axios from 'axios';
+//import axios from 'axios';
 import type {
     HelpdeskDocument,
     CreateHelpdeskDocumentInput,
@@ -13,7 +13,7 @@ import type {
     DocumentSummary,
     DocumentFormat,
     DocumentStatus,
-    EStampStatus,
+    //EStampStatus,
     UpdateDocumentFileInput,
     //InternalApprovalStatus,
     RequesterVisibleStatus,
@@ -28,9 +28,11 @@ import type {
 } from './helpdesk.documents.types';
 import { EStampService } from '../e-stamp/e-stamp.service';
 import { embedSignatureBlockIntoPDF } from '../../utils/signatureBlock';
+import { sendHelpdeskChangesRequested } from '../../utils/helpdeskTemplates';
+import { sendHelpdeskApproved, sendHelpdeskRejected } from '../../utils/sendMail';
 
 const FOLDER = 'orhc/helpdesk-documents';
-const E_STAMP_FOLDER = 'orhc/helpdesk-documents/e-stamps';
+//const E_STAMP_FOLDER = 'orhc/helpdesk-documents/e-stamps';
 
 // ─── SELECT Fragment (UPDATED: Added stamped_file columns) ──────────────────
 
@@ -1539,96 +1541,177 @@ export class HelpdeskDocumentsService {
         }
     }
 
-    /**
-     * Send Back to Requester - This is when the requester finally sees the status
-     */
-    static async sendBackToRequester(
-        id: string,
-        input: SendBackToRequesterRequest
-    ): Promise<HelpdeskDocument> {
-        const doc = await this.findById(id);
-        if (!doc) {
-            throw new AppError(404, 'Document not found');
-        }
-
-        if (!doc.is_internal_approval_complete) {
-            throw new AppError(400, 'Internal approval decision must be made before sending back');
-        }
-
-        const internalToRequesterMap: Record<string, RequesterVisibleStatus> = {
-            'approved_internal': 'approved',
-            'rejected_internal': 'rejected',
-            'changes_requested_internal': 'changes_requested',
-        };
-
-        const requesterStatus = internalToRequesterMap[doc.internal_approval_status];
-        if (!requesterStatus) {
-            throw new AppError(400, `Cannot send back from internal status: ${doc.internal_approval_status}`);
-        }
-
-        const finalStatus = input.final_status || requesterStatus;
-
-        const client = await pool.connect();
-        try {
-            await client.query('BEGIN');
-
-            let newStatus: DocumentStatus;
-            switch (finalStatus) {
-                case 'approved':
-                    newStatus = 'approved';
-                    break;
-                case 'rejected':
-                    newStatus = 'rejected';
-                    break;
-                case 'changes_requested':
-                    newStatus = 'returned';
-                    break;
-                default:
-                    newStatus = 'pending_approval';
-            }
-
-            await client.query(
-                `UPDATE helpdesk_documents
-                 SET requester_status = $1,
-                     status = $2,
-                     requester_visible_at = NOW(),
-                     requester_visible_by = $3,
-                     requester_visible_by_name = $4,
-                     is_sent_back_to_requester = true,
-                     is_requester_notified = $5,
-                     updated_at = NOW()
-                 WHERE id = $6 AND is_active = true`,
-                [
-                    finalStatus,
-                    newStatus,
-                    input.sent_by || null,
-                    input.sent_by_name || null,
-                    input.notify_requester || false,
-                    id
-                ]
-            );
-
-            await this.addApprovalHistory(
-                id,
-                input.sent_by || 'system',
-                'sent_back',
-                doc.uploaded_by || undefined,
-                `Document sent back to requester with status: ${finalStatus}`
-            );
-
-            await client.query('COMMIT');
-
-            const updatedDoc = await this.findById(id);
-            if (!updatedDoc) throw new AppError(500, 'Failed to retrieve updated document');
-            return updatedDoc;
-        } catch (err) {
-            await client.query('ROLLBACK');
-            throw err;
-        } finally {
-            client.release();
-        }
+  /**
+ * Send Back to Requester - This is when the requester finally sees the status
+ */
+static async sendBackToRequester(
+    id: string,
+    input: SendBackToRequesterRequest
+): Promise<HelpdeskDocument> {
+    const doc = await this.findById(id);
+    if (!doc) {
+        throw new AppError(404, 'Document not found');
     }
 
+    if (!doc.is_internal_approval_complete) {
+        throw new AppError(400, 'Internal approval decision must be made before sending back');
+    }
+
+    const internalToRequesterMap: Record<string, RequesterVisibleStatus> = {
+        'approved_internal': 'approved',
+        'rejected_internal': 'rejected',
+        'changes_requested_internal': 'changes_requested',
+    };
+
+    const requesterStatus = internalToRequesterMap[doc.internal_approval_status];
+    if (!requesterStatus) {
+        throw new AppError(400, `Cannot send back from internal status: ${doc.internal_approval_status}`);
+    }
+
+    const finalStatus = input.final_status || requesterStatus;
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        let newStatus: DocumentStatus;
+        switch (finalStatus) {
+            case 'approved':
+                newStatus = 'approved';
+                break;
+            case 'rejected':
+                newStatus = 'rejected';
+                break;
+            case 'changes_requested':
+                newStatus = 'returned';
+                break;
+            default:
+                newStatus = 'pending_approval';
+        }
+
+        await client.query(
+            `UPDATE helpdesk_documents
+             SET requester_status = $1,
+                 status = $2,
+                 requester_visible_at = NOW(),
+                 requester_visible_by = $3,
+                 requester_visible_by_name = $4,
+                 is_sent_back_to_requester = true,
+                 is_requester_notified = $5,
+                 updated_at = NOW()
+             WHERE id = $6 AND is_active = true`,
+            [
+                finalStatus,
+                newStatus,
+                input.sent_by || null,
+                input.sent_by_name || null,
+                input.notify_requester || false,
+                id
+            ]
+        );
+
+        await this.addApprovalHistory(
+            id,
+            input.sent_by || 'system',
+            'sent_back',
+            doc.uploaded_by || undefined,
+            `Document sent back to requester with status: ${finalStatus}`
+        );
+
+        await client.query('COMMIT');
+
+        const updatedDoc = await this.findById(id);
+        if (!updatedDoc) throw new AppError(500, 'Failed to retrieve updated document');
+
+        // ─── 🚀 SEND EMAIL NOTIFICATION AFTER COMMIT ──────────────────────
+        // Send after successful commit so we know the document is updated
+        if (input.notify_requester !== false && doc.uploaded_by) {
+            await this.sendApprovalNotification(updatedDoc, doc.uploaded_by, finalStatus);
+        }
+
+        return updatedDoc;
+    } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+    } finally {
+        client.release();
+    }
+}
+
+// ─── NEW: Send approval notification email ──────────────────────────────────
+
+private static async sendApprovalNotification(
+    doc: HelpdeskDocument,
+    requesterId: string,
+    status: 'approved' | 'rejected' | 'changes_requested'
+): Promise<void> {
+    try {
+        // Get requester's details
+        const { rows } = await pool.query(
+            `SELECT full_name, email FROM users WHERE id = $1 AND is_active = true`,
+            [requesterId]
+        );
+
+        if (rows.length === 0) {
+            console.warn(`[sendApprovalNotification] Requester ${requesterId} not found`);
+            return;
+        }
+
+        const requester = rows[0];
+
+        // Send based on status
+        switch (status) {
+            case 'approved':
+                await sendHelpdeskApproved({
+                    to: requester.email,
+                    requesterName: requester.full_name,
+                    ref: doc.ref,
+                    subject: doc.subject,
+                    entityType: doc.entity_type,
+                    approvedBy: doc.internal_approved_by_name || 'Super Admin',
+                    approvedAt: new Date(doc.internal_approved_at || doc.updated_at),
+                    comments: doc.internal_comments || undefined,
+                    documentUrl: doc.stamped_file_url || doc.file_url,
+                });
+                console.log(`[sendApprovalNotification] ✅ Approved email sent to ${requester.email} for ${doc.ref}`);
+                break;
+
+            case 'rejected':
+                await sendHelpdeskRejected({
+                    to: requester.email,
+                    requesterName: requester.full_name,
+                    ref: doc.ref,
+                    subject: doc.subject,
+                    entityType: doc.entity_type,
+                    rejectedBy: doc.internal_approved_by_name || 'Super Admin',
+                    rejectedAt: new Date(doc.internal_approved_at || doc.updated_at),
+                    reason: doc.internal_rejection_reason || 'No specific reason provided',
+                    comments: doc.internal_comments || undefined,
+                });
+                console.log(`[sendApprovalNotification] ❌ Rejected email sent to ${requester.email} for ${doc.ref}`);
+                break;
+
+            case 'changes_requested':
+                await sendHelpdeskChangesRequested({
+                    to: requester.email,
+                    requesterName: requester.full_name,
+                    ref: doc.ref,
+                    subject: doc.subject,
+                    entityType: doc.entity_type,
+                    requestedBy: doc.internal_approved_by_name || 'Super Admin',
+                    requestedAt: new Date(doc.internal_approved_at || doc.updated_at),
+                    changes: doc.internal_changes_requested || ['Please review the comments for required changes.'],
+                    comments: doc.internal_comments || undefined,
+                });
+                console.log(`[sendApprovalNotification] 🔄 Changes requested email sent to ${requester.email} for ${doc.ref}`);
+                break;
+        }
+
+    } catch (error) {
+        // Don't block the main flow if email fails - just log the error
+        console.error('[sendApprovalNotification] ❌ Failed to send email:', error);
+    }
+}
     /**
      * Resubmit After Changes - Requester resubmits after making changes
      */

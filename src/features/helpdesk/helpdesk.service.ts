@@ -5,7 +5,7 @@
 import { pool } from '../../config/db';
 import type { PoolClient } from 'pg';
 import { AppError } from '../../utils/response';
-import { sendGeneralRequestAcknowledgement, sendSuperAdminApprovalNotification } from '../../utils/sendMail';
+import { sendGeneralRequestAcknowledgement } from '../../utils/sendMail';
 import type {
     JudgeUtility,
     UtilityItem,
@@ -54,6 +54,7 @@ import type {
     UpdateGeneralRequestInput,
 } from './helpdesk.types';
 import { UpdateCircuitInput, UpdateOtherPaymentInput, UpdateServiceWeekInput } from './helpdesk.validator';
+import { sendSuperAdminApprovalNotification } from '../../utils/helpdeskTemplates';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 

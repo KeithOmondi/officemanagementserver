@@ -92,17 +92,17 @@ export class RegistryService {
     // ── List Folders ────────────────────────────────────────────────────────
 
     static async findAll(filters: RegistryFolderFilters = {}): Promise<RegistryFolderWithStats[]> {
-        let query = `
-            SELECT ${FOLDER_SELECT},
-                   COUNT(DISTINCT d.id) as document_count,
-                   COUNT(DISTINCT sf.id) as sub_folder_count
-            FROM rhc_folders f
-            LEFT JOIN users u ON f.created_by = u.id
-            LEFT JOIN users u2 ON f.updated_by = u2.id
-            LEFT JOIN helpdesk_documents d ON d.entity_id = f.id AND d.entity_type = 'rhc_folder' AND d.is_active = true
-            LEFT JOIN rhc_folders sf ON sf.parent_folder_id = f.id AND sf.is_active = true
-            WHERE f.is_active = true
-        `;
+         let query = `
+        SELECT ${FOLDER_SELECT},
+               COUNT(DISTINCT d.id) as document_count,
+               COUNT(DISTINCT sf.id) as sub_folder_count
+        FROM rhc_folders f
+        LEFT JOIN users u ON f.created_by = u.id
+        LEFT JOIN users u2 ON f.updated_by = u2.id
+        LEFT JOIN helpdesk_documents d ON d.entity_id = f.id::text AND d.entity_type = 'rhc_folder' AND d.is_active = true
+        LEFT JOIN rhc_folders sf ON sf.parent_folder_id = f.id AND sf.is_active = true
+        WHERE f.is_active = true
+    `;
 
         const params: unknown[] = [];
         let p = 1;

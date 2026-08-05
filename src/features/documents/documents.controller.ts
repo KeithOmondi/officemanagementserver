@@ -26,6 +26,7 @@ import {
   getFolderDocumentsSchema,
   // ── Follow-up schemas ──────────────────────────────────────────────
   createFollowUpSchema,
+  sendFollowUpSchema,
   fileAwayFollowUpSchema,
   updateFollowUpSchema,
   completeFollowUpSchema,
@@ -37,6 +38,7 @@ import {
   setBringUpSchema,
   updateBringUpSchema,
   completeBringUpSchema,
+  fileAwayBringUpSchema,
   bringUpFiltersSchema,
 } from './documents.validator';
 import { getRealtimeService } from '../../middleware/realtime.middleware';
@@ -163,8 +165,6 @@ export const documentController = {
     return sendSuccess(res, doc, 'Letter generated successfully', 201);
   }),
 
-  // ─── ADDED: Compose Certificate ─────────────────────────────────────────────
-
   composeCertificate: asyncHandler(async (req: Request, res: Response) => {
     const result = composeCertificateSchema.safeParse({ body: req.body });
     if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid certificate data');
@@ -246,6 +246,7 @@ export const documentController = {
     const doc = await DocumentService.findById(paramsResult.data.params.id);
     if (!doc) throw new AppError(404, 'Document not found');
 
+    // Check if any memo-specific fields are being updated
     const hasMemoFields =
       bodyResult.data.body.to_recipient !== undefined ||
       bodyResult.data.body.from_sender !== undefined ||
@@ -255,7 +256,8 @@ export const documentController = {
       bodyResult.data.body.enclosures !== undefined ||
       bodyResult.data.body.signature_name !== undefined ||
       bodyResult.data.body.signature_title !== undefined ||
-      bodyResult.data.body.from_first !== undefined;
+      bodyResult.data.body.from_first !== undefined ||
+      bodyResult.data.body.metadata?.fromFirst !== undefined;
 
     if (hasMemoFields && (doc.type === 'memo' || doc.type === 'letter' || doc.type === 'certificate')) {
       if (req.user!.role !== 'super_admin') {
@@ -499,7 +501,6 @@ export const documentController = {
     const doc = await DocumentService.findById(paramsResult.data.params.id);
     if (!doc) throw new AppError(404, 'Document not found');
 
-    // ─── UPDATED: Include certificate in templated document check ────────────
     const isTemplatedDocument = doc.type === 'memo' || doc.type === 'letter' || doc.type === 'certificate';
 
     const positionX = req.body?.position_x as number | undefined;
@@ -694,7 +695,6 @@ export const documentController = {
 
     safeDocumentUpdated(req, doc);
 
-    // Notify assigned user if specified
     if (bodyResult.data.body.assign_to) {
       safeEmitToUser(req, bodyResult.data.body.assign_to, 'bring_up_assigned', {
         document_id: doc.id,
@@ -732,7 +732,6 @@ export const documentController = {
 
     safeDocumentUpdated(req, doc);
 
-    // Notify assigned user
     if (doc.assigned_to) {
       safeEmitToUser(req, doc.assigned_to, 'bring_up_updated', {
         document_id: doc.id,
@@ -766,7 +765,6 @@ export const documentController = {
 
     safeDocumentUpdated(req, doc);
 
-    // Notify creator
     if (doc.created_by) {
       safeEmitToUser(req, doc.created_by, 'bring_up_completed', {
         document_id: doc.id,
@@ -780,6 +778,59 @@ export const documentController = {
     return sendSuccess(res, doc, 'Bring up completed successfully');
   }),
 
+  // ── NEW: File Away Bring Up ──────────────────────────────────────────────────
+
+  fileAwayBringUp: asyncHandler(async (req: Request, res: Response) => {
+    if (req.user!.role !== 'super_admin') {
+      throw new AppError(403, 'Only Super Administrators can file away bring ups');
+    }
+
+    const paramsResult = documentIdSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) {
+      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid document ID');
+    }
+
+    const bodyResult = fileAwayBringUpSchema.safeParse({ body: req.body });
+    if (!bodyResult.success) {
+      throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid file away data');
+    }
+
+    const doc = await DocumentService.fileAwayBringUp(
+      paramsResult.data.params.id,
+      req.user!.id,
+      {
+        notes: bodyResult.data.body.notes,
+        completion_notes: bodyResult.data.body.completion_notes,
+        return_to_helpdesk: bodyResult.data.body.return_to_helpdesk,
+      }
+    );
+
+    safeDocumentUpdated(req, doc);
+
+    // Emit realtime events
+    safeEmitToRoom(req, `document:${paramsResult.data.params.id}`, 'bring_up_filed_away', {
+      document_id: doc.id,
+      title: doc.title,
+      filed_away_by: req.user!.full_name,
+      filed_away_at: new Date().toISOString(),
+      notes: bodyResult.data.body.completion_notes || bodyResult.data.body.notes,
+    });
+
+    if (bodyResult.data.body.return_to_helpdesk !== false) {
+      // Notify the person who gets the document back
+      const returnToUserId = doc.active_mark?.marked_by || doc.created_by;
+      if (returnToUserId) {
+        safeEmitToUser(req, returnToUserId, 'document_returned_from_bringup', {
+          document_id: doc.id,
+          title: doc.title,
+          message: `Document "${doc.title}" has been returned from bring up and filed away.`
+        });
+      }
+    }
+
+    return sendSuccess(res, doc, 'Bring up filed away successfully');
+  }),
+
   // ── Get Bring Ups ────────────────────────────────────────────────────────────
 
   getBringUps: asyncHandler(async (req: Request, res: Response) => {
@@ -788,10 +839,7 @@ export const documentController = {
       throw new AppError(400, parsed.error.issues[0]?.message ?? 'Invalid filters');
     }
 
-    const result = await DocumentService.getBringUps(
-      parsed.data.query,
-      req.user!.id
-    );
+    const result = await DocumentService.getBringUps(parsed.data.query);
 
     return sendSuccess(res, result, 'Bring ups retrieved successfully');
   }),
@@ -816,10 +864,42 @@ export const documentController = {
   }),
 
   // ════════════════════════════════════════════════════════════════════════════
-  //  FOLLOW-UP CONTROLLER METHODS (UPDATED - SIMPLIFIED)
+  //  FOLLOW-UP CONTROLLER METHODS
   // ════════════════════════════════════════════════════════════════════════════
 
-  // ── Create Follow-Up (Simplified) ──────────────────────────────────────────
+  // ── NEW: Send Follow Up (simplified - just notes and send) ─────────────────
+
+  sendFollowUp: asyncHandler(async (req: Request, res: Response) => {
+    const result = sendFollowUpSchema.safeParse({ body: req.body });
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid follow-up data');
+    }
+
+    // Clean the data - convert null to undefined for mark_id
+    const cleanData = {
+      document_id: result.data.body.document_id,
+      notes: result.data.body.notes,
+      assigned_to: result.data.body.assigned_to,
+      mark_id: result.data.body.mark_id || undefined,
+    };
+
+    const followUp = await DocumentService.sendFollowUp(
+      cleanData,
+      req.user!.id
+    );
+
+    safeBroadcast(req, 'follow_up_sent', followUp);
+    if (followUp.assigned_to) {
+      safeEmitToUser(req, followUp.assigned_to, 'follow_up_sent', followUp);
+    }
+    if (followUp.document_id) {
+      safeEmitToRoom(req, `document:${followUp.document_id}`, 'follow_up_sent', followUp);
+    }
+
+    return sendSuccess(res, followUp, 'Follow-up sent successfully', 201);
+  }),
+
+  // ── Create Follow-Up (with due date) ──────────────────────────────────────────
 
   createFollowUp: asyncHandler(async (req: Request, res: Response) => {
     const result = createFollowUpSchema.safeParse({ body: req.body });
@@ -843,7 +923,7 @@ export const documentController = {
     return sendSuccess(res, followUp, 'Follow-up created successfully', 201);
   }),
 
-  // ── File Away Follow-Up (New) ─────────────────────────────────────────────
+  // ── File Away Follow-Up ─────────────────────────────────────────────────────
 
   fileAwayFollowUp: asyncHandler(async (req: Request, res: Response) => {
     const result = fileAwayFollowUpSchema.safeParse({ body: req.body });
@@ -864,7 +944,7 @@ export const documentController = {
     return sendSuccess(res, followUp, 'Follow-up filed away successfully', 201);
   }),
 
-  // ── Get Follow-Up Summary (New) ────────────────────────────────────────────
+  // ── Get Follow-Up Summary ────────────────────────────────────────────────────
 
   getFollowUpSummary: asyncHandler(async (req: Request, res: Response) => {
     const summary = await DocumentService.getFollowUpSummary(req.user!.id);
@@ -1087,37 +1167,35 @@ export const documentController = {
 
   // ── Update Document File (Replace file) ──────────────────────────────────────
 
-updateDocumentFile: asyncHandler(async (req: Request, res: Response) => {
-  const paramsResult = documentIdSchema.safeParse({ params: req.params });
-  if (!paramsResult.success) {
-    throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid document ID');
-  }
+  updateDocumentFile: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = documentIdSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) {
+      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid document ID');
+    }
 
-  const file = req.file;
-  if (!file) {
-    throw new AppError(400, 'A file is required');
-  }
+    const file = req.file;
+    if (!file) {
+      throw new AppError(400, 'A file is required');
+    }
 
-  const status = req.body?.status as string | undefined;
-  const comments = req.body?.comments as string | undefined;
+    const status = req.body?.status as string | undefined;
+    const comments = req.body?.comments as string | undefined;
 
-  // Check if document exists
-  const doc = await DocumentService.findById(paramsResult.data.params.id);
-  if (!doc) {
-    throw new AppError(404, 'Document not found');
-  }
+    const doc = await DocumentService.findById(paramsResult.data.params.id);
+    if (!doc) {
+      throw new AppError(404, 'Document not found');
+    }
 
-  // Update the document with the new file
-  const updated = await DocumentService.updateDocumentFile(
-    paramsResult.data.params.id,
-    file,
-    req.user!.id,
-    status,
-    comments
-  );
+    const updated = await DocumentService.updateDocumentFile(
+      paramsResult.data.params.id,
+      file,
+      req.user!.id,
+      status,
+      comments
+    );
 
-  safeDocumentUpdated(req, updated);
+    safeDocumentUpdated(req, updated);
 
-  return sendSuccess(res, updated, 'Document file updated successfully');
-}),
+    return sendSuccess(res, updated, 'Document file updated successfully');
+  }),
 };

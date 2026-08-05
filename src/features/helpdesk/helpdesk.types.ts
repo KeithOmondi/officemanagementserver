@@ -133,6 +133,7 @@ export interface UtilityItem {
 
 export interface JudgeUtility {
   id: string;
+  pj_number: string | null;
   judge_name: string;
   items: UtilityItem[];
   created_by: string | null;
@@ -140,7 +141,7 @@ export interface JudgeUtility {
   updated_at: string;
 }
 
-// --- Utility Inputs ---
+// ─── Utility Inputs ───────────────────────────────────────────────────────────
 
 export type UtilityItemInput = {
   utility_type: UtilityType;
@@ -154,12 +155,22 @@ export type UtilityItemInput = {
   status?: UtilityStatus;
 };
 
+/**
+ * Create a new utility record - PJ number is REQUIRED
+ * Used when adding a new judge's utility record to the system
+ */
 export interface CreateUtilityInput {
+  pj_number: string;          // REQUIRED - Cannot create utility without PJ number
   judge_name: string;
   items: UtilityItemInput[];
 }
 
+/**
+ * Add a utility item to an existing utility record - PJ number is REQUIRED
+ * Used when adding a new utility item (Electricity, Water, etc.) for an existing judge
+ */
 export interface AddUtilityItemInput {
+  pj_number: string;          // REQUIRED - Identifies which judge's utility record to update
   utility_type: UtilityType;
   requisition_number?: string;
   amount: number;
@@ -171,6 +182,10 @@ export interface AddUtilityItemInput {
   status?: UtilityStatus;
 }
 
+/**
+ * Update an existing utility item - uses item ID to identify the specific item
+ * PJ number is NOT required here as we use the item ID directly
+ */
 export interface UpdateUtilityItemInput {
   status?: UtilityStatus;
   date_received?: string;
@@ -183,12 +198,91 @@ export interface UpdateUtilityItemInput {
   requisition_number?: string;
 }
 
+/**
+ * Update the main utility record (judge name or PJ number)
+ * Both fields are optional since you might only update one
+ */
+export interface UpdateUtilityInput {
+  pj_number?: string;         // Optional - only provide if changing PJ number
+  judge_name?: string;        // Optional - only provide if changing judge name
+}
+
+/**
+ * Delete a utility item - uses item ID directly
+ * No PJ number needed as we use the item ID
+ */
+export interface DeleteUtilityItemInput {
+  item_id: string;            // Direct reference to the utility item to delete
+}
+
+/**
+ * Delete an entire utility record - uses the utility record ID
+ * No PJ number needed as we use the record ID
+ */
+export interface DeleteUtilityInput {
+  utility_id: string;         // Direct reference to the utility record to delete
+}
+
 export interface UtilityFilters {
   search?: string;
+  pj_number?: string;
   judge_name?: string;
   status?: UtilityStatus;
   limit?: number;
   offset?: number;
+}
+
+// ─── Utility Validation Helpers ──────────────────────────────────────────────
+
+/**
+ * Validates that a utility operation has the required PJ number
+ * @throws Error if PJ number is missing
+ */
+export function validatePjNumber(pj_number: string | null | undefined, operation: string): void {
+  if (!pj_number || pj_number.trim() === '') {
+    throw new Error(`PJ number is required for ${operation}`);
+  }
+}
+
+/**
+ * Validates CreateUtilityInput
+ */
+export function validateCreateUtilityInput(input: CreateUtilityInput): void {
+  validatePjNumber(input.pj_number, 'creating a utility record');
+  if (!input.judge_name || input.judge_name.trim() === '') {
+    throw new Error('Judge name is required');
+  }
+  if (!input.items || input.items.length === 0) {
+    throw new Error('At least one utility item is required');
+  }
+  // Validate each item
+  input.items.forEach((item, index) => {
+    if (!item.utility_type) {
+      throw new Error(`Item ${index + 1}: Utility type is required`);
+    }
+    if (item.amount <= 0) {
+      throw new Error(`Item ${index + 1}: Amount must be greater than 0`);
+    }
+    if (!item.period || item.period.trim() === '') {
+      throw new Error(`Item ${index + 1}: Period is required`);
+    }
+  });
+}
+
+/**
+ * Validates AddUtilityItemInput
+ */
+export function validateAddUtilityItemInput(input: AddUtilityItemInput): void {
+  validatePjNumber(input.pj_number, 'adding a utility item');
+  if (!input.utility_type) {
+    throw new Error('Utility type is required');
+  }
+  if (input.amount <= 0) {
+    throw new Error('Amount must be greater than 0');
+  }
+  if (!input.period || input.period.trim() === '') {
+    throw new Error('Period is required');
+  }
 }
 
 // ============================================================
@@ -796,4 +890,24 @@ export function isRemarkType(value: string): value is RemarkType {
 
 export function isGeneralRequestCategory(value: string): value is GeneralRequestCategory {
   return ['Security', 'Personnel', 'Administrative'].includes(value);
+}
+
+// ============================================================
+// Utility Type Guards
+// ============================================================
+
+export function isUtilityType(value: string): value is UtilityType {
+  return ['Electricity', 'Water', 'Internet', 'Fuel', 'Other'].includes(value);
+}
+
+export function isUtilityStatus(value: string): value is UtilityStatus {
+  return [
+    'Awaiting',
+    'Awaiting Documentation',
+    'Awaiting Funding',
+    'In Process',
+    'Approved',
+    'Paid',
+    'Payment NA'
+  ].includes(value);
 }

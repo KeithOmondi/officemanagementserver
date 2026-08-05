@@ -278,7 +278,7 @@ export const createLegacyGeneralRequestSchema = z.object({
 });
 
 // ============================================================
-// Judge Utilities
+// Judge Utilities - UPDATED with REQUIRED pj_number
 // ============================================================
 
 const utilityStatusEnum = z.enum([
@@ -303,17 +303,41 @@ const utilityItemSchema = z.object({
     status: utilityStatusEnum.optional(),
 });
 
+/**
+ * Schema for creating a new utility record - PJ number is REQUIRED
+ * Used when adding a new judge's utility record to the system
+ */
 export const createUtilitySchema = z.object({
     body: z.object({
+        pj_number: z.string().min(1, 'PJ number is required to create a utility record'), // ← REQUIRED
         judge_name: z.string().min(1).max(100),
         items: z.array(utilityItemSchema).min(1, 'At least one utility item is required'),
     }).strict(),
 });
 
+/**
+ * Schema for adding a utility item to an existing utility record - PJ number is REQUIRED
+ * Used when adding a new utility item (Electricity, Water, etc.) for an existing judge
+ */
 export const addUtilityItemSchema = z.object({
-    body: utilityItemSchema.strict(),
+    body: z.object({
+        pj_number: z.string().min(1, 'PJ number is required to add a utility item'), // ← REQUIRED
+        utility_type: utilityTypeEnum,
+        requisition_number: z.string().optional(),
+        amount: z.number().min(0),
+        period: z.string().min(1).max(50),
+        description: z.string().optional(),
+        date_received: dateStringSchema.optional(),
+        date_forwarded_dass: dateStringSchema.optional(),
+        date_paid: dateStringSchema.optional(),
+        status: utilityStatusEnum.optional(),
+    }).strict(),
 });
 
+/**
+ * Schema for updating an existing utility item - uses item ID to identify the specific item
+ * PJ number is NOT required here as we use the item ID directly
+ */
 export const updateUtilityItemSchema = z.object({
     body: z.object({
         status: utilityStatusEnum.optional(),
@@ -328,9 +352,48 @@ export const updateUtilityItemSchema = z.object({
     }).strict(),
 });
 
+/**
+ * Schema for updating the main utility record (judge name or PJ number)
+ * Both fields are optional since you might only update one
+ */
+export const updateUtilitySchema = z.object({
+    body: z.object({
+        pj_number: z.string().optional(), // Optional - only provide if changing PJ number
+        judge_name: z.string().min(1).max(100).optional(), // Optional - only provide if changing judge name
+    }).strict()
+    .refine(
+        (data) => data.pj_number !== undefined || data.judge_name !== undefined,
+        {
+            message: 'At least one field (pj_number or judge_name) must be provided for update',
+            path: ['body'],
+        }
+    ),
+});
+
+/**
+ * Schema for deleting a utility item - uses item ID directly
+ * No PJ number needed as we use the item ID
+ */
+export const deleteUtilityItemSchema = z.object({
+    params: z.object({
+        itemId: z.string().uuid('Item ID must be a valid UUID'),
+    }),
+});
+
+/**
+ * Schema for deleting an entire utility record - uses the utility record ID
+ * No PJ number needed as we use the record ID
+ */
+export const deleteUtilitySchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Utility ID must be a valid UUID'),
+    }),
+});
+
 export const utilityFiltersSchema = z.object({
     query: z.object({
         search: z.string().optional(),
+        pj_number: z.string().optional(),
         judge_name: z.string().optional(),
         status: utilityStatusEnum.optional(),
         limit: z.string().regex(/^\d+$/).optional().transform(Number),
@@ -640,6 +703,9 @@ export type CreateLegacyGeneralRequestInput = z.infer<typeof createLegacyGeneral
 export type CreateUtilityInput = z.infer<typeof createUtilitySchema>['body'];
 export type AddUtilityItemInput = z.infer<typeof addUtilityItemSchema>['body'];
 export type UpdateUtilityItemInput = z.infer<typeof updateUtilityItemSchema>['body'];
+export type UpdateUtilityInput = z.infer<typeof updateUtilitySchema>['body'];
+export type DeleteUtilityItemInput = z.infer<typeof deleteUtilityItemSchema>['params'];
+export type DeleteUtilityInput = z.infer<typeof deleteUtilitySchema>['params'];
 export type UtilityFilters = z.infer<typeof utilityFiltersSchema>['query'];
 
 // Club Membership Types

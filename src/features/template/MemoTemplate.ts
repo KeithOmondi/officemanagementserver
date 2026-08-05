@@ -14,7 +14,9 @@ export interface MemoData {
   footerAddress?: string;
   footerContact?: string;
   footerTagline?: string;
-  fromFirst?: boolean;
+  
+  // Simple control: User decides which field appears first
+  fromFirst?: boolean; // true = FROM first, false = TO first (default: false)
 }
 
 export const SIGNATURE_ANCHOR_TEXT = 'RHC-SIGNATURE-ANCHOR';
@@ -44,23 +46,86 @@ function escapeHtml(text: string): string {
 }
 
 /**
- * Safely formats the memo body.
+ * Safely formats the memo body with enhanced table support.
  * If rawBody already contains HTML tables or tags, it keeps them intact.
  * If it is plain text, it converts line breaks to <br/>.
  */
 function formatBodyHtml(rawBody: string): string {
   if (!rawBody || !rawBody.trim()) return "<p>&nbsp;</p>";
 
+  // Check if it's HTML content
   const isHtml = /<[a-z][\s\S]*>/i.test(rawBody);
 
   if (isHtml) {
-    return rawBody;
+    // Enhanced table formatting for existing HTML
+    let html = rawBody;
+    
+    // Add responsive table wrapper for better display
+    html = html.replace(/<table/g, '<div class="table-wrapper"><table');
+    html = html.replace(/<\/table>/g, '</table></div>');
+    
+    return html;
   }
 
+  // Plain text formatting with paragraph detection
   return rawBody
-    .split(/\n\n+/)
-    .map((p) => `<p>${escapeHtml(p.trim()).replace(/\n/g, "<br/>")}</p>`)
+    .split(/\n\n+/) // Split by double line breaks for paragraphs
+    .map((p) => {
+      const trimmed = p.trim();
+      if (!trimmed) return '';
+      
+      // Check if this paragraph looks like a table (contains pipe separators or tabs)
+      if (trimmed.includes('|') && trimmed.includes('\n')) {
+        // Convert simple pipe tables to HTML
+        return convertPipeTableToHtml(trimmed);
+      }
+      
+      return `<p>${escapeHtml(trimmed).replace(/\n/g, "<br/>")}</p>`;
+    })
     .join("");
+}
+
+/**
+ * Converts pipe-separated tables to HTML tables
+ * Example: 
+ * | Header 1 | Header 2 |
+ * | Cell 1   | Cell 2   |
+ */
+function convertPipeTableToHtml(tableText: string): string {
+  const lines = tableText.split('\n').filter(line => line.trim());
+  if (lines.length < 2) return `<p>${escapeHtml(tableText)}</p>`;
+  
+  let html = '<div class="table-wrapper"><table>';
+  let isHeader = true;
+  
+  for (const line of lines) {
+    // Skip separator lines (e.g., |---|---|)
+    if (/^\|[\s:-]+\|$/.test(line.trim())) continue;
+    
+    const cells = line.split('|')
+      .map(cell => cell.trim())
+      .filter(cell => cell !== '');
+    
+    if (cells.length === 0) continue;
+    
+    if (isHeader) {
+      html += '<thead><tr>';
+      cells.forEach(cell => {
+        html += `<th>${escapeHtml(cell)}</th>`;
+      });
+      html += '</tr></thead><tbody>';
+      isHeader = false;
+    } else {
+      html += '<tr>';
+      cells.forEach(cell => {
+        html += `<td>${escapeHtml(cell)}</td>`;
+      });
+      html += '</tr>';
+    }
+  }
+  
+  html += '</tbody></table></div>';
+  return html;
 }
 
 export function getMemoHTML(data: MemoData): string {
@@ -80,11 +145,12 @@ export function getMemoHTML(data: MemoData): string {
     footerAddress = DEFAULTS.footerAddress,
     footerContact = DEFAULTS.footerContact,
     footerTagline = DEFAULTS.footerTagline,
-    fromFirst = false,
+    fromFirst = false, // Default: TO first
   } = data;
 
   const escaped = (value: string) => escapeHtml(value);
 
+  // Build fields array
   const fields = [
     { label: "TO", value: to },
     { label: "FROM", value: from },
@@ -92,11 +158,15 @@ export function getMemoHTML(data: MemoData): string {
     { label: "REF", value: ref },
     { label: "DATE", value: date },
     { label: "SUBJECT", value: subject },
-  ].filter((f) => f.label !== "CC" || f.value);
+  ];
 
+  // Filter out empty CC if not provided
+  const filteredFields = fields.filter(f => f.label !== "CC" || f.value);
+
+  // Order fields based on fromFirst flag
   const orderedFields = fromFirst
-    ? [fields[1], fields[0], ...fields.slice(2)]
-    : fields;
+    ? [filteredFields[1], filteredFields[0], ...filteredFields.slice(2)]
+    : filteredFields;
 
   const fieldsHtml = orderedFields
     .map(
@@ -118,7 +188,7 @@ export function getMemoHTML(data: MemoData): string {
   <style>
     @page {
       size: A4;
-      margin: 15mm 15mm 32mm 15mm; /* 32mm bottom margin leaves reserved space for fixed footer */
+      margin: 15mm 15mm 32mm 15mm;
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { 
@@ -130,7 +200,7 @@ export function getMemoHTML(data: MemoData): string {
       width: 100%; 
       max-width: 794px; 
       margin: 0 auto; 
-      padding-bottom: 110px; /* Reserves clear clearance above fixed footer */
+      padding-bottom: 110px;
       position: relative; 
     }
     .header { text-align: center; margin-bottom: 12px; }
@@ -159,18 +229,24 @@ export function getMemoHTML(data: MemoData): string {
     }
     .body-content p { margin-bottom: 8px; }
     
-    /* Styled Table Support */
+    /* Enhanced Table Support */
+    .table-wrapper {
+      overflow-x: auto;
+      margin: 12px 0;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
     .body-content table { 
       width: 100%; 
       border-collapse: collapse; 
-      margin: 12px 0; 
       font-size: 10.5pt; 
       page-break-inside: avoid; 
       break-inside: avoid; 
     }
-    .body-content table th, .body-content table td { 
+    .body-content table th, 
+    .body-content table td { 
       border: 1px solid #333; 
-      padding: 6px 10px; 
+      padding: 8px 12px; 
       text-align: left; 
       vertical-align: top; 
     }
@@ -179,6 +255,21 @@ export function getMemoHTML(data: MemoData): string {
       font-weight: bold; 
       text-transform: uppercase; 
       font-size: 9.5pt; 
+      color: #1a1a1a;
+    }
+    .body-content table tr:nth-child(even) {
+      background-color: #f9f9f9;
+    }
+    .body-content table tr:hover {
+      background-color: #f5f3eb;
+    }
+    
+    /* Table Caption Support */
+    .body-content table caption {
+      font-weight: bold;
+      margin-bottom: 6px;
+      text-align: left;
+      font-size: 10.5pt;
     }
 
     .signature-section {
@@ -220,7 +311,7 @@ export function getMemoHTML(data: MemoData): string {
       color: #000; 
     }
 
-    /* Fixed Footer Setup to prevent overlapping and unwanted page pushes */
+    /* Footer Styles */
     .footer { 
       position: fixed;
       bottom: 0;
@@ -237,6 +328,15 @@ export function getMemoHTML(data: MemoData): string {
     .footer-text { flex: 1; text-align: right; font-size: 8.5pt; color: #1a1a1a; }
     .footer-text p { margin: 1px 0; line-height: 1.3; }
     .footer-tagline { text-align: right; font-size: 9.5pt; font-weight: bold; color: #1E4620; margin-top: 4px; }
+
+    /* Print Styles */
+    @media print {
+      body { background: #fff; }
+      .page { max-width: 100%; }
+      .table-wrapper { overflow-x: visible; }
+      .body-content table { page-break-inside: avoid; }
+      .body-content table tr { page-break-inside: avoid; }
+    }
   </style>
 </head>
 <body>

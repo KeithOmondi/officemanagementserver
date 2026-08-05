@@ -78,7 +78,13 @@ export const bringUpStatusEnum = z.enum([
   'pending',
   'completed',
   'overdue',
+  'filed_away',
   'all',
+]);
+
+export const bringUpCompletionActionEnum = z.enum([
+  'complete',
+  'file_away',
 ]);
 
 // ── Date transformer helper ────────────────────────────────────────────────
@@ -128,55 +134,6 @@ const bringUpDateSchema = z
   ])
   .transform(transformBringUpDate);
 
-// ── Request Details Schema ─────────────────────────────────────────────────
-
-export const documentRequestDetailsSchema = z
-  .object({
-    request_type: z.enum(['driver', 'bodyguard', 'firearm', 'current_station', 'force_number', 'residence_security', 'sentry']).nullable().optional(),
-    driver_name: z.string().nullable().optional(),
-    driver_license: z.string().nullable().optional(),
-    driver_vehicle: z.string().nullable().optional(),
-    driver_contact: z.string().nullable().optional(),
-    bodyguard_name: z.string().nullable().optional(),
-    bodyguard_badge: z.string().nullable().optional(),
-    bodyguard_unit: z.string().nullable().optional(),
-    bodyguard_contact: z.string().nullable().optional(),
-    firearm_type: z.string().nullable().optional(),
-    firearm_serial: z.string().nullable().optional(),
-    firearm_caliber: z.string().nullable().optional(),
-    firearm_owner: z.string().nullable().optional(),
-    firearm_license: z.string().nullable().optional(),
-    current_station_name: z.string().nullable().optional(),
-    current_station_location: z.string().nullable().optional(),
-    current_station_contact: z.string().nullable().optional(),
-    current_station_head: z.string().nullable().optional(),
-    force_number_value: z.string().nullable().optional(),
-    force_number_rank: z.string().nullable().optional(),
-    force_number_unit: z.string().nullable().optional(),
-    force_number_issue_date: z.string().nullable().optional(),
-    residence_address: z.string().nullable().optional(),
-    residence_city: z.string().nullable().optional(),
-    residence_state: z.string().nullable().optional(),
-    security_personnel_count: z.number().nullable().optional(),
-    security_shift_hours: z.string().nullable().optional(),
-    security_equipment: z.string().nullable().optional(),
-    sentry_post_location: z.string().nullable().optional(),
-    sentry_instructions: z.string().nullable().optional(),
-    request_date: z.string().nullable().optional(),
-    request_reason: z.string().nullable().optional(),
-    request_duration: z.string().nullable().optional(),
-    request_start_date: z.string().nullable().optional(),
-    request_end_date: z.string().nullable().optional(),
-    requesting_officer: z.string().nullable().optional(),
-    requesting_officer_rank: z.string().nullable().optional(),
-    approving_officer: z.string().nullable().optional(),
-    approving_officer_rank: z.string().nullable().optional(),
-    approval_status: z.enum(['pending', 'approved', 'rejected']).nullable().optional(),
-    approval_date: z.string().nullable().optional(),
-    remarks: z.string().nullable().optional(),
-  })
-  .strict();
-
 // ─── Create composed document ────────────────────────────────────────────────
 
 export const createComposedDocumentSchema = z.object({
@@ -208,7 +165,6 @@ export const createUploadDocumentSchema = z.object({
       assigned_to: z.string().uuid().optional(),
       department_id: z.string().uuid().optional(),
       is_draft: z.coerce.boolean().default(false),
-      request_details: documentRequestDetailsSchema.optional(),
     })
     .strict()
     .refine(
@@ -245,7 +201,13 @@ export const updateDocumentSchema = z.object({
       signature_position_y: z.number().nullable().optional(),
       signature_position_width: z.number().nullable().optional(),
       signature_position_height: z.number().nullable().optional(),
-      request_details: documentRequestDetailsSchema.nullable().optional(),
+      // Add metadata object for storing fromFirst and other settings
+      metadata: z
+        .object({
+          fromFirst: z.boolean().optional(),
+        })
+        .passthrough() // Allow other metadata fields
+        .optional(),
     })
     .strict()
     .refine((b) => Object.keys(b).length > 0, {
@@ -415,7 +377,7 @@ const baseComposeSchema = z.object({
   from: z.string().optional(),
   signatureName: z.string().optional(),
   signatureTitle: z.string().optional(),
-  fromFirst: z.boolean().default(false),
+  fromFirst: z.boolean().default(false), // Added fromFirst flag
   department_id: z.string().uuid().optional(),
   reference_no: z.string().max(100).trim().optional(),
 });
@@ -510,6 +472,20 @@ export const completeBringUpSchema = z.object({
     .strict(),
 });
 
+// ─── NEW: File Away Bring Up Schema ─────────────────────────────────────────
+
+export const fileAwayBringUpSchema = z.object({
+  body: z
+    .object({
+      notes: z.string().max(1000).trim().optional(),
+      completion_notes: z.string().max(2000).trim().optional(),
+      return_to_helpdesk: z.boolean().default(true),
+    })
+    .strict(),
+});
+
+// ─── Bring Up Filters Schema ────────────────────────────────────────────────
+
 export const bringUpFiltersSchema = z.object({
   query: z.object({
     status: bringUpStatusEnum.optional(),
@@ -600,6 +576,19 @@ export const createFollowUpSchema = z.object({
         path: ['due_date'],
       }
     ),
+});
+
+// ─── NEW: Send Follow Up Schema (simplified - just notes and send) ─────────
+
+export const sendFollowUpSchema = z.object({
+  body: z
+    .object({
+      document_id: z.string().uuid('Document ID must be a valid UUID'),
+      mark_id: z.string().uuid('Mark ID must be a valid UUID').optional().nullable(),
+      notes: z.string().min(1, 'Notes are required').max(2000).trim(),
+      assigned_to: z.string().uuid('Must be a valid user ID'),
+    })
+    .strict(),
 });
 
 export const fileAwayFollowUpSchema = z.object({
@@ -804,6 +793,7 @@ export type UpdateMarkInput = z.infer<typeof updateMarkSchema>['body'];
 export type SetBringUpInput = z.infer<typeof setBringUpSchema>['body'];
 export type UpdateBringUpInput = z.infer<typeof updateBringUpSchema>['body'];
 export type CompleteBringUpInput = z.infer<typeof completeBringUpSchema>['body'];
+export type FileAwayBringUpInput = z.infer<typeof fileAwayBringUpSchema>['body'];
 export type BringUpFilters = z.infer<typeof bringUpFiltersSchema>['query'];
 
 export type RedirectToFolderInput = z.infer<typeof redirectToFolderSchema>['body'];
@@ -811,6 +801,7 @@ export type RemoveFromFolderInput = z.infer<typeof removeFromFolderSchema>['body
 export type GetFolderDocumentsQuery = z.infer<typeof getFolderDocumentsSchema>['query'];
 
 export type CreateFollowUpInput = z.infer<typeof createFollowUpSchema>['body'];
+export type SendFollowUpInput = z.infer<typeof sendFollowUpSchema>['body'];
 export type FileAwayFollowUpInput = z.infer<typeof fileAwayFollowUpSchema>['body'];
 export type UpdateFollowUpInput = z.infer<typeof updateFollowUpSchema>['body'];
 export type CompleteFollowUpInput = z.infer<typeof completeFollowUpSchema>['body'];

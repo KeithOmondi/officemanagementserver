@@ -17,7 +17,7 @@ router.use(protect);
 
 /**
  * @route   POST /api/documents/follow-ups
- * @desc    Create a new follow-up (simplified - no title required)
+ * @desc    Create a new follow-up with due date
  * @access  Super Admin or Dept Head
  * @body    { document_id, mark_id?, notes, assigned_to, due_date?, priority? }
  */
@@ -28,8 +28,20 @@ router.post(
 );
 
 /**
+ * @route   POST /api/documents/follow-ups/send
+ * @desc    Send a simplified follow-up (no due date required)
+ * @access  Super Admin or Dept Head
+ * @body    { document_id, mark_id?, notes, assigned_to }
+ */
+router.post(
+  '/follow-ups/send',
+  requireRole('super_admin', 'dept_head'),
+  documentController.sendFollowUp
+);
+
+/**
  * @route   POST /api/documents/follow-ups/file-away
- * @desc    File away a follow-up (no due date, immediately completed)
+ * @desc    File away a follow-up (no due date, immediately filed)
  * @access  Super Admin or Dept Head
  * @body    { document_id, mark_id?, notes, completion_notes? }
  */
@@ -93,7 +105,7 @@ router.get(
  * @route   GET /api/documents/bring-ups/summary
  * @desc    Get bring up summary for dashboard
  * @access  Super Admin only
- * @returns { total_pending, total_overdue, total_completed, due_today, due_this_week, by_department, my_pending, my_overdue }
+ * @returns { total_pending, total_overdue, total_completed, total_filed_away, due_today, due_this_week, by_department, my_pending, my_overdue }
  */
 router.get(
   '/bring-ups/summary',
@@ -279,13 +291,25 @@ router.put(
 /**
  * @route   PATCH /api/documents/:id/bring-up/complete
  * @desc    Mark a bring up as completed
- * @access  Super Admin or assigned user
+ * @access  Super Admin only
  * @body    { notes? }
  */
 router.patch(
   '/:id/bring-up/complete',
   requireRole('super_admin'),
   documentController.completeBringUp
+);
+
+/**
+ * @route   PATCH /api/documents/:id/bring-up/file-away
+ * @desc    File away a bring up (complete and return to helpdesk)
+ * @access  Super Admin only
+ * @body    { notes?, completion_notes?, return_to_helpdesk? }
+ */
+router.patch(
+  '/:id/bring-up/file-away',
+  requireRole('super_admin'),
+  documentController.fileAwayBringUp
 );
 
 /**
@@ -545,7 +569,7 @@ router.get(
 );
 
 // ════════════════════════════════════════════════════════════════════════════
-//  4. FILE UPLOAD FOR EXISTING DOCUMENT (ADD THIS)
+//  4. FILE UPLOAD FOR EXISTING DOCUMENT
 // ════════════════════════════════════════════════════════════════════════════
 
 /**

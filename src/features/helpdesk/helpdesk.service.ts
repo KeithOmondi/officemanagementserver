@@ -23,6 +23,7 @@ import type {
     CreateUtilityInput,
     AddUtilityItemInput,
     UpdateUtilityItemInput,
+    UpdateUtilityInput,
     UtilityFilters,
     CreateClubMembershipInput,
     CreateCircuitInput,
@@ -59,7 +60,7 @@ import { sendSuperAdminApprovalNotification } from '../../utils/helpdeskTemplate
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
 const UTILITY_REQUEST_SELECT = `
-    id, judge_name, created_by, created_at, updated_at
+    id, pj_number, judge_name, created_by, created_at, updated_at
 `;
 
 const UTILITY_ITEM_SELECT = `
@@ -1092,7 +1093,7 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
     }
 
     // ============================================================
-    // JUDGE UTILITIES
+    // JUDGE UTILITIES - UPDATED with PJ number requirements
     // ============================================================
 
     private static async getUtilityItems(requestId: string): Promise<UtilityItem[]> {
@@ -1106,45 +1107,54 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
         return rows;
     }
 
-    static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtility[]> {
-        let query = `SELECT ${UTILITY_REQUEST_SELECT} FROM judge_utility_requests WHERE is_active = true`;
-        const params: unknown[] = [];
-        let paramCount = 1;
+static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtility[]> {
+    
+    let query = `SELECT ${UTILITY_REQUEST_SELECT} FROM judge_utility_requests WHERE is_active = true`;
+    const params: unknown[] = [];
+    let paramCount = 1;
 
-        if (filters.search) {
-            query += ` AND judge_name ILIKE $${paramCount}`;
-            params.push(`%${filters.search}%`);
-            paramCount++;
-        }
-        if (filters.judge_name) {
-            query += ` AND judge_name ILIKE $${paramCount}`;
-            params.push(`%${filters.judge_name}%`);
-            paramCount++;
-        }
-
-        query += ` ORDER BY created_at DESC`;
-        if (filters.limit) {
-            query += ` LIMIT $${paramCount}`;
-            params.push(filters.limit);
-            paramCount++;
-        }
-        if (filters.offset) {
-            query += ` OFFSET $${paramCount}`;
-            params.push(filters.offset);
-        }
-
-        const { rows } = await pool.query(query, params);
-
-        for (const request of rows) {
-            let items = await this.getUtilityItems(request.id);
-            if (filters.status) {
-                items = items.filter((item) => item.status === filters.status);
-            }
-            request.items = items;
-        }
-
-        return filters.status ? rows.filter((r) => r.items.length > 0) : rows;
+    if (filters.search) {
+        query += ` AND (judge_name ILIKE $${paramCount} OR pj_number ILIKE $${paramCount})`;
+        params.push(`%${filters.search}%`);
+        paramCount++;
     }
+    if (filters.judge_name) {
+        query += ` AND judge_name ILIKE $${paramCount}`;
+        params.push(`%${filters.judge_name}%`);
+        paramCount++;
+    }
+    if (filters.pj_number) {
+        query += ` AND pj_number ILIKE $${paramCount}`;
+        params.push(`%${filters.pj_number}%`);
+        paramCount++;
+    }
+
+    query += ` ORDER BY created_at DESC`;
+    if (filters.limit) {
+        query += ` LIMIT $${paramCount}`;
+        params.push(filters.limit);
+        paramCount++;
+    }
+    if (filters.offset) {
+        query += ` OFFSET $${paramCount}`;
+        params.push(filters.offset);
+    }
+
+    
+
+    const { rows } = await pool.query(query, params);
+
+    for (const request of rows) {
+        let items = await this.getUtilityItems(request.id);
+        if (filters.status) {
+            items = items.filter((item) => item.status === filters.status);
+        }
+        request.items = items;
+    }
+
+    const result = filters.status ? rows.filter((r) => r.items.length > 0) : rows;
+    return result;
+}
 
     static async findUtilityById(id: string): Promise<JudgeUtility | null> {
         const { rows } = await pool.query(
@@ -1158,20 +1168,45 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
         return request;
     }
 
+    /**
+     * Find a utility record by PJ number
+     * Used to get the request ID when adding items
+     */
+    static async findUtilityByPjNumber(pjNumber: string): Promise<JudgeUtility | null> {
+        const { rows } = await pool.query(
+            `SELECT ${UTILITY_REQUEST_SELECT} FROM judge_utility_requests 
+             WHERE pj_number = $1 AND is_active = true`,
+            [pjNumber]
+        );
+        if (rows.length === 0) return null;
+
+        const request = rows[0];
+        request.items = await this.getUtilityItems(request.id);
+        return request;
+    }
+
+    /**
+     * Create a new utility record - PJ number is REQUIRED
+     */
     static async createUtility(
         input: CreateUtilityInput,
         userId: string
     ): Promise<JudgeUtility> {
+        // Validate PJ number is provided
+        if (!input.pj_number || input.pj_number.trim() === '') {
+            throw new AppError(400, 'PJ number is required to create a utility record');
+        }
+
         const client = await pool.connect();
 
         try {
             await client.query('BEGIN');
 
             const { rows } = await client.query(
-                `INSERT INTO judge_utility_requests (judge_name, created_by)
-                 VALUES ($1, $2)
+                `INSERT INTO judge_utility_requests (pj_number, judge_name, created_by)
+                 VALUES ($1, $2, $3)
                  RETURNING id`,
-                [input.judge_name.trim(), userId]
+                [input.pj_number.trim(), input.judge_name.trim(), userId]
             );
 
             const requestId = rows[0].id;
@@ -1210,14 +1245,24 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
         }
     }
 
+    /**
+     * Add a utility item to an existing utility record - uses PJ number to find the request
+     */
     static async addUtilityItem(
-        requestId: string,
         input: AddUtilityItemInput
     ): Promise<JudgeUtility> {
-        const existing = await this.findUtilityById(requestId);
-        if (!existing) {
-            throw new AppError(404, 'Judge utility record not found');
+        // Validate PJ number is provided
+        if (!input.pj_number || input.pj_number.trim() === '') {
+            throw new AppError(400, 'PJ number is required to add a utility item');
         }
+
+        // Find the utility request by PJ number
+        const existing = await this.findUtilityByPjNumber(input.pj_number);
+        if (!existing) {
+            throw new AppError(404, `Judge utility record not found for PJ number: ${input.pj_number}`);
+        }
+
+        const requestId = existing.id;
 
         await pool.query(
             `INSERT INTO judge_utility_items (
@@ -1294,6 +1339,51 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
 
         const updated = await this.findUtilityById(requestId);
         if (!updated) throw new AppError(500, 'Failed to update utility item');
+        return updated;
+    }
+
+    /**
+     * Update the main utility record (judge name or PJ number)
+     */
+    static async updateUtility(
+        id: string,
+        input: UpdateUtilityInput
+    ): Promise<JudgeUtility> {
+        const existing = await this.findUtilityById(id);
+        if (!existing) {
+            throw new AppError(404, 'Judge utility record not found');
+        }
+
+        // At least one field must be provided
+        if (input.pj_number === undefined && input.judge_name === undefined) {
+            throw new AppError(400, 'At least one field (pj_number or judge_name) must be provided for update');
+        }
+
+        const fields: string[] = [];
+        const values: unknown[] = [];
+        let paramCount = 1;
+
+        const setField = (column: string, value: unknown) => {
+            if (value !== undefined) {
+                fields.push(`${column} = $${paramCount}`);
+                values.push(value);
+                paramCount++;
+            }
+        };
+
+        setField('pj_number', input.pj_number?.trim());
+        setField('judge_name', input.judge_name?.trim());
+
+        fields.push(`updated_at = now()`);
+        values.push(id);
+
+        await pool.query(
+            `UPDATE judge_utility_requests SET ${fields.join(', ')} WHERE id = $${paramCount}`,
+            values
+        );
+
+        const updated = await this.findUtilityById(id);
+        if (!updated) throw new AppError(500, 'Failed to update judge utility record');
         return updated;
     }
 
@@ -3161,200 +3251,200 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
     }
 
     // ─── Circuits – Full Update ──────────────────────────────────────────────
-static async updateCircuit(
-    id: string,
-    input: UpdateCircuitInput
-): Promise<Circuit> {
-    const existing = await this.findCircuitById(id);
-    if (!existing) {
-        throw new AppError(404, 'Circuit not found');
-    }
+    static async updateCircuit(
+        id: string,
+        input: UpdateCircuitInput
+    ): Promise<Circuit> {
+        const existing = await this.findCircuitById(id);
+        if (!existing) {
+            throw new AppError(404, 'Circuit not found');
+        }
 
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
 
-        const fields: string[] = [];
-        const values: unknown[] = [];
-        let paramCount = 1;
+            const fields: string[] = [];
+            const values: unknown[] = [];
+            let paramCount = 1;
 
-        const setField = (column: string, value: unknown) => {
-            if (value !== undefined) {
-                fields.push(`${column} = $${paramCount}`);
-                values.push(value);
-                paramCount++;
+            const setField = (column: string, value: unknown) => {
+                if (value !== undefined) {
+                    fields.push(`${column} = $${paramCount}`);
+                    values.push(value);
+                    paramCount++;
+                }
+            };
+
+            setField('name', input.name?.trim());
+            setField('location', input.location?.trim());
+            setField('start_date', input.start_date);
+            setField('end_date', input.end_date);
+            setField('status', input.status);
+
+            if (fields.length > 0) {
+                fields.push('updated_at = now()');
+                values.push(id);
+                await client.query(
+                    `UPDATE circuits SET ${fields.join(', ')} WHERE id = $${paramCount}`,
+                    values
+                );
             }
-        };
 
-        setField('name', input.name?.trim());
-        setField('location', input.location?.trim());
-        setField('start_date', input.start_date);
-        setField('end_date', input.end_date);
-        setField('status', input.status);
-
-        if (fields.length > 0) {
-            fields.push('updated_at = now()');
-            values.push(id);
-            await client.query(
-                `UPDATE circuits SET ${fields.join(', ')} WHERE id = $${paramCount}`,
-                values
-            );
-        }
-
-        // Update DSA details if provided
-        if (input.dsa_details !== undefined) {
-            await this.upsertDSADetails(
-                client,
-                'circuit_dsa_details',
-                'circuit_id',
-                id,
-                input.dsa_details,
-                'circuit'
-            );
-        }
-
-        await client.query('COMMIT');
-
-        const updated = await this.findCircuitById(id);
-        if (!updated) throw new AppError(500, 'Failed to update circuit');
-        return updated;
-    } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-    } finally {
-        client.release();
-    }
-}
-
-// ─── Other Payments – Full Update ──────────────────────────────────────────
-static async updateOtherPayment(
-    id: string,
-    input: UpdateOtherPaymentInput
-): Promise<OtherPayment> {
-    const existing = await this.findOtherPaymentById(id);
-    if (!existing) {
-        throw new AppError(404, 'Other payment not found');
-    }
-
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
-
-        const fields: string[] = [];
-        const values: unknown[] = [];
-        let paramCount = 1;
-
-        const setField = (column: string, value: unknown) => {
-            if (value !== undefined) {
-                fields.push(`${column} = $${paramCount}`);
-                values.push(value);
-                paramCount++;
+            // Update DSA details if provided
+            if (input.dsa_details !== undefined) {
+                await this.upsertDSADetails(
+                    client,
+                    'circuit_dsa_details',
+                    'circuit_id',
+                    id,
+                    input.dsa_details,
+                    'circuit'
+                );
             }
-        };
 
-        setField('name', input.name?.trim());
-        setField('description', input.description?.trim());
-        setField('start_date', input.start_date);
-        setField('end_date', input.end_date);
-        setField('status', input.status);
+            await client.query('COMMIT');
 
-        if (fields.length > 0) {
-            fields.push('updated_at = now()');
-            values.push(id);
-            await client.query(
-                `UPDATE other_payments SET ${fields.join(', ')} WHERE id = $${paramCount}`,
-                values
-            );
+            const updated = await this.findCircuitById(id);
+            if (!updated) throw new AppError(500, 'Failed to update circuit');
+            return updated;
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
         }
-
-        if (input.dsa_details !== undefined) {
-            await this.upsertDSADetails(
-                client,
-                'other_payment_dsa_details',
-                'other_payment_id',
-                id,
-                input.dsa_details,
-                'other_payment'
-            );
-        }
-
-        await client.query('COMMIT');
-
-        const updated = await this.findOtherPaymentById(id);
-        if (!updated) throw new AppError(500, 'Failed to update other payment');
-        return updated;
-    } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-    } finally {
-        client.release();
-    }
-}
-
-// ─── Service Weeks – Full Update ──────────────────────────────────────────
-static async updateServiceWeek(
-    id: string,
-    input: UpdateServiceWeekInput
-): Promise<ServiceWeek> {
-    const existing = await this.findServiceWeekById(id);
-    if (!existing) {
-        throw new AppError(404, 'Service week not found');
     }
 
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
+    // ─── Other Payments – Full Update ──────────────────────────────────────────
+    static async updateOtherPayment(
+        id: string,
+        input: UpdateOtherPaymentInput
+    ): Promise<OtherPayment> {
+        const existing = await this.findOtherPaymentById(id);
+        if (!existing) {
+            throw new AppError(404, 'Other payment not found');
+        }
 
-        const fields: string[] = [];
-        const values: unknown[] = [];
-        let paramCount = 1;
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
 
-        const setField = (column: string, value: unknown) => {
-            if (value !== undefined) {
-                fields.push(`${column} = $${paramCount}`);
-                values.push(value);
-                paramCount++;
+            const fields: string[] = [];
+            const values: unknown[] = [];
+            let paramCount = 1;
+
+            const setField = (column: string, value: unknown) => {
+                if (value !== undefined) {
+                    fields.push(`${column} = $${paramCount}`);
+                    values.push(value);
+                    paramCount++;
+                }
+            };
+
+            setField('name', input.name?.trim());
+            setField('description', input.description?.trim());
+            setField('start_date', input.start_date);
+            setField('end_date', input.end_date);
+            setField('status', input.status);
+
+            if (fields.length > 0) {
+                fields.push('updated_at = now()');
+                values.push(id);
+                await client.query(
+                    `UPDATE other_payments SET ${fields.join(', ')} WHERE id = $${paramCount}`,
+                    values
+                );
             }
-        };
 
-        setField('name', input.name?.trim());
-        setField('week_number', input.week_number?.trim());
-        setField('year', input.year);
-        setField('start_date', input.start_date);
-        setField('end_date', input.end_date);
-        setField('status', input.status);
+            if (input.dsa_details !== undefined) {
+                await this.upsertDSADetails(
+                    client,
+                    'other_payment_dsa_details',
+                    'other_payment_id',
+                    id,
+                    input.dsa_details,
+                    'other_payment'
+                );
+            }
 
-        if (fields.length > 0) {
-            fields.push('updated_at = now()');
-            values.push(id);
-            await client.query(
-                `UPDATE service_weeks SET ${fields.join(', ')} WHERE id = $${paramCount}`,
-                values
-            );
+            await client.query('COMMIT');
+
+            const updated = await this.findOtherPaymentById(id);
+            if (!updated) throw new AppError(500, 'Failed to update other payment');
+            return updated;
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
         }
-
-        if (input.dsa_details !== undefined) {
-            await this.upsertDSADetails(
-                client,
-                'service_week_dsa_details',
-                'service_week_id',
-                id,
-                input.dsa_details,
-                'service_week'
-            );
-        }
-
-        await client.query('COMMIT');
-
-        const updated = await this.findServiceWeekById(id);
-        if (!updated) throw new AppError(500, 'Failed to update service week');
-        return updated;
-    } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-    } finally {
-        client.release();
     }
-}
+
+    // ─── Service Weeks – Full Update ──────────────────────────────────────────
+    static async updateServiceWeek(
+        id: string,
+        input: UpdateServiceWeekInput
+    ): Promise<ServiceWeek> {
+        const existing = await this.findServiceWeekById(id);
+        if (!existing) {
+            throw new AppError(404, 'Service week not found');
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            const fields: string[] = [];
+            const values: unknown[] = [];
+            let paramCount = 1;
+
+            const setField = (column: string, value: unknown) => {
+                if (value !== undefined) {
+                    fields.push(`${column} = $${paramCount}`);
+                    values.push(value);
+                    paramCount++;
+                }
+            };
+
+            setField('name', input.name?.trim());
+            setField('week_number', input.week_number?.trim());
+            setField('year', input.year);
+            setField('start_date', input.start_date);
+            setField('end_date', input.end_date);
+            setField('status', input.status);
+
+            if (fields.length > 0) {
+                fields.push('updated_at = now()');
+                values.push(id);
+                await client.query(
+                    `UPDATE service_weeks SET ${fields.join(', ')} WHERE id = $${paramCount}`,
+                    values
+                );
+            }
+
+            if (input.dsa_details !== undefined) {
+                await this.upsertDSADetails(
+                    client,
+                    'service_week_dsa_details',
+                    'service_week_id',
+                    id,
+                    input.dsa_details,
+                    'service_week'
+                );
+            }
+
+            await client.query('COMMIT');
+
+            const updated = await this.findServiceWeekById(id);
+            if (!updated) throw new AppError(500, 'Failed to update service week');
+            return updated;
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
 
 } // end HelpDeskService

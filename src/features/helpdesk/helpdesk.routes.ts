@@ -18,8 +18,10 @@ router.get('/reports/dsa/export', helpDeskController.exportDSAReport);
 // ─── Judge Utilities ─────────────────────────────────────────────────────────
 router.get('/utilities', helpDeskController.getAllUtilities);
 router.get('/utilities/:id', helpDeskController.getUtilityById);
+router.get('/utilities/by-pj/:pjNumber', helpDeskController.getUtilityByPjNumber);
 router.post('/utilities', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.createUtility);
-router.post('/utilities/:id/items', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.addUtilityItem);
+router.post('/utilities/items', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.addUtilityItem);
+router.put('/utilities/:id', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateUtility);
 router.put('/utilities/:id/items/:itemId', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateUtilityItem);
 router.delete('/utilities/:id/items/:itemId', requireRole('super_admin'), helpDeskController.deleteUtilityItem);
 router.delete('/utilities/:id', requireRole('super_admin', 'dept_head', 'staff'), helpDeskController.deleteUtility);
@@ -37,7 +39,7 @@ router.get('/circuits/:id', helpDeskController.getCircuitById);
 router.post('/circuits', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.createCircuit);
 router.put('/circuits/:id/status', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateCircuitStatus);
 router.put('/circuits/:id/dsa-details', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateCircuitDSADetails);
-// ─── NEW: Full update for circuits ──────────────────────────────────────────
+// ─── Full update for circuits ──────────────────────────────────────────────
 router.put('/circuits/:id', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateCircuit);
 router.delete('/circuits/:id', requireRole('super_admin', 'dept_head', 'staff'), helpDeskController.deleteCircuit);
 
@@ -62,7 +64,7 @@ router.get('/service-weeks', helpDeskController.getAllServiceWeeks);
 router.get('/service-weeks/:id', helpDeskController.getServiceWeekById);
 router.post('/service-weeks', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.createServiceWeek);
 router.put('/service-weeks/:id/status', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateServiceWeekStatus);
-// ─── NEW: Full update for service weeks ─────────────────────────────────────
+// ─── Full update for service weeks ─────────────────────────────────────────
 router.put('/service-weeks/:id', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateServiceWeek);
 router.delete('/service-weeks/:id', requireRole('super_admin', 'dept_head', 'staff'), helpDeskController.deleteServiceWeek);
 
@@ -121,7 +123,7 @@ router.get('/other-payments/:id', helpDeskController.getOtherPaymentById);
 router.post('/other-payments', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.createOtherPayment);
 router.put('/other-payments/:id/status', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateOtherPaymentStatus);
 router.put('/other-payments/:id/dsa-details', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateOtherPaymentDSADetails);
-// ─── NEW: Full update for other payments ─────────────────────────────────────
+// ─── Full update for other payments ─────────────────────────────────────────
 router.put('/other-payments/:id', requireRole('dept_head', 'super_admin', 'staff'), helpDeskController.updateOtherPayment);
 router.delete('/other-payments/:id', requireRole('super_admin', 'dept_head', 'staff'), helpDeskController.deleteOtherPayment);
 

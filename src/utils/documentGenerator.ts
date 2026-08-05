@@ -16,12 +16,11 @@ const limit = pLimit(3);
 // Singleton browser — reused across calls instead of relaunched each time
 let browserInstance: Browser | null = null;
 
-// In production (Render), use puppeteer-core + @sparticuz/chromium: a
-// prebuilt binary bundled with the package itself, with no separate
-// download-and-cache step to survive between build and runtime. Locally,
-// use full `puppeteer`, which manages its own bundled Chromium and
-// already works fine in dev.
+// In production (Render), use puppeteer-core + @sparticuz/chromium
 const IS_RENDER = !!process.env.RENDER;
+
+// Increase timeout for slow page loads
+const PAGE_LOAD_TIMEOUT = 30000; // 30 seconds
 
 async function launchBrowser(): Promise<Browser> {
   const commonArgs = [
@@ -80,9 +79,6 @@ function renderTemplateHTML(type: TemplateType, data: TemplateData): string {
     case 'certificate':
       return getCertificateHTML(data as CertificateData);
     default: {
-      // Exhaustiveness check — if a new TemplateType is added without a
-      // case here, this will fail to compile rather than silently
-      // producing a blank PDF at runtime.
       const _exhaustive: never = type;
       throw new AppError(400, `Unknown template type: ${_exhaustive}`);
     }
@@ -94,55 +90,70 @@ export async function generateDocumentFromTemplate(
   data: TemplateData
 ): Promise<Buffer> {
   return limit(async () => {
+    let page = null;
     try {
       console.log(`📄 Generating ${type} PDF from HTML template...`);
 
       const html = renderTemplateHTML(type, data);
-
       const browser = await getBrowser();
-      const page = await browser.newPage();
+      page = await browser.newPage();
 
-      try {
-        await page.setViewport({
-          width: 1200,
-          height: 1600,
-          deviceScaleFactor: 1,
-        });
+      // Suggestion: Set timeout for page operations
+      page.setDefaultTimeout(PAGE_LOAD_TIMEOUT);
 
-        await page.setContent(html, {
-          waitUntil: 'load',
-        });
+      await page.setViewport({
+        width: 1200,
+        height: 1600,
+        deviceScaleFactor: 1,
+      });
 
-        await delay(500);
+      await page.setContent(html, {
+        waitUntil: 'load', // or 'networkidle0' if you have external resources
+        timeout: PAGE_LOAD_TIMEOUT,
+      });
 
-        const pdfBuffer = await page.pdf({
-          format: 'A4',
-          printBackground: true,
-          margin: {
-            top: '0px',
-            bottom: '0px',
-            left: '0px',
-            right: '0px',
-          },
-          displayHeaderFooter: false,
-        });
+      // Small delay for rendering
+      await delay(500);
 
-        console.log(`✅ ${type} PDF generated successfully! Size: ${Math.round(pdfBuffer.length / 1024)}KB`);
-        return Buffer.from(pdfBuffer);
-      } finally {
-        await page.close();
-      }
+      const pdfBuffer = await page.pdf({
+        format: 'A4',
+        printBackground: true,
+        margin: {
+          top: '0px',
+          bottom: '0px',
+          left: '0px',
+          right: '0px',
+        },
+        displayHeaderFooter: false,
+      });
+
+      console.log(`✅ ${type} PDF generated successfully! Size: ${Math.round(pdfBuffer.length / 1024)}KB`);
+      return Buffer.from(pdfBuffer);
     } catch (error) {
       console.error(`❌ Failed to generate ${type} PDF:`, error);
       throw new AppError(500, `Failed to generate ${type}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      if (page) {
+        await page.close().catch(console.warn);
+      }
     }
   });
 }
 
 export async function closeBrowser() {
   if (browserInstance) {
-    await browserInstance.close();
+    await browserInstance.close().catch(console.warn);
     browserInstance = null;
+  }
+}
+
+// Optional: Health check function
+export async function checkBrowserHealth(): Promise<boolean> {
+  try {
+    const browser = await getBrowser();
+    return browser.connected;
+  } catch {
+    return false;
   }
 }
 

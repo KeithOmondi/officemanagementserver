@@ -2,7 +2,7 @@
 
 import { pool } from '../../config/db';
 import { AppError } from '../../utils/response';
-import crypto from 'crypto';
+//import crypto from 'crypto';
 import { uploadToCloudinary, deleteFromCloudinary } from '../../config/cloudinary';
 import type {
   Document,
@@ -16,8 +16,6 @@ import type {
   FollowUpComment,
   FollowUpWithComments,
   FollowUpPaginationResponse,
-  //FollowUpReminder,
-  DocumentRequestDetails,
   RoutePriority,
   DocumentStatus,
   DocumentType,
@@ -50,6 +48,8 @@ import type {
   UpdateBringUpInput,
   CompleteBringUpInput,
   BringUpFilters,
+  SendFollowUpInput,
+  FileAwayBringUpInput,
 } from './documents.validator';
 import axios from 'axios';
 import { generateOTP } from '../../utils/SendOTP';
@@ -57,7 +57,7 @@ import { sendMail } from '../../utils/sendMail';
 import { NotificationsService } from '../notifications/notifications.service';
 import { embedSignatureIntoHTML, embedSignatureIntoPDF } from '../../utils/embedSignature';
 import { generateDocumentFromTemplate } from '../../utils/documentGenerator';
-import { CertificateData, getCertificateHTML } from '../../features/template/CertificateTemplate';
+import { CertificateData } from '../../features/template/CertificateTemplate';
 
 // ─── SELECT fragments ──────────────────────────────────────────────────────────
 
@@ -81,7 +81,7 @@ const DOC_SELECT = `
   d.signature_position_y,
   d.signature_position_width,
   d.signature_position_height,
-  d.request_details,
+  d.metadata,
   -- Bring Up fields
   d.bring_up_date,
   d.bring_up_set_by,
@@ -213,6 +213,8 @@ const ALLOWED_FOLLOW_UP_SORT = new Set(['created_at', 'due_date', 'priority', 's
 
 // ─── Helper to map DB row to Document ─────────────────────────────────────────
 
+// Update the mapRowToDocument function to handle metadata safely
+
 function mapRowToDocument(row: any): Document {
   const bringUpStatus = row.bring_up_date 
     ? row.bring_up_completed_at 
@@ -221,6 +223,23 @@ function mapRowToDocument(row: any): Document {
         ? 'overdue' 
         : 'pending'
     : null;
+
+  // ─── SAFELY PARSE METADATA ────────────────────────────────────────────────
+  let metadata = null;
+  if (row.metadata) {
+    try {
+      // If it's already an object, use it directly
+      if (typeof row.metadata === 'object') {
+        metadata = row.metadata;
+      } else {
+        // Otherwise try to parse it as JSON
+        metadata = JSON.parse(row.metadata);
+      }
+    } catch (e) {
+      console.warn(`Failed to parse metadata for document ${row.id}:`, row.metadata);
+      metadata = null;
+    }
+  }
 
   return {
     id: row.id,
@@ -288,7 +307,7 @@ function mapRowToDocument(row: any): Document {
     signature_position_y: row.signature_position_y ?? null,
     signature_position_width: row.signature_position_width ?? null,
     signature_position_height: row.signature_position_height ?? null,
-    request_details: row.request_details as DocumentRequestDetails | null,
+    metadata: metadata, // Use the safely parsed metadata
     follow_ups: [],
     // Bring Up fields
     bring_up_date: row.bring_up_date || null,
@@ -356,8 +375,8 @@ export class DocumentService {
         `INSERT INTO documents
            (title, type, category, reference_no, ref_type, ref_other_description,
             file_url, file_public_id, file_size_bytes, mime_type, original_name,
-            assigned_to, department_id, created_by, status, is_draft, priority, request_details)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+            assigned_to, department_id, created_by, status, is_draft, priority)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
          RETURNING id`,
         [
           input.title.trim(), input.type, input.category ?? null,
@@ -366,7 +385,6 @@ export class DocumentService {
           uploaded.secure_url, uploaded.public_id, file.size, file.mimetype, file.originalname,
           input.assigned_to ?? null, input.department_id ?? null,
           createdBy, status, input.is_draft, input.priority || 'normal',
-          input.request_details || null,
         ]
       );
 
@@ -715,6 +733,12 @@ export class DocumentService {
     if (input.signature_position_y !== undefined) { updates.push(`signature_position_y = $${p++}`); values.push(input.signature_position_y); }
     if (input.signature_position_width !== undefined) { updates.push(`signature_position_width = $${p++}`); values.push(input.signature_position_width); }
     if (input.signature_position_height !== undefined) { updates.push(`signature_position_height = $${p++}`); values.push(input.signature_position_height); }
+    
+    // Metadata updates (for fromFirst and other settings)
+    if (input.metadata !== undefined) {
+      updates.push(`metadata = $${p++}`);
+      values.push(JSON.stringify(input.metadata));
+    }
 
     if (!updates.length) return existing;
 
@@ -1725,11 +1749,12 @@ export class DocumentService {
     enclosures?: string;
     signatureName: string;
     signatureTitle: string;
+    metadata?: any;
   }): Promise<Document> {
     const {
       title, type, ref, body, pdfBuffer, createdBy, departmentId,
       toRecipient, fromSender, documentDate, subject, cc, enclosures,
-      signatureName, signatureTitle,
+      signatureName, signatureTitle, metadata = {},
     } = params;
 
     const multerFile: Express.Multer.File = {
@@ -1752,14 +1777,15 @@ export class DocumentService {
          (title, type, category, reference_no, body, file_url, file_public_id,
           file_size_bytes, mime_type, original_name, created_by, department_id, status, is_draft,
           to_recipient, from_sender, document_date, subject, cc, enclosures, 
-          signature_name, signature_title)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+          signature_name, signature_title, metadata)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
        RETURNING id`,
       [
         title, type, null, ref, body, uploaded.secure_url, uploaded.public_id, pdfBuffer.length,
         'application/pdf', multerFile.originalname, createdBy, departmentId || null, 'draft', true,
         toRecipient, fromSender, documentDate, subject, cc || null, enclosures || null,
         signatureName, signatureTitle,
+        JSON.stringify(metadata),
       ]
     );
 
@@ -1786,6 +1812,7 @@ export class DocumentService {
       body: input.body,
       signatureName,
       signatureTitle,
+      fromFirst: input.fromFirst ?? false,
       logoUrl: process.env.MEMO_LOGO_URL || undefined,
       footerEmblemUrl: process.env.MEMO_FOOTER_EMBLEM_URL || undefined,
     });
@@ -1804,6 +1831,7 @@ export class DocumentService {
       subject: input.title,
       signatureName,
       signatureTitle,
+      metadata: { fromFirst: input.fromFirst ?? false },
     });
   }
 
@@ -1851,10 +1879,7 @@ export class DocumentService {
     });
   }
 
-  // ─── ADDED: generateCertificate method ──────────────────────────────────────
-
   static async generateCertificate(input: ComposeCertificateInput, createdBy: string): Promise<Document> {
-    // Get the user's display name for the "from" field
     const fromDepartment = input.from || (await this.getUserDisplayName(createdBy));
     const signatureName = input.signatureName || fromDepartment;
     const signatureTitle = input.signatureTitle || 'Registrar, High Court';
@@ -1864,12 +1889,9 @@ export class DocumentService {
       year: 'numeric', month: 'long', day: 'numeric',
     });
 
-    // Build CertificateData for the template
-    // IMPORTANT: DO NOT pass ref and date - certificates don't display them
     const certData: CertificateData = {
       title: input.title,
       ruleReference: input.ruleReference,
-      // ref and date intentionally omitted - certificates don't show them
       body: input.body,
       datedLine: input.datedLine,
       signatoryLines: input.signatoryLines,
@@ -1881,10 +1903,8 @@ export class DocumentService {
       footerTagline: input.footerTagline || 'Justice Be Our Shield and Defender',
     };
 
-    // Generate PDF from the certificate data using the document generator
     const pdfBuffer = await generateDocumentFromTemplate('certificate', certData);
 
-    // Save the document - use the fields from input or defaults
     return await this.saveDocument({
       title: input.title,
       type: 'certificate',
@@ -1902,8 +1922,6 @@ export class DocumentService {
     });
   }
 
-  // ─── UPDATED: regeneratePdf with certificate support ─────────────────────
-
   static async regeneratePdf(documentId: string): Promise<Document> {
     const doc = await this.findById(documentId);
     if (!doc) throw new AppError(404, 'Document not found');
@@ -1920,6 +1938,9 @@ export class DocumentService {
       ? new Date(doc.document_date).toLocaleDateString('en-KE', { year: 'numeric', month: 'long', day: 'numeric' })
       : new Date().toLocaleDateString('en-KE', { year: 'numeric', month: 'long', day: 'numeric' });
 
+    // Get fromFirst from metadata
+    const fromFirst = doc.metadata?.fromFirst ?? false;
+
     let pdfBuffer: Buffer;
     
     if (doc.type === 'memo') {
@@ -1932,6 +1953,7 @@ export class DocumentService {
         body: doc.body || '',
         signatureName: doc.signature_name || '',
         signatureTitle: doc.signature_title || 'Registrar, High Court',
+        fromFirst,
         logoUrl: process.env.MEMO_LOGO_URL || undefined,
         footerEmblemUrl: process.env.MEMO_FOOTER_EMBLEM_URL || undefined,
       });
@@ -1951,13 +1973,9 @@ export class DocumentService {
         footerEmblemUrl: process.env.LETTER_FOOTER_EMBLEM_URL || undefined,
       });
     } else {
-      // ─── ADDED: certificate regeneration ──────────────────────────────────
-      // Build CertificateData that matches the template's CertificateData interface
-      // IMPORTANT: DO NOT pass ref and date - certificates don't display them
       const certData: CertificateData = {
         title: doc.title || 'Certificate',
         ruleReference: doc.ref_other_description || undefined,
-        // ref and date intentionally omitted - certificates don't show them
         body: doc.body || '',
         datedLine: doc.document_date 
           ? `Dated, Signed and Sealed this ${new Date(doc.document_date).toLocaleDateString('en-KE', { year: 'numeric', month: 'long', day: 'numeric' })}.`
@@ -1973,7 +1991,6 @@ export class DocumentService {
         footerTagline: 'Justice Be Our Shield and Defender',
       };
       
-      // Pass the CertificateData directly to generateDocumentFromTemplate
       pdfBuffer = await generateDocumentFromTemplate('certificate', certData);
     }
 
@@ -2074,7 +2091,7 @@ export class DocumentService {
   }
 
   // ════════════════════════════════════════════════════════════════════════════
-  //  Update Mark (instructions only - bring_up_date removed)
+  //  Update Mark (instructions only)
   // ════════════════════════════════════════════════════════════════════════════
 
   static async updateMark(markId: string, input: UpdateMarkInput): Promise<DocumentMark> {
@@ -2122,13 +2139,10 @@ export class DocumentService {
       throw new AppError(404, 'Document not found');
     }
 
-    // If document already has a bring up date and it's not completed
     if (doc.bring_up_date && !doc.bring_up_completed_at) {
-      // Auto complete the previous bring up (it was not completed on time)
       await this.completePreviousBringUp(documentId, userId);
     }
 
-    // Get user name for set_by_name
     const { rows: userRows } = await pool.query(
       `SELECT full_name FROM users WHERE id = $1 AND is_active = true`,
       [userId]
@@ -2139,7 +2153,6 @@ export class DocumentService {
     try {
       await client.query('BEGIN');
 
-      // Update document with bring up fields
       await client.query(
         `UPDATE documents
          SET bring_up_date = $1,
@@ -2161,7 +2174,6 @@ export class DocumentService {
         ]
       );
 
-      // Create history entry
       await client.query(
         `INSERT INTO bring_up_history
            (document_id, bring_up_date, set_by, set_by_name, set_at, notes, is_active)
@@ -2175,7 +2187,6 @@ export class DocumentService {
         ]
       );
 
-      // Update document status if needed
       if (doc.status === 'completed' || doc.status === 'filed') {
         await client.query(
           `UPDATE documents SET status = 'pending_review' WHERE id = $1`,
@@ -2194,7 +2205,6 @@ export class DocumentService {
 
       await client.query('COMMIT');
 
-      // Notify assigned user if specified
       if (input.assign_to) {
         await this.createNotification(
           input.assign_to,
@@ -2232,7 +2242,6 @@ export class DocumentService {
       throw new AppError(400, 'No bring up date set for this document');
     }
 
-    // Get user name
     const { rows: userRows } = await pool.query(
       `SELECT full_name FROM users WHERE id = $1 AND is_active = true`,
       [userId]
@@ -2243,13 +2252,11 @@ export class DocumentService {
     try {
       await client.query('BEGIN');
 
-      // Deactivate current history entry
       await client.query(
         `UPDATE bring_up_history SET is_active = false WHERE document_id = $1 AND is_active = true`,
         [documentId]
       );
 
-      // Update document with new bring up date
       await client.query(
         `UPDATE documents
          SET bring_up_date = $1,
@@ -2271,7 +2278,6 @@ export class DocumentService {
         ]
       );
 
-      // Create new history entry
       await client.query(
         `INSERT INTO bring_up_history
            (document_id, bring_up_date, set_by, set_by_name, set_at, notes, is_active)
@@ -2296,7 +2302,6 @@ export class DocumentService {
 
       await client.query('COMMIT');
 
-      // Notify assigned user
       if (doc.assigned_to) {
         await this.createNotification(
           doc.assigned_to,
@@ -2338,7 +2343,6 @@ export class DocumentService {
       throw new AppError(409, 'Bring up already completed');
     }
 
-    // Get user name
     const { rows: userRows } = await pool.query(
       `SELECT full_name FROM users WHERE id = $1 AND is_active = true`,
       [userId]
@@ -2349,7 +2353,6 @@ export class DocumentService {
     try {
       await client.query('BEGIN');
 
-      // Update document
       await client.query(
         `UPDATE documents
          SET bring_up_completed_at = NOW(),
@@ -2361,7 +2364,6 @@ export class DocumentService {
         [userId, userName, notes, documentId]
       );
 
-      // Update history entry
       await client.query(
         `UPDATE bring_up_history
          SET completed_at = NOW(),
@@ -2384,7 +2386,6 @@ export class DocumentService {
 
       await client.query('COMMIT');
 
-      // Notify creator
       if (doc.created_by) {
         await this.createNotification(
           doc.created_by,
@@ -2406,10 +2407,163 @@ export class DocumentService {
     }
   }
 
+  // ─── NEW: File Away Bring Up ──────────────────────────────────────────────────
+
+  static async fileAwayBringUp(
+    documentId: string,
+    userId: string,
+    input: {
+      notes?: string;
+      completion_notes?: string;
+      return_to_helpdesk?: boolean;
+    }
+  ): Promise<Document> {
+    console.log(`[BringUp] Filing away bring up for document ${documentId}`);
+
+    const doc = await this.findById(documentId);
+    if (!doc) {
+      throw new AppError(404, 'Document not found');
+    }
+
+    if (!doc.bring_up_date) {
+      throw new AppError(400, 'No bring up date set for this document');
+    }
+
+    if (doc.bring_up_completed_at) {
+      throw new AppError(409, 'Bring up already completed');
+    }
+
+    const { rows: userRows } = await pool.query(
+      `SELECT full_name FROM users WHERE id = $1 AND is_active = true`,
+      [userId]
+    );
+    const userName = userRows[0]?.full_name || userId;
+
+    let returnToUserId: string | null = null;
+    let returnToUserName: string | null = null;
+
+    if (doc.active_mark) {
+      returnToUserId = doc.active_mark.marked_by;
+      const { rows: markerRows } = await pool.query(
+        `SELECT full_name FROM users WHERE id = $1 AND is_active = true`,
+        [returnToUserId]
+      );
+      returnToUserName = markerRows[0]?.full_name || null;
+    }
+
+    if (!returnToUserId) {
+      returnToUserId = doc.created_by;
+      const { rows: creatorRows } = await pool.query(
+        `SELECT full_name FROM users WHERE id = $1 AND is_active = true`,
+        [returnToUserId]
+      );
+      returnToUserName = creatorRows[0]?.full_name || null;
+    }
+
+    const shouldReturn = input.return_to_helpdesk !== false;
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      await client.query(
+        `UPDATE documents
+         SET bring_up_completed_at = NOW(),
+             bring_up_completed_by = $1,
+             bring_up_completed_by_name = $2,
+             bring_up_notes = COALESCE($3, bring_up_notes),
+             updated_at = NOW()
+         WHERE id = $4`,
+        [userId, userName, input.completion_notes || input.notes, documentId]
+      );
+
+      await client.query(
+        `UPDATE bring_up_history
+         SET completed_at = NOW(),
+             completed_by = $1,
+             completed_by_name = $2,
+             completion_notes = $3,
+             is_active = false
+         WHERE document_id = $4 AND is_active = true`,
+        [userId, userName, input.completion_notes || input.notes || 'Filed away', documentId]
+      );
+
+      if (shouldReturn && returnToUserId) {
+        if (doc.active_mark) {
+          await client.query(
+            `UPDATE document_marks 
+             SET is_active = false 
+             WHERE document_id = $1 AND is_active = true`,
+            [documentId]
+          );
+        }
+
+        await client.query(
+          `UPDATE documents
+           SET status = 'pending_review',
+               assigned_to = $1,
+               department_id = NULL,
+               updated_at = NOW()
+           WHERE id = $2`,
+          [returnToUserId, documentId]
+        );
+
+        await this.logFlow(
+          client,
+          documentId,
+          'bring_up_filed_away',
+          userId,
+          returnToUserId,
+          `Bring up filed away and returned to ${returnToUserName || 'helpdesk'}.${input.completion_notes ? ` Notes: ${input.completion_notes}` : ''}`
+        );
+
+        await this.createNotification(
+          returnToUserId,
+          `📁 Document Returned: ${doc.title}`,
+          `Document "${doc.title}" has been filed away from bring up and returned to you.\n\n` +
+          `Filed away by: ${userName}\n` +
+          `Notes: ${input.completion_notes || input.notes || 'None'}`,
+          'bring_up',
+          documentId
+        );
+      } else {
+        await this.logFlow(
+          client,
+          documentId,
+          'bring_up_filed_away',
+          userId,
+          null,
+          `Bring up filed away${input.completion_notes ? ` - ${input.completion_notes}` : ''}`
+        );
+      }
+
+      await client.query('COMMIT');
+
+      if (doc.created_by && doc.created_by !== returnToUserId) {
+        await this.createNotification(
+          doc.created_by,
+          `✅ Bring Up Filed Away: ${doc.title}`,
+          `The bring up for "${doc.title}" has been filed away by ${userName}.${input.completion_notes ? `\n\nNotes: ${input.completion_notes}` : ''}`,
+          'bring_up',
+          documentId
+        );
+      }
+
+      console.log(`[BringUp] Bring up filed away successfully for document ${documentId}`);
+      return (await this.findById(documentId))!;
+
+    } catch (err) {
+      await client.query('ROLLBACK');
+      console.error('[BringUp] Error filing away bring up:', err);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
   private static async completePreviousBringUp(documentId: string, userId: string): Promise<void> {
     console.log(`[BringUp] Auto-completing previous bring up for document ${documentId}`);
 
-    // Get user name
     const { rows: userRows } = await pool.query(
       `SELECT full_name FROM users WHERE id = $1 AND is_active = true`,
       [userId]
@@ -2467,7 +2621,6 @@ export class DocumentService {
 
     const now = new Date().toISOString();
 
-    // Only apply status filter if a specific status is provided (not 'all' or undefined)
     if (status && status !== 'all') {
       if (status === 'pending') {
         conditions.push(`d.bring_up_completed_at IS NULL AND d.bring_up_date >= $${p}`);
@@ -2540,7 +2693,6 @@ export class DocumentService {
       ),
     ]);
 
-    // ─── Fetch bring up history for all documents ────────────────────────────
     const documentIds = dataResult.rows.map(row => row.id);
     let bringUpHistoryMap: Record<string, BringUpHistoryEntry[]> = {};
 
@@ -2576,75 +2728,88 @@ export class DocumentService {
     };
   }
 
-  static async getBringUpSummary(userId?: string): Promise<BringUpSummary> {
-    const now = new Date().toISOString();
-    const today = new Date().toISOString().split('T')[0];
-    const nowDate = new Date();
-    const startOfWeek = new Date(nowDate);
-    startOfWeek.setDate(nowDate.getDate() - nowDate.getDay());
-    const endOfWeek = new Date(nowDate);
-    endOfWeek.setDate(nowDate.getDate() + (6 - nowDate.getDay()));
-    const startOfWeekStr = startOfWeek.toISOString().split('T')[0];
-    const endOfWeekStr = endOfWeek.toISOString().split('T')[0];
+ static async getBringUpSummary(userId?: string): Promise<BringUpSummary> {
+  const now = new Date().toISOString();
+  const today = new Date().toISOString().split('T')[0];
+  const nowDate = new Date();
+  const startOfWeek = new Date(nowDate);
+  startOfWeek.setDate(nowDate.getDate() - nowDate.getDay());
+  const endOfWeek = new Date(nowDate);
+  endOfWeek.setDate(nowDate.getDate() + (6 - nowDate.getDay()));
+  const startOfWeekStr = startOfWeek.toISOString().split('T')[0];
+  const endOfWeekStr = endOfWeek.toISOString().split('T')[0];
 
-    const conditions: string[] = ['d.is_active = true', 'd.bring_up_date IS NOT NULL'];
-    const values: unknown[] = [];
-    let p = 1;
+  const conditions: string[] = ['d.is_active = true', 'd.bring_up_date IS NOT NULL'];
+  const values: unknown[] = [];
+  let p = 1;
 
-    if (userId) {
-      conditions.push(`(d.assigned_to = $${p} OR d.created_by = $${p + 1})`);
-      values.push(userId, userId);
-      p += 2;
-    }
-
-    const where = `WHERE ${conditions.join(' AND ')}`;
-
-    const { rows } = await pool.query(
-      `SELECT 
-         COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NULL AND d.bring_up_date >= $1) AS total_pending,
-         COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NULL AND d.bring_up_date < $1) AS total_overdue,
-         COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NOT NULL) AS total_completed,
-         COUNT(*) FILTER (WHERE DATE(d.bring_up_date) = $2) AS due_today,
-         COUNT(*) FILTER (WHERE DATE(d.bring_up_date) BETWEEN $3 AND $4) AS due_this_week,
-         COUNT(*) FILTER (WHERE d.assigned_to IS NOT NULL AND d.bring_up_completed_at IS NULL AND d.bring_up_date >= $1) AS my_pending,
-         COUNT(*) FILTER (WHERE d.assigned_to IS NOT NULL AND d.bring_up_completed_at IS NULL AND d.bring_up_date < $1) AS my_overdue
-       FROM documents d
-       ${where}`,
-      [now, today, startOfWeekStr, endOfWeekStr, ...values]
-    );
-
-    // Get department breakdown
-    const { rows: deptRows } = await pool.query(
-      `SELECT 
-         d.department_id,
-         dep.name AS department_name,
-         COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NULL AND d.bring_up_date >= $1) AS pending,
-         COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NULL AND d.bring_up_date < $1) AS overdue
-       FROM documents d
-       LEFT JOIN departments dep ON dep.id = d.department_id
-       WHERE d.is_active = true AND d.bring_up_date IS NOT NULL
-       GROUP BY d.department_id, dep.name
-       ORDER BY pending DESC`,
-      [now]
-    );
-
-    const row = rows[0] || {};
-    return {
-      total_pending: parseInt(row.total_pending || '0', 10),
-      total_overdue: parseInt(row.total_overdue || '0', 10),
-      total_completed: parseInt(row.total_completed || '0', 10),
-      due_today: parseInt(row.due_today || '0', 10),
-      due_this_week: parseInt(row.due_this_week || '0', 10),
-      by_department: deptRows.map(r => ({
-        department_id: r.department_id || 'unassigned',
-        department_name: r.department_name || 'Unassigned',
-        pending: parseInt(r.pending || '0', 10),
-        overdue: parseInt(r.overdue || '0', 10),
-      })),
-      my_pending: parseInt(row.my_pending || '0', 10),
-      my_overdue: parseInt(row.my_overdue || '0', 10),
-    };
+  if (userId) {
+    conditions.push(`(d.assigned_to = $${p} OR d.created_by = $${p + 1})`);
+    values.push(userId, userId);
+    p += 2;
   }
+
+  const where = `WHERE ${conditions.join(' AND ')}`;
+
+  const { rows } = await pool.query(
+    `SELECT 
+       COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NULL AND d.bring_up_date >= $1) AS total_pending,
+       COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NULL AND d.bring_up_date < $1) AS total_overdue,
+       COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NOT NULL) AS total_completed,
+       COUNT(*) FILTER (WHERE DATE(d.bring_up_date) = $2) AS due_today,
+       COUNT(*) FILTER (WHERE DATE(d.bring_up_date) BETWEEN $3 AND $4) AS due_this_week,
+       COUNT(*) FILTER (WHERE d.assigned_to IS NOT NULL AND d.bring_up_completed_at IS NULL AND d.bring_up_date >= $1) AS my_pending,
+       COUNT(*) FILTER (WHERE d.assigned_to IS NOT NULL AND d.bring_up_completed_at IS NULL AND d.bring_up_date < $1) AS my_overdue
+     FROM documents d
+     ${where}`,
+    [now, today, startOfWeekStr, endOfWeekStr, ...values]
+  );
+
+  const { rows: deptRows } = await pool.query(
+    `SELECT 
+       d.department_id,
+       dep.name AS department_name,
+       COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NULL AND d.bring_up_date >= $1) AS pending,
+       COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NULL AND d.bring_up_date < $1) AS overdue
+     FROM documents d
+     LEFT JOIN departments dep ON dep.id = d.department_id
+     WHERE d.is_active = true AND d.bring_up_date IS NOT NULL
+     GROUP BY d.department_id, dep.name
+     ORDER BY pending DESC`,
+    [now]
+  );
+
+  // ─── NEW: Get filed away count ─────────────────────────────────────────────
+  const { rows: filedAwayRows } = await pool.query(
+    `SELECT COUNT(*) AS total_filed_away
+     FROM documents d
+     WHERE d.is_active = true 
+       AND d.bring_up_date IS NOT NULL 
+       AND d.bring_up_completed_at IS NOT NULL
+       AND d.bring_up_completed_by_name = 'Filed Away'`,
+    []
+  );
+
+  const row = rows[0] || {};
+  const filedAwayRow = filedAwayRows[0] || {};
+
+  return {
+    total_pending: parseInt(row.total_pending || '0', 10),
+    total_overdue: parseInt(row.total_overdue || '0', 10),
+    total_completed: parseInt(row.total_completed || '0', 10),
+    total_filed_away: parseInt(filedAwayRow.total_filed_away || '0', 10),
+    due_today: parseInt(row.due_today || '0', 10),
+    due_this_week: parseInt(row.due_this_week || '0', 10),
+    by_department: deptRows.map(r => ({
+      department_id: r.department_id || 'unassigned',
+      department_name: r.department_name || 'Unassigned',
+      pending: parseInt(r.pending || '0', 10),
+      overdue: parseInt(r.overdue || '0', 10),
+    })),
+    my_pending: parseInt(row.my_pending || '0', 10),
+    my_overdue: parseInt(row.my_overdue || '0', 10),
+  };
+}
 
   static async getBringUpHistory(documentId: string): Promise<BringUpHistoryEntry[]> {
     const { rows } = await pool.query(
@@ -2675,8 +2840,7 @@ export class DocumentService {
        FROM documents d
        WHERE d.is_active = true
          AND d.bring_up_date IS NOT NULL
-         AND d.bring_up_completed_at IS NULL
-         AND DATE(d.bring_up_date) = $1`,
+         AND d.bring_up_completed_at IS NULL         AND DATE(d.bring_up_date) = $1`,
       [today]
     );
 
@@ -2766,6 +2930,81 @@ export class DocumentService {
   // ════════════════════════════════════════════════════════════════════════════
   //  FOLLOW-UP OPERATIONS
   // ════════════════════════════════════════════════════════════════════════════
+
+  static async sendFollowUp(
+    input: {
+      document_id: string;
+      mark_id?: string;
+      notes: string;
+      assigned_to: string;
+    },
+    createdBy: string
+  ): Promise<FollowUp> {
+    console.log('[FollowUp] Sending follow-up (simplified)');
+
+    const doc = await this.findById(input.document_id);
+    if (!doc) {
+      throw new AppError(404, 'Document not found');
+    }
+
+    const { rows: userRows } = await pool.query(
+      `SELECT id, full_name FROM users WHERE id = $1 AND is_active = true`,
+      [input.assigned_to]
+    );
+    if (!userRows.length) {
+      throw new AppError(400, 'Assigned user not found or inactive');
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const { rows } = await client.query(
+        `INSERT INTO follow_ups
+           (document_id, mark_id, notes, assigned_to, created_by, due_date, priority, status)
+         VALUES ($1, $2, $3, $4, $5, NULL, 'normal', 'pending')
+         RETURNING id`,
+        [
+          input.document_id,
+          input.mark_id || null,
+          input.notes.trim(),
+          input.assigned_to,
+          createdBy,
+        ]
+      );
+
+      const followUpId = rows[0].id;
+
+      await this.logFlow(
+        client,
+        input.document_id,
+        'follow_up_created',
+        createdBy,
+        input.assigned_to,
+        `Follow-up sent: ${input.notes}`
+      );
+
+      await client.query('COMMIT');
+
+      await this.createFollowUpNotification(
+        input.assigned_to,
+        createdBy,
+        input.document_id,
+        followUpId,
+        input.notes,
+        'created'
+      );
+
+      console.log(`[FollowUp] Follow-up sent successfully with ID: ${followUpId}`);
+      return (await this.getFollowUpById(followUpId))!;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      console.error('[FollowUp] Error sending follow-up:', err);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
 
   static async createFollowUp(
     input: CreateFollowUpInput,
@@ -3618,100 +3857,83 @@ export class DocumentService {
     };
   }
 
-  // ── Update Document File (Replace file) ──────────────────────────────────────
+  static async updateDocumentFile(
+    documentId: string,
+    file: Express.Multer.File,
+    userId: string,
+    status?: string,
+    comments?: string
+  ): Promise<Document> {
+    const doc = await this.findById(documentId);
+    if (!doc) {
+      throw new AppError(404, 'Document not found');
+    }
 
-// ── Update Document File (Replace file) ──────────────────────────────────────
+    const uploaded = await uploadToCloudinary(file, 'registrar/documents');
 
-static async updateDocumentFile(
-  documentId: string,
-  file: Express.Multer.File,
-  userId: string,
-  status?: string,
-  comments?: string
-): Promise<Document> {
-  // Get the document first to check if it exists
-  const doc = await this.findById(documentId);
-  if (!doc) {
-    throw new AppError(404, 'Document not found');
-  }
+    const updates: string[] = [];
+    const values: unknown[] = [];
+    let p = 1;
 
-  // Upload the new file to cloud storage
-  const uploaded = await uploadToCloudinary(file, 'registrar/documents');
+    updates.push(`file_url = $${p++}`);
+    values.push(uploaded.secure_url);
+    
+    updates.push(`file_public_id = $${p++}`);
+    values.push(uploaded.public_id);
+    
+    updates.push(`file_size_bytes = $${p++}`);
+    values.push(file.size);
+    
+    updates.push(`mime_type = $${p++}`);
+    values.push(file.mimetype);
+    
+    updates.push(`original_name = $${p++}`);
+    values.push(file.originalname);
 
-  // Build the update data
-  const updates: string[] = [];
-  const values: unknown[] = [];
-  let p = 1;
+    if (status) {
+      updates.push(`status = $${p++}`);
+      values.push(status);
+    }
 
-  // File fields
-  updates.push(`file_url = $${p++}`);
-  values.push(uploaded.secure_url);
-  
-  updates.push(`file_public_id = $${p++}`);
-  values.push(uploaded.public_id);
-  
-  updates.push(`file_size_bytes = $${p++}`);
-  values.push(file.size);
-  
-  updates.push(`mime_type = $${p++}`);
-  values.push(file.mimetype);
-  
-  updates.push(`original_name = $${p++}`);
-  values.push(file.originalname);
+    if (status === 'released') {
+      updates.push(`is_signed = $${p++}`);
+      values.push(true);
+      updates.push(`signed_by = $${p++}`);
+      values.push(userId);
+      updates.push(`signed_at = $${p++}`);
+      values.push(new Date());
+    }
 
-  // Status update
-  if (status) {
-    updates.push(`status = $${p++}`);
-    values.push(status);
-  }
+    updates.push(`updated_at = NOW()`);
+    values.push(documentId);
 
-  // If status is 'released', also mark as signed
-  if (status === 'released') {
-    updates.push(`is_signed = $${p++}`);
-    values.push(true);
-    updates.push(`signed_by = $${p++}`);
-    values.push(userId);
-    updates.push(`signed_at = $${p++}`);
-    values.push(new Date());
-  }
-
-  // Always update timestamp
-  updates.push(`updated_at = NOW()`);
-
-  // Add document ID as the last parameter
-  values.push(documentId);
-
-  // Execute the update
-  await pool.query(
-    `UPDATE documents SET ${updates.join(', ')} WHERE id = $${p}`,
-    values
-  );
-
-  // Add to flow history
-  const client = await pool.connect();
-  try {
-    await this.logFlow(
-      client,
-      documentId,
-      'updated',
-      userId,
-      null,
-      comments || `File updated. Status: ${status || 'unchanged'}`
+    await pool.query(
+      `UPDATE documents SET ${updates.join(', ')} WHERE id = $${p}`,
+      values
     );
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
+
+    const client = await pool.connect();
+    try {
+      await this.logFlow(
+        client,
+        documentId,
+        'updated',
+        userId,
+        null,
+        comments || `File updated. Status: ${status || 'unchanged'}`
+      );
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    if (doc.file_public_id) {
+      await deleteFromCloudinary(doc.file_public_id).catch(console.error);
+    }
+
+    return (await this.findById(documentId))!;
   }
-
-  // Delete old file from cloudinary if it exists
-  if (doc.file_public_id) {
-    await deleteFromCloudinary(doc.file_public_id).catch(console.error);
-  }
-
-  return (await this.findById(documentId))!;
-}
-
 }

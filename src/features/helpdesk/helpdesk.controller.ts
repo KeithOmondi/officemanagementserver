@@ -1,9 +1,5 @@
 // ============================================================
-// helpdesk.controller.ts
-// ============================================================
-// All request payloads are validated against Zod schemas.
-// The Firearm rule (firearm_type required only if officer_assigned is present)
-// is enforced by createGeneralRequestSchema and updateGeneralRequestSchema.
+// helpdesk.controller.ts - FIXED
 // ============================================================
 
 import { Request, Response } from 'express';
@@ -14,6 +10,7 @@ import {
     createUtilitySchema,
     addUtilityItemSchema,
     updateUtilityItemSchema,
+    updateUtilitySchema,
     utilityFiltersSchema,
     utilityItemIdSchema,
     createClubMembershipSchema,
@@ -41,6 +38,8 @@ import {
     dsaReportFiltersSchema,
     markDocumentViewedSchema,
     documentViewStatusSchema,
+    deleteUtilityItemSchema,
+    deleteUtilitySchema,
 } from './helpdesk.validator';
 import type { ReportModule, DSAReportFilters, RequestType, RemarkType, GeneralRequestCategory, UpdateStatusInput } from './helpdesk.types';
 import { generateDSAReportExcel } from './helpdesk-report.excel';
@@ -56,6 +55,14 @@ const safeRealtimeBroadcast = (req: Request, event: string, data: any) => {
     } else {
         console.warn(`⚠️ Realtime service not available, skipping broadcast for event: ${event}`);
     }
+};
+
+// ─── Helper: Extract string from params ──────────────────────────────────────
+
+const extractStringParam = (param: string | string[] | undefined): string => {
+    if (!param) return '';
+    if (Array.isArray(param)) return param[0] || '';
+    return param;
 };
 
 export const helpDeskController = {
@@ -80,7 +87,6 @@ export const helpDeskController = {
     /**
      * GET /api/helpdesk/general
      * Get all general requests with optional filters
-     * Supports filtering by: status, judge_name, request_type, remark_type, category
      */
     getAllGeneralRequests: asyncHandler(async (req: Request, res: Response) => {
         const result = helpDeskFiltersSchema.safeParse({ query: req.query });
@@ -112,12 +118,11 @@ export const helpDeskController = {
      * Get general requests by judge name
      */
     getGeneralRequestsByJudge: asyncHandler(async (req: Request, res: Response) => {
-        const { judgeName } = req.params;
-        const judgeNameStr = Array.isArray(judgeName) ? judgeName[0] : judgeName;
-        if (!judgeNameStr) {
+        const judgeName = extractStringParam(req.params.judgeName);
+        if (!judgeName) {
             throw new AppError(400, 'Judge name is required');
         }
-        const requests = await HelpDeskService.findGeneralRequestsByJudge(judgeNameStr);
+        const requests = await HelpDeskService.findGeneralRequestsByJudge(judgeName);
         return sendSuccess(res, requests, 'General requests retrieved by judge');
     }),
 
@@ -126,15 +131,14 @@ export const helpDeskController = {
      * Get general requests by request type
      */
     getGeneralRequestsByType: asyncHandler(async (req: Request, res: Response) => {
-        const { requestType } = req.params;
-        const requestTypeStr = Array.isArray(requestType) ? requestType[0] : requestType;
-        if (!requestTypeStr) {
+        const requestType = extractStringParam(req.params.requestType);
+        if (!requestType) {
             throw new AppError(400, 'Request type is required');
         }
-        if (!['Driver', 'Bodyguard', 'Firearm', 'Current Station', 'Force Number', 'Residence Security', 'Sentry'].includes(requestTypeStr)) {
+        if (!['Driver', 'Bodyguard', 'Firearm', 'Current Station', 'Force Number', 'Residence Security', 'Sentry'].includes(requestType)) {
             throw new AppError(400, 'Valid request type is required');
         }
-        const requests = await HelpDeskService.findGeneralRequestsByType(requestTypeStr as RequestType);
+        const requests = await HelpDeskService.findGeneralRequestsByType(requestType as RequestType);
         return sendSuccess(res, requests, 'General requests retrieved by type');
     }),
 
@@ -143,94 +147,34 @@ export const helpDeskController = {
      * Get general requests by remark type (Onboarding/Release)
      */
     getGeneralRequestsByRemarkType: asyncHandler(async (req: Request, res: Response) => {
-        const { remarkType } = req.params;
-        const remarkTypeStr = Array.isArray(remarkType) ? remarkType[0] : remarkType;
-        if (!remarkTypeStr) {
+        const remarkType = extractStringParam(req.params.remarkType);
+        if (!remarkType) {
             throw new AppError(400, 'Remark type is required');
         }
-        if (!['Onboarding', 'Release'].includes(remarkTypeStr)) {
+        if (!['Onboarding', 'Release'].includes(remarkType)) {
             throw new AppError(400, 'Valid remark type is required (Onboarding or Release)');
         }
-        const requests = await HelpDeskService.findGeneralRequestsByRemarkType(remarkTypeStr as RemarkType);
+        const requests = await HelpDeskService.findGeneralRequestsByRemarkType(remarkType as RemarkType);
         return sendSuccess(res, requests, 'General requests retrieved by remark type');
     }),
 
     /**
- * POST /api/helpdesk/general
- * Create a new general request (supports all 7 types: Driver, Bodyguard, Firearm, 
- * Current Station, Force Number, Residence Security, Sentry)
- * 
- * Firearm rule: firearm_type is optional unless officer_assigned is provided.
- */
-createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
-    console.log('\n[createGeneralRequest] ─── START ───────────────────────────────');
-    console.log('[createGeneralRequest] Incoming user:', {
-        id: req.user?.id,
-        role: (req.user as any)?.role,
-        full_name: (req.user as any)?.full_name,
-    });
-    console.log('[createGeneralRequest] Raw req.body:', JSON.stringify(req.body, null, 2));
-
-    const result = createGeneralRequestSchema.safeParse({ body: req.body });
-
-    if (!result.success) {
-        console.error('[createGeneralRequest] ❌ Validation FAILED');
-        console.error('[createGeneralRequest] Zod issues:', JSON.stringify(result.error.issues, null, 2));
-        throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
-    }
-
-    console.log('[createGeneralRequest] ✅ Validation passed');
-    console.log('[createGeneralRequest] Parsed body:', JSON.stringify(result.data.body, null, 2));
-    console.log('[createGeneralRequest] request_type:', result.data.body.request_type);
-
-    // Firearm-specific rule check (visibility into that special case)
-    if (result.data.body.request_type === 'Firearm') {
-        console.log('[createGeneralRequest] Firearm rule check:', {
-            firearm_type: (result.data.body as any).firearm_type,
-            officer_assigned: (result.data.body as any).officer_assigned,
-        });
-    }
-
-    console.time('[createGeneralRequest] service duration');
-    let request;
-    try {
-        request = await HelpDeskService.createGeneralRequest(result.data.body, req.user!.id);
-    } catch (err) {
-        console.error('[createGeneralRequest] ❌ Service threw:', err);
-        throw err;
-    } finally {
-        console.timeEnd('[createGeneralRequest] service duration');
-    }
-
-    console.log('[createGeneralRequest] ✅ Service returned request:', {
-        id: request?.id,
-        ref: (request as any)?.ref,
-        request_type: (request as any)?.request_type,
-        status: (request as any)?.status,
-    });
-    console.log('[createGeneralRequest] Full request payload:', JSON.stringify(request, null, 2));
-
-    // ── Emit real-time event ──────────────────────────────────────────────────
-    console.log('[createGeneralRequest] Broadcasting realtime event: general_request_created');
-    try {
+     * POST /api/helpdesk/general
+     * Create a new general request
+     */
+    createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
+        const result = createGeneralRequestSchema.safeParse({ body: req.body });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
+        }
+        const request = await HelpDeskService.createGeneralRequest(result.data.body, req.user!.id);
         safeRealtimeBroadcast(req, 'general_request_created', request);
-        console.log('[createGeneralRequest] ✅ Realtime broadcast sent');
-    } catch (broadcastErr) {
-        console.error('[createGeneralRequest] ⚠️ Realtime broadcast failed (non-fatal):', broadcastErr);
-    }
-
-    console.log('[createGeneralRequest] Sending 201 response');
-    console.log('[createGeneralRequest] ─── END ─────────────────────────────────────\n');
-
-    return sendSuccess(res, request, 'General request created', 201);
-}),
+        return sendSuccess(res, request, 'General request created', 201);
+    }),
 
     /**
      * PUT /api/helpdesk/general/:id
      * Update a general request
-     * 
-     * Firearm rule: if updating to Firearm type and setting officer_assigned, 
-     * firearm_type must be provided.
      */
     updateGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
         const paramsResult = idSchema.safeParse({ params: req.params });
@@ -245,10 +189,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             paramsResult.data.params.id,
             bodyResult.data.body
         );
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'general_request_updated', request);
-        
         return sendSuccess(res, request, 'General request updated');
     }),
 
@@ -285,7 +226,6 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             updateInput
         );
         
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'general_request_status_updated', {
             id: request.id,
             status: request.status,
@@ -305,10 +245,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deleteGeneralRequest(result.data.params.id);
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'general_request_deleted', { id: result.data.params.id });
-        
         return sendSuccess(res, null, 'General request deleted');
     }),
 
@@ -347,12 +284,11 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
     }),
 
     // ============================================================
-    // LEGACY SECURITY REQUESTS (Deprecated - kept for backward compatibility)
+    // LEGACY SECURITY REQUESTS (Deprecated)
     // ============================================================
 
     /**
      * @deprecated Use getAllGeneralRequests with request_type filter instead
-     * GET /api/helpdesk/security
      */
     getAllSecurityRequests: asyncHandler(async (req: Request, res: Response) => {
         const result = helpDeskFiltersSchema.safeParse({ query: req.query });
@@ -365,7 +301,6 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
 
     /**
      * @deprecated Use getGeneralRequestById instead
-     * GET /api/helpdesk/security/:id
      */
     getSecurityRequestById: asyncHandler(async (req: Request, res: Response) => {
         const result = idSchema.safeParse({ params: req.params });
@@ -381,24 +316,21 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
 
     /**
      * @deprecated Use getGeneralRequestsByJudge instead
-     * GET /api/helpdesk/security/judge/:judgeName
      */
     getSecurityRequestsByJudge: asyncHandler(async (req: Request, res: Response) => {
-        const { judgeName } = req.params;
-        const judgeNameStr = Array.isArray(judgeName) ? judgeName[0] : judgeName;
-        if (!judgeNameStr) {
+        const judgeName = extractStringParam(req.params.judgeName);
+        if (!judgeName) {
             throw new AppError(400, 'Judge name is required');
         }
-        const requests = await HelpDeskService.findSecurityRequestsByJudge(judgeNameStr);
+        const requests = await HelpDeskService.findSecurityRequestsByJudge(judgeName);
         return sendSuccess(res, requests, 'Security requests retrieved by judge');
     }),
 
     /**
      * @deprecated Use getGeneralRequestsByType instead
-     * GET /api/helpdesk/security/type/:requestType
      */
     getSecurityRequestsByType: asyncHandler(async (req: Request, res: Response) => {
-        const { requestType } = req.params;
+        const requestType = extractStringParam(req.params.requestType);
         if (!requestType) {
             throw new AppError(400, 'Request type is required');
         }
@@ -408,7 +340,6 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
 
     /**
      * @deprecated Use createGeneralRequest instead
-     * POST /api/helpdesk/security
      */
     createSecurityRequest: asyncHandler(async (req: Request, res: Response) => {
         const result = createSecurityRequestSchema.safeParse({ body: req.body });
@@ -416,16 +347,12 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
         const request = await HelpDeskService.createSecurityRequest(result.data.body, req.user!.id);
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'security_request_created', request);
-        
         return sendSuccess(res, request, 'Security request created', 201);
     }),
 
     /**
      * @deprecated Use updateGeneralRequest instead
-     * PUT /api/helpdesk/security/:id
      */
     updateSecurityRequest: asyncHandler(async (req: Request, res: Response) => {
         const paramsResult = idSchema.safeParse({ params: req.params });
@@ -440,16 +367,12 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             paramsResult.data.params.id,
             bodyResult.data.body
         );
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'security_request_updated', request);
-        
         return sendSuccess(res, request, 'Security request updated');
     }),
 
     /**
      * @deprecated Use updateGeneralRequestStatus instead
-     * PATCH /api/helpdesk/security/:id/status
      */
     updateSecurityRequestStatus: asyncHandler(async (req: Request, res: Response) => {
         const paramsResult = idSchema.safeParse({ params: req.params });
@@ -464,20 +387,16 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             paramsResult.data.params.id,
             { status, notes }
         );
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'security_request_status_updated', {
             id: request.id,
             status: request.status,
             updated_at: new Date().toISOString()
         });
-        
         return sendSuccess(res, request, 'Security request status updated');
     }),
 
     /**
      * @deprecated Use deleteGeneralRequest instead
-     * DELETE /api/helpdesk/security/:id
      */
     deleteSecurityRequest: asyncHandler(async (req: Request, res: Response) => {
         const result = idSchema.safeParse({ params: req.params });
@@ -485,24 +404,24 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deleteSecurityRequest(result.data.params.id);
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'security_request_deleted', { id: result.data.params.id });
-        
         return sendSuccess(res, null, 'Security request deleted');
     }),
 
     /**
      * @deprecated Use getGeneralRequestStats instead
-     * GET /api/helpdesk/security/stats
      */
     getSecurityRequestStats: asyncHandler(async (_req: Request, res: Response) => {
         const stats = await HelpDeskService.getSecurityRequestStats();
         return sendSuccess(res, stats, 'Security request statistics retrieved');
     }),
 
-    // ─── Judge Utilities (one judge → many utility items) ───────────────────
+    // ─── Judge Utilities ───────────────────────────────────────────────────
 
+    /**
+     * GET /api/helpdesk/utilities
+     * Get all judge utility records with optional filters
+     */
     getAllUtilities: asyncHandler(async (req: Request, res: Response) => {
         const result = utilityFiltersSchema.safeParse({ query: req.query });
         if (!result.success) {
@@ -512,6 +431,10 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
         return sendSuccess(res, utilities, 'Judge utilities retrieved');
     }),
 
+    /**
+     * GET /api/helpdesk/utilities/:id
+     * Get a specific judge utility record by ID
+     */
     getUtilityById: asyncHandler(async (req: Request, res: Response) => {
         const result = idSchema.safeParse({ params: req.params });
         if (!result.success) {
@@ -524,39 +447,55 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
         return sendSuccess(res, utility, 'Judge utility record retrieved');
     }),
 
+    /**
+     * GET /api/helpdesk/utilities/by-pj/:pjNumber
+     * Get a judge utility record by PJ number
+     */
+    getUtilityByPjNumber: asyncHandler(async (req: Request, res: Response) => {
+        const pjNumber = extractStringParam(req.params.pjNumber);
+        if (!pjNumber || pjNumber.trim() === '') {
+            throw new AppError(400, 'PJ number is required');
+        }
+        const utility = await HelpDeskService.findUtilityByPjNumber(pjNumber);
+        if (!utility) {
+            throw new AppError(404, `Judge utility record not found for PJ number: ${pjNumber}`);
+        }
+        return sendSuccess(res, utility, 'Judge utility record retrieved by PJ number');
+    }),
+
+    /**
+     * POST /api/helpdesk/utilities
+     * Create a new judge utility record - PJ number is REQUIRED
+     */
     createUtility: asyncHandler(async (req: Request, res: Response) => {
         const result = createUtilitySchema.safeParse({ body: req.body });
         if (!result.success) {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
         const utility = await HelpDeskService.createUtility(result.data.body, req.user!.id);
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'utility_created', utility);
-        
         return sendSuccess(res, utility, 'Judge utility record created', 201);
     }),
 
+    /**
+     * POST /api/helpdesk/utilities/items
+     * Add a utility item using PJ number from the body
+     * PJ number is REQUIRED
+     */
     addUtilityItem: asyncHandler(async (req: Request, res: Response) => {
-        const paramsResult = idSchema.safeParse({ params: req.params });
-        if (!paramsResult.success) {
-            throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+        const result = addUtilityItemSchema.safeParse({ body: req.body });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
-        const bodyResult = addUtilityItemSchema.safeParse({ body: req.body });
-        if (!bodyResult.success) {
-            throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
-        }
-        const utility = await HelpDeskService.addUtilityItem(
-            paramsResult.data.params.id,
-            bodyResult.data.body
-        );
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
+        const utility = await HelpDeskService.addUtilityItem(result.data.body);
         safeRealtimeBroadcast(req, 'utility_item_added', utility);
-        
         return sendSuccess(res, utility, 'Utility item added', 201);
     }),
 
+    /**
+     * PUT /api/helpdesk/utilities/:id/items/:itemId
+     * Update a specific utility item
+     */
     updateUtilityItem: asyncHandler(async (req: Request, res: Response) => {
         const paramsResult = utilityItemIdSchema.safeParse({ params: req.params });
         if (!paramsResult.success) {
@@ -571,39 +510,73 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             paramsResult.data.params.itemId,
             bodyResult.data.body
         );
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'utility_item_updated', utility);
-        
         return sendSuccess(res, utility, 'Utility item updated');
     }),
 
-    deleteUtilityItem: asyncHandler(async (req: Request, res: Response) => {
-        const result = utilityItemIdSchema.safeParse({ params: req.params });
-        if (!result.success) {
-            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    /**
+     * PUT /api/helpdesk/utilities/:id
+     * Update the main utility record (judge name or PJ number)
+     * At least one field must be provided
+     */
+    updateUtility: asyncHandler(async (req: Request, res: Response) => {
+        const paramsResult = idSchema.safeParse({ params: req.params });
+        if (!paramsResult.success) {
+            throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
         }
-        await HelpDeskService.deleteUtilityItem(result.data.params.id, result.data.params.itemId);
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
-        safeRealtimeBroadcast(req, 'utility_item_deleted', { 
-            utilityId: result.data.params.id, 
-            itemId: result.data.params.itemId 
-        });
-        
-        return sendSuccess(res, null, 'Utility item deleted');
+        const bodyResult = updateUtilitySchema.safeParse({ body: req.body });
+        if (!bodyResult.success) {
+            throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+        }
+        const utility = await HelpDeskService.updateUtility(
+            paramsResult.data.params.id,
+            bodyResult.data.body
+        );
+        safeRealtimeBroadcast(req, 'utility_updated', utility);
+        return sendSuccess(res, utility, 'Judge utility record updated');
     }),
 
+    /**
+     * DELETE /api/helpdesk/utilities/:id/items/:itemId
+     * Delete a specific utility item
+     */
+   /**
+ * DELETE /api/helpdesk/utilities/:id/items/:itemId
+ * Delete a specific utility item
+ */
+deleteUtilityItem: asyncHandler(async (req: Request, res: Response) => {
+    // Use deleteUtilityItemSchema which expects only itemId
+    const result = deleteUtilityItemSchema.safeParse({ params: req.params });
+    if (!result.success) {
+        throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    }
+    // You need the utility ID from the route params directly
+    const utilityId = extractStringParam(req.params.id);
+    if (!utilityId) {
+        throw new AppError(400, 'Utility ID is required');
+    }
+    await HelpDeskService.deleteUtilityItem(
+        utilityId,
+        result.data.params.itemId
+    );
+    safeRealtimeBroadcast(req, 'utility_item_deleted', {
+        utilityId: utilityId,
+        itemId: result.data.params.itemId
+    });
+    return sendSuccess(res, null, 'Utility item deleted');
+}),
+
+    /**
+     * DELETE /api/helpdesk/utilities/:id
+     * Delete an entire utility record (soft delete)
+     */
     deleteUtility: asyncHandler(async (req: Request, res: Response) => {
-        const result = idSchema.safeParse({ params: req.params });
+        const result = deleteUtilitySchema.safeParse({ params: req.params });
         if (!result.success) {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deleteUtility(result.data.params.id);
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'utility_deleted', { id: result.data.params.id });
-        
         return sendSuccess(res, null, 'Judge utility record deleted');
     }),
 
@@ -636,10 +609,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
         const membership = await HelpDeskService.createClubMembership(result.data.body, req.user!.id);
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'club_membership_created', membership);
-        
         return sendSuccess(res, membership, 'Club membership created', 201);
     }),
 
@@ -656,10 +626,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             paramsResult.data.params.id,
             { status }
         );
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'club_membership_updated', membership);
-        
         return sendSuccess(res, membership, 'Club membership status updated');
     }),
 
@@ -669,10 +636,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deleteClubMembership(result.data.params.id);
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'club_membership_deleted', { id: result.data.params.id });
-        
         return sendSuccess(res, null, 'Club membership deleted');
     }),
 
@@ -705,10 +669,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
         const circuit = await HelpDeskService.createCircuit(result.data.body, req.user!.id);
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'circuit_created', circuit);
-        
         return sendSuccess(res, circuit, 'Circuit created', 201);
     }),
 
@@ -725,10 +686,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             paramsResult.data.params.id,
             { status }
         );
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'circuit_updated', circuit);
-        
         return sendSuccess(res, circuit, 'Circuit status updated');
     }),
 
@@ -745,14 +703,10 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             paramsResult.data.params.id,
             result.data.body.dsa_details
         );
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'circuit_dsa_updated', circuit);
-        
         return sendSuccess(res, circuit, 'Circuit DSA details updated');
     }),
 
-    // ─── NEW: Full update for circuits ──────────────────────────────────────
     updateCircuit: asyncHandler(async (req: Request, res: Response) => {
         const paramsResult = idSchema.safeParse({ params: req.params });
         if (!paramsResult.success) {
@@ -766,10 +720,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             paramsResult.data.params.id,
             bodyResult.data.body
         );
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'circuit_updated', circuit);
-        
         return sendSuccess(res, circuit, 'Circuit updated');
     }),
 
@@ -779,10 +730,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deleteCircuit(result.data.params.id);
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'circuit_deleted', { id: result.data.params.id });
-        
         return sendSuccess(res, null, 'Circuit deleted');
     }),
 
@@ -815,10 +763,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
         const bench = await HelpDeskService.createSpecialBench(result.data.body, req.user!.id);
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'bench_created', bench);
-        
         return sendSuccess(res, bench, 'Special bench created', 201);
     }),
 
@@ -835,10 +780,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             paramsResult.data.params.id,
             bodyResult.data.body
         );
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'bench_updated', bench);
-        
         return sendSuccess(res, bench, 'Special bench updated');
     }),
 
@@ -855,10 +797,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             paramsResult.data.params.id,
             { status }
         );
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'bench_status_updated', bench);
-        
         return sendSuccess(res, bench, 'Bench status updated');
     }),
 
@@ -868,10 +807,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deleteBench(result.data.params.id);
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'bench_deleted', { id: result.data.params.id });
-        
         return sendSuccess(res, null, 'Special bench deleted');
     }),
 
@@ -904,10 +840,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
         const partHeard = await HelpDeskService.createPartHeard(result.data.body, req.user!.id);
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'part_heard_created', partHeard);
-        
         return sendSuccess(res, partHeard, 'Part-heard created', 201);
     }),
 
@@ -924,10 +857,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             paramsResult.data.params.id,
             bodyResult.data.body
         );
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'part_heard_updated', partHeard);
-        
         return sendSuccess(res, partHeard, 'Part-heard updated');
     }),
 
@@ -944,10 +874,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             paramsResult.data.params.id,
             { status }
         );
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'part_heard_status_updated', partHeard);
-        
         return sendSuccess(res, partHeard, 'Part-heard status updated');
     }),
 
@@ -957,10 +884,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deletePartHeard(result.data.params.id);
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'part_heard_deleted', { id: result.data.params.id });
-        
         return sendSuccess(res, null, 'Part-heard deleted');
     }),
 
@@ -993,10 +917,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
         const week = await HelpDeskService.createServiceWeek(result.data.body, req.user!.id);
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'service_week_created', week);
-        
         return sendSuccess(res, week, 'Service week created', 201);
     }),
 
@@ -1013,14 +934,10 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             paramsResult.data.params.id,
             { status }
         );
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'service_week_updated', week);
-        
         return sendSuccess(res, week, 'Service week status updated');
     }),
 
-    // ─── NEW: Full update for service weeks ──────────────────────────────────
     updateServiceWeek: asyncHandler(async (req: Request, res: Response) => {
         const paramsResult = idSchema.safeParse({ params: req.params });
         if (!paramsResult.success) {
@@ -1034,10 +951,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             paramsResult.data.params.id,
             bodyResult.data.body
         );
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'service_week_updated', week);
-        
         return sendSuccess(res, week, 'Service week updated');
     }),
 
@@ -1047,10 +961,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deleteServiceWeek(result.data.params.id);
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'service_week_deleted', { id: result.data.params.id });
-        
         return sendSuccess(res, null, 'Service week deleted');
     }),
 
@@ -1083,10 +994,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
         const claim = await HelpDeskService.createMedicalClaim(result.data.body, req.user!.id);
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'medical_claim_created', claim);
-        
         return sendSuccess(res, claim, 'Medical claim created', 201);
     }),
 
@@ -1103,10 +1011,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             paramsResult.data.params.id,
             { status, remarks }
         );
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'medical_claim_updated', claim);
-        
         return sendSuccess(res, claim, 'Medical claim status updated');
     }),
 
@@ -1116,10 +1021,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deleteMedicalClaim(result.data.params.id);
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'medical_claim_deleted', { id: result.data.params.id });
-        
         return sendSuccess(res, null, 'Medical claim deleted');
     }),
 
@@ -1152,10 +1054,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
         const visa = await HelpDeskService.createVisaRequest(result.data.body, req.user!.id);
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'visa_request_created', visa);
-        
         return sendSuccess(res, visa, 'Visa request created', 201);
     }),
 
@@ -1172,10 +1071,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             paramsResult.data.params.id,
             { status, notes }
         );
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'visa_request_updated', visa);
-        
         return sendSuccess(res, visa, 'Visa status updated');
     }),
 
@@ -1185,10 +1081,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deleteVisaRequest(result.data.params.id);
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'visa_request_deleted', { id: result.data.params.id });
-        
         return sendSuccess(res, null, 'Visa request deleted');
     }),
 
@@ -1218,9 +1111,9 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
     }),
 
     getDocumentViewStatus: asyncHandler(async (req: Request, res: Response) => {
-        const result = documentViewStatusSchema.safeParse({ 
+        const result = documentViewStatusSchema.safeParse({
             params: req.params,
-            query: req.query 
+            query: req.query
         });
         if (!result.success) {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid document ID');
@@ -1233,9 +1126,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
         return sendSuccess(res, status, 'Document view status retrieved');
     }),
 
-    // ============================================================
-    // PROTOCOL SUPPORT - UPDATED with venue and super admin notification
-    // ============================================================
+    // ─── Protocol Support ────────────────────────────────────────────────────
 
     getAllProtocolEvents: asyncHandler(async (req: Request, res: Response) => {
         const result = helpDeskFiltersSchema.safeParse({ query: req.query });
@@ -1263,20 +1154,16 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
         if (!result.success) {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
-        
-        // Get super admin emails from environment
+
         const superAdminEmails = env.SUPER_ADMIN_EMAILS?.split(',').map(e => e.trim()) || [];
-        
-        // Create the protocol event with super admin notification
+
         const event = await HelpDeskService.createProtocolEvent(
             result.data.body,
             req.user!.id,
             superAdminEmails
         );
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
+
         safeRealtimeBroadcast(req, 'protocol_event_created', event);
-        
         return sendSuccess(res, event, 'Protocol event created', 201);
     }),
 
@@ -1293,10 +1180,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             paramsResult.data.params.id,
             { status, notes }
         );
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'protocol_event_updated', event);
-        
         return sendSuccess(res, event, 'Protocol status updated');
     }),
 
@@ -1306,10 +1190,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deleteProtocolEvent(result.data.params.id);
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'protocol_event_deleted', { id: result.data.params.id });
-        
         return sendSuccess(res, null, 'Protocol event deleted');
     }),
 
@@ -1342,10 +1223,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
         const payment = await HelpDeskService.createOtherPayment(result.data.body, req.user!.id);
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'other_payment_created', payment);
-        
         return sendSuccess(res, payment, 'Other payment created', 201);
     }),
 
@@ -1362,10 +1240,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             paramsResult.data.params.id,
             { status }
         );
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'other_payment_updated', payment);
-        
         return sendSuccess(res, payment, 'Other payment status updated');
     }),
 
@@ -1382,14 +1257,10 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             paramsResult.data.params.id,
             result.data.body.dsa_details
         );
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'other_payment_dsa_updated', payment);
-        
         return sendSuccess(res, payment, 'Other payment DSA details updated');
     }),
 
-    // ─── NEW: Full update for other payments ──────────────────────────────────
     updateOtherPayment: asyncHandler(async (req: Request, res: Response) => {
         const paramsResult = idSchema.safeParse({ params: req.params });
         if (!paramsResult.success) {
@@ -1403,10 +1274,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             paramsResult.data.params.id,
             bodyResult.data.body
         );
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'other_payment_updated', payment);
-        
         return sendSuccess(res, payment, 'Other payment updated');
     }),
 
@@ -1416,10 +1284,7 @@ createGeneralRequest: asyncHandler(async (req: Request, res: Response) => {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
         await HelpDeskService.deleteOtherPayment(result.data.params.id);
-        
-        // ── Emit real-time event ──────────────────────────────────────────────────
         safeRealtimeBroadcast(req, 'other_payment_deleted', { id: result.data.params.id });
-        
         return sendSuccess(res, null, 'Other payment deleted');
     }),
 

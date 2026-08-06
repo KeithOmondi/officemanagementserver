@@ -40,22 +40,10 @@ router.post(
 );
 
 /**
- * @route   POST /api/documents/follow-ups/file-away
- * @desc    File away a follow-up (no due date, immediately filed)
- * @access  Super Admin or Dept Head
- * @body    { document_id, mark_id?, notes, completion_notes? }
- */
-router.post(
-  '/follow-ups/file-away',
-  requireRole('super_admin', 'dept_head'),
-  documentController.fileAwayFollowUp
-);
-
-/**
  * @route   GET /api/documents/follow-ups
  * @desc    Get all follow-ups with filters
  * @access  Super Admin or Dept Head
- * @query   status, priority, assigned_to, document_id, active_only, filed_only, etc.
+ * @query   status, priority, assigned_to, document_id, active_only, etc.
  */
 router.get(
   '/follow-ups',
@@ -67,7 +55,7 @@ router.get(
  * @route   GET /api/documents/follow-ups/my
  * @desc    Get follow-ups assigned to the current user
  * @access  Super Admin or Dept Head
- * @query   status, priority, active_only, filed_only, etc.
+ * @query   status, priority, active_only, etc.
  */
 router.get(
   '/follow-ups/my',
@@ -79,7 +67,7 @@ router.get(
  * @route   GET /api/documents/follow-ups/summary
  * @desc    Get follow-up summary for the current user
  * @access  Super Admin or Dept Head
- * @returns { pending, overdue, completed, filed_away, total, active }
+ * @returns { pending, in_progress, completed, overdue, total }
  */
 router.get(
   '/follow-ups/summary',
@@ -105,7 +93,7 @@ router.get(
  * @route   GET /api/documents/bring-ups/summary
  * @desc    Get bring up summary for dashboard
  * @access  Super Admin only
- * @returns { total_pending, total_overdue, total_completed, total_filed_away, due_today, due_this_week, by_department, my_pending, my_overdue }
+ * @returns { total_pending, total_overdue, total_completed, due_today, due_this_week, by_department, my_pending, my_overdue }
  */
 router.get(
   '/bring-ups/summary',
@@ -205,7 +193,7 @@ router.get(
  * @route   PUT /api/documents/follow-ups/:followUpId
  * @desc    Update a follow-up
  * @access  Super Admin or Dept Head
- * @body    { notes?, assigned_to?, due_date?, priority?, status? }
+ * @body    { notes?, assigned_to?, due_date?, priority?, status?, completion_notes?, cancellation_reason? }
  */
 router.put(
   '/follow-ups/:followUpId',
@@ -215,9 +203,9 @@ router.put(
 
 /**
  * @route   PATCH /api/documents/follow-ups/:followUpId/complete
- * @desc    Mark a follow-up as completed
+ * @desc    Mark a follow-up as completed (requires completion_notes)
  * @access  Super Admin or Dept Head
- * @body    { completion_notes? }
+ * @body    { completion_notes: string }  // Required - admin must give instructions
  */
 router.patch(
   '/follow-ups/:followUpId/complete',
@@ -298,18 +286,6 @@ router.patch(
   '/:id/bring-up/complete',
   requireRole('super_admin'),
   documentController.completeBringUp
-);
-
-/**
- * @route   PATCH /api/documents/:id/bring-up/file-away
- * @desc    File away a bring up (complete and return to helpdesk)
- * @access  Super Admin only
- * @body    { notes?, completion_notes?, return_to_helpdesk? }
- */
-router.patch(
-  '/:id/bring-up/file-away',
-  requireRole('super_admin'),
-  documentController.fileAwayBringUp
 );
 
 /**
@@ -553,7 +529,7 @@ router.post('/:id/return', requireRole('super_admin'), documentController.return
  */
 router.post('/:id/respond', upload.single('file'), documentController.respond);
 
-// ── Update Mark (instructions only - bring_up_date removed) ─────────────────
+// ── Update Mark (instructions only) ──────────────────────────────────────────
 
 /**
  * @route   PATCH /api/documents/marks/:markId

@@ -19,11 +19,30 @@ export type DocumentEntityType =
     | 'consolidated_utility_memo'  // Consolidated memo covering all utilities
     | 'consolidated_fuel_memo'     // Consolidated memo covering fuel only
     | 'aide'             // Aide request documents
-    | 'sentry';          // Sentry request documents
+    | 'sentry'           // Sentry request documents
+    | 'conference';      // Conference request documents
 
 export type DocumentStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected' | 'returned';
 
 export type EStampStatus = 'pending' | 'stamped' | 'failed';
+
+// ─── Conference Types ─────────────────────────────────────────────────────────
+
+export type ConferenceStatus = 
+    | 'draft' 
+    | 'pending' 
+    | 'approved' 
+    | 'rejected' 
+    | 'completed' 
+    | 'cancelled';
+
+export type ConferenceType = 
+    | 'judicial' 
+    | 'administrative' 
+    | 'training' 
+    | 'workshop' 
+    | 'seminar' 
+    | 'other';
 
 // ─── Stamp Types ──────────────────────────────────────────────────────────────
 
@@ -158,6 +177,16 @@ export interface HelpdeskDocument {
     residence_location?: string | null;
     sentry_status?: string | null;
     
+    // ─── Conference Request Fields ────────────────────────────────────────────
+    conference_type?: ConferenceType | null;
+    start_date?: string | null;
+    end_date?: string | null;
+    number_of_pax?: number | null;
+    venue?: string | null;
+    location?: string | null;
+    budget_estimate?: number | null;
+    conference_status?: ConferenceStatus | null;
+    
     // ─── Legacy fields ──────────────────────────────────────────────────────
     rank?: string | null;
     reporting_date?: string | null;
@@ -214,6 +243,16 @@ export interface CreateHelpdeskDocumentInput {
     // ─── Sentry Request Fields ──────────────────────────────────────────────
     residence_location?: string | null;
     sentry_status?: string | null;
+    
+    // ─── Conference Request Fields ──────────────────────────────────────────
+    conference_type?: ConferenceType | null;
+    start_date?: string | null;
+    end_date?: string | null;
+    number_of_pax?: number | null;
+    venue?: string | null;
+    location?: string | null;
+    budget_estimate?: number | null;
+    conference_status?: ConferenceStatus | null;
     
     // ─── Legacy fields ──────────────────────────────────────────────────────
     rank?: string | null;
@@ -297,6 +336,14 @@ export interface HelpdeskDocumentFilters {
     // ─── Sentry Request Filters ──────────────────────────────────────────────
     residence_location?: string;
     sentry_status?: string;
+    
+    // ─── Conference Request Filters ──────────────────────────────────────────
+    conference_type?: ConferenceType;
+    conference_status?: ConferenceStatus;
+    start_date_from?: string;
+    start_date_to?: string;
+    location?: string;
+    venue?: string;
     
     // ─── Legacy fields ──────────────────────────────────────────────────────
     rank?: string;
@@ -595,6 +642,7 @@ export const DOCUMENT_ENTITY_LABELS: Record<DocumentEntityType, string> = {
     consolidated_fuel_memo: 'Consolidated Fuel Memo',
     aide: 'Aide Request',
     sentry: 'Sentry Request',
+    conference: 'Conference Request',
 };
 
 export const DOCUMENT_ENTITY_ICONS: Record<DocumentEntityType, string> = {
@@ -615,6 +663,7 @@ export const DOCUMENT_ENTITY_ICONS: Record<DocumentEntityType, string> = {
     consolidated_fuel_memo: 'Fuel',
     aide: 'Shield',
     sentry: 'Home',
+    conference: 'Calendar',
 };
 
 export const DOCUMENT_ENTITY_COLORS: Record<DocumentEntityType, string> = {
@@ -635,6 +684,45 @@ export const DOCUMENT_ENTITY_COLORS: Record<DocumentEntityType, string> = {
     consolidated_fuel_memo: 'text-orange-600 bg-orange-50',
     aide: 'text-blue-600 bg-blue-50',
     sentry: 'text-emerald-600 bg-emerald-50',
+    conference: 'text-purple-600 bg-purple-50',
+};
+
+// ─── Conference Status Constants ─────────────────────────────────────────────
+
+export const CONFERENCE_STATUS_LABELS: Record<ConferenceStatus, string> = {
+    draft: 'Draft',
+    pending: 'Pending Approval',
+    approved: 'Approved',
+    rejected: 'Rejected',
+    completed: 'Completed',
+    cancelled: 'Cancelled',
+};
+
+export const CONFERENCE_STATUS_COLORS: Record<ConferenceStatus, string> = {
+    draft: 'text-gray-600 bg-gray-50',
+    pending: 'text-amber-600 bg-amber-50',
+    approved: 'text-emerald-600 bg-emerald-50',
+    rejected: 'text-red-600 bg-red-50',
+    completed: 'text-blue-600 bg-blue-50',
+    cancelled: 'text-stone-600 bg-stone-50',
+};
+
+export const CONFERENCE_TYPE_LABELS: Record<ConferenceType, string> = {
+    judicial: 'Judicial',
+    administrative: 'Administrative',
+    training: 'Training',
+    workshop: 'Workshop',
+    seminar: 'Seminar',
+    other: 'Other',
+};
+
+export const CONFERENCE_TYPE_COLORS: Record<ConferenceType, string> = {
+    judicial: 'text-purple-600 bg-purple-50',
+    administrative: 'text-blue-600 bg-blue-50',
+    training: 'text-green-600 bg-green-50',
+    workshop: 'text-amber-600 bg-amber-50',
+    seminar: 'text-rose-600 bg-rose-50',
+    other: 'text-stone-600 bg-stone-50',
 };
 
 export const DOCUMENT_STATUS_LABELS: Record<DocumentStatus, string> = {
@@ -762,6 +850,32 @@ export const REQUEST_TYPE_COLORS: Record<string, string> = {
     Sentry: 'text-gray-600 bg-gray-50',
 };
 
+// ─── Conference Helper Functions ─────────────────────────────────────────────
+
+export function getConferenceStatusLabel(status: ConferenceStatus): string {
+    return CONFERENCE_STATUS_LABELS[status] || status;
+}
+
+export function getConferenceStatusColor(status: ConferenceStatus): string {
+    return CONFERENCE_STATUS_COLORS[status] || '';
+}
+
+export function getConferenceTypeLabel(type: ConferenceType): string {
+    return CONFERENCE_TYPE_LABELS[type] || type;
+}
+
+export function getConferenceTypeColor(type: ConferenceType): string {
+    return CONFERENCE_TYPE_COLORS[type] || '';
+}
+
+export function isConferenceStatus(value: string): value is ConferenceStatus {
+    return ['draft', 'pending', 'approved', 'rejected', 'completed', 'cancelled'].includes(value);
+}
+
+export function isConferenceType(value: string): value is ConferenceType {
+    return ['judicial', 'administrative', 'training', 'workshop', 'seminar', 'other'].includes(value);
+}
+
 // ─── Type Guards ─────────────────────────────────────────────────────────────
 
 export function isDocumentEntityType(value: string): value is DocumentEntityType {
@@ -782,7 +896,8 @@ export function isDocumentEntityType(value: string): value is DocumentEntityType
         'consolidated_utility_memo',
         'consolidated_fuel_memo',
         'aide',
-        'sentry'
+        'sentry',
+        'conference'
     ].includes(value);
 }
 
@@ -1156,6 +1271,14 @@ export function buildDocumentFilters(filters: HelpdeskDocumentFilters): Record<s
     // Sentry Request Filters
     if (filters.residence_location) result.residence_location = filters.residence_location;
     if (filters.sentry_status) result.sentry_status = filters.sentry_status;
+    
+    // Conference Request Filters
+    if (filters.conference_type) result.conference_type = filters.conference_type;
+    if (filters.conference_status) result.conference_status = filters.conference_status;
+    if (filters.start_date_from) result.start_date_from = filters.start_date_from;
+    if (filters.start_date_to) result.start_date_to = filters.start_date_to;
+    if (filters.location) result.location = filters.location;
+    if (filters.venue) result.venue = filters.venue;
     
     // Legacy fields
     if (filters.rank) result.rank = filters.rank;

@@ -1,7 +1,8 @@
+// src/services/helpdesk.documents.service.ts
+
 import { pool } from '../../config/db';
 import { AppError } from '../../utils/response';
 import { uploadToCloudinary, deleteFromCloudinary } from '../../config/cloudinary';
-//import axios from 'axios';
 import type {
     HelpdeskDocument,
     CreateHelpdeskDocumentInput,
@@ -13,9 +14,7 @@ import type {
     DocumentSummary,
     DocumentFormat,
     DocumentStatus,
-    //EStampStatus,
     UpdateDocumentFileInput,
-    //InternalApprovalStatus,
     RequesterVisibleStatus,
     InternalApprovalRequest,
     InternalPreviewRequest,
@@ -25,6 +24,8 @@ import type {
     PendingInternalApprovalsSummary,
     RequesterDocumentView,
     StampType,
+    ConferenceStatus,
+    ConferenceType,
 } from './helpdesk.documents.types';
 import { EStampService } from '../e-stamp/e-stamp.service';
 import { embedSignatureBlockIntoPDF } from '../../utils/signatureBlock';
@@ -32,9 +33,8 @@ import { sendHelpdeskChangesRequested } from '../../utils/helpdeskTemplates';
 import { sendHelpdeskApproved, sendHelpdeskRejected } from '../../utils/sendMail';
 
 const FOLDER = 'orhc/helpdesk-documents';
-//const E_STAMP_FOLDER = 'orhc/helpdesk-documents/e-stamps';
 
-// ─── SELECT Fragment (UPDATED: Added stamped_file columns) ──────────────────
+// ─── SELECT Fragment (UPDATED: Added conference fields) ──────────────────
 
 const DOC_SELECT = `
     d.id, d.ref, d.subject, d.entity_type, d.entity_id, d.format,
@@ -47,6 +47,9 @@ const DOC_SELECT = `
     d.officer_rank, d.officer_name, d.employment_number,
     d.current_station, d.current_unit, d.proposed_assignment, d.aide_status,
     d.residence_location, d.sentry_status,
+    -- Conference fields
+    d.conference_type, d.start_date, d.end_date, d.number_of_pax,
+    d.venue, d.location, d.budget_estimate, d.conference_status,
     -- Two-step approval fields
     d.internal_approval_status, d.internal_approved_by, d.internal_approved_by_name,
     d.internal_approved_at, d.internal_comments, d.internal_changes_requested,
@@ -96,6 +99,15 @@ function cleanInput(input: CreateHelpdeskDocumentInput): CreateHelpdeskDocumentI
         aide_status: input.aide_status === null ? undefined : input.aide_status?.trim() || undefined,
         residence_location: input.residence_location === null ? undefined : input.residence_location?.trim() || undefined,
         sentry_status: input.sentry_status === null ? undefined : input.sentry_status?.trim() || undefined,
+        // Conference fields
+        conference_type: input.conference_type === null ? undefined : input.conference_type,
+        start_date: input.start_date === null ? undefined : input.start_date?.trim() || undefined,
+        end_date: input.end_date === null ? undefined : input.end_date?.trim() || undefined,
+        number_of_pax: input.number_of_pax === null ? undefined : input.number_of_pax,
+        venue: input.venue === null ? undefined : input.venue?.trim() || undefined,
+        location: input.location === null ? undefined : input.location?.trim() || undefined,
+        budget_estimate: input.budget_estimate === null ? undefined : input.budget_estimate,
+        conference_status: input.conference_status === null ? undefined : input.conference_status,
         stamp_type: input.stamp_type === null ? undefined : input.stamp_type,
     };
     return cleaned;
@@ -171,10 +183,14 @@ export class HelpdeskDocumentsService {
                      officer_rank, officer_name, employment_number,
                      current_station, current_unit, proposed_assignment, aide_status,
                      residence_location, sentry_status,
+                     conference_type, start_date, end_date, number_of_pax,
+                     venue, location, budget_estimate, conference_status,
                      internal_approval_status, requester_status,
                      is_stamped, stamp_type)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 
-                         $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 
+                         $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, 
+                         $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, 
+                         $31, $32, $33, $34, $35)
                  RETURNING id`,
                 [
                     cleaned.ref.trim(),
@@ -200,6 +216,14 @@ export class HelpdeskDocumentsService {
                     cleaned.aide_status || null,
                     cleaned.residence_location || null,
                     cleaned.sentry_status || null,
+                    cleaned.conference_type || null,
+                    cleaned.start_date || null,
+                    cleaned.end_date || null,
+                    cleaned.number_of_pax || null,
+                    cleaned.venue || null,
+                    cleaned.location || null,
+                    cleaned.budget_estimate || null,
+                    cleaned.conference_status || null,
                     'pending',
                     'pending_approval',
                     false, // is_stamped
@@ -218,7 +242,7 @@ export class HelpdeskDocumentsService {
         }
     }
 
-    // ─── Update Document File (UPDATED: Save Stamped File Metadata) ────────────
+    // ─── Update Document File ────────────────────────────────────────────────
 
     static async updateDocumentFile(
         id: string,
@@ -639,6 +663,37 @@ export class HelpdeskDocumentsService {
         if (filters.sentry_status) {
             query += ` AND d.sentry_status = $${p}`;
             params.push(filters.sentry_status);
+            p++;
+        }
+        // ─── Conference filters ────────────────────────────────────────────────
+        if (filters.conference_type) {
+            query += ` AND d.conference_type = $${p}`;
+            params.push(filters.conference_type);
+            p++;
+        }
+        if (filters.conference_status) {
+            query += ` AND d.conference_status = $${p}`;
+            params.push(filters.conference_status);
+            p++;
+        }
+        if (filters.start_date_from) {
+            query += ` AND d.start_date >= $${p}`;
+            params.push(filters.start_date_from);
+            p++;
+        }
+        if (filters.start_date_to) {
+            query += ` AND d.start_date <= $${p}`;
+            params.push(filters.start_date_to);
+            p++;
+        }
+        if (filters.location) {
+            query += ` AND d.location ILIKE $${p}`;
+            params.push(`%${filters.location}%`);
+            p++;
+        }
+        if (filters.venue) {
+            query += ` AND d.venue ILIKE $${p}`;
+            params.push(`%${filters.venue}%`);
             p++;
         }
         if (filters.date_from) {
@@ -1112,7 +1167,7 @@ export class HelpdeskDocumentsService {
         }
     }
 
-       /**
+    /**
      * Internal Approve - Super admin approves internally with signature AND STAMP embedding
      * Requester still sees 'pending_approval' until send back
      */
@@ -1163,7 +1218,7 @@ export class HelpdeskDocumentsService {
             let finalFileUrl = doc.file_url;
             let finalPublicId = doc.public_id;
             let finalFileSize: number | null = null;
-            let wasSigned = false; // Tracks if the file was modified (stamp or signature)
+            let wasSigned = false;
             let eStampRecordId: string | null = null;
 
             // ─── BRANCH: E-STAMP OR SIGNATURE BLOCK ────────────────────────────────────
@@ -1172,13 +1227,12 @@ export class HelpdeskDocumentsService {
                 try {
                     console.log(`[InternalApprove] Generating E-Stamp for document ${id}...`);
 
-                    // Call the updated EStampService (which returns a PDF buffer)
                     const { stampedPdfBuffer, eStampRecord } = await EStampService.generateEStamp(
                         {
                             document_id: id,
                             stamp_type: input.stamp_type || 'approved',
-                            original_pdf_url: doc.file_url,      // The raw memo URL
-                            signature_url: signer.signature_url, // The real signature
+                            original_pdf_url: doc.file_url,
+                            signature_url: signer.signature_url,
                             metadata: {
                                 department_name: 'Office of the Registrar',
                                 station_name: 'High Court',
@@ -1189,7 +1243,6 @@ export class HelpdeskDocumentsService {
 
                     eStampRecordId = eStampRecord.id;
 
-                    // Upload the final merged PDF to Cloudinary
                     const multerFile: Express.Multer.File = {
                         buffer: stampedPdfBuffer,
                         mimetype: 'application/pdf',
@@ -1226,16 +1279,13 @@ export class HelpdeskDocumentsService {
                 try {
                     console.log(`[InternalApprove] Generating Signature Block for document ${id}...`);
 
-                    // Call the new signature block utility
                     const signedPdfBuffer = await embedSignatureBlockIntoPDF(
                         doc.file_url,
                         signer.signature_url!,
                         signer.full_name || 'Registrar, High Court',
                         'Registrar, High Court',
-                        
                     );
 
-                    // Upload the signed PDF to Cloudinary
                     const multerFile: Express.Multer.File = {
                         buffer: signedPdfBuffer,
                         mimetype: 'application/pdf',
@@ -1253,7 +1303,7 @@ export class HelpdeskDocumentsService {
                     finalFileUrl = uploaded.secure_url;
                     finalPublicId = uploaded.public_id;
                     finalFileSize = uploaded.bytes || uploaded.size || signedPdfBuffer.length;
-                    wasSigned = true; // Document is now signed
+                    wasSigned = true;
 
                     console.log(`[InternalApprove] Successfully generated & uploaded signed PDF for ${id}`);
 
@@ -1270,7 +1320,6 @@ export class HelpdeskDocumentsService {
             }
 
             // ─── UPDATE THE DOCUMENT IN THE DATABASE ──────────────────────────────────
-            // Note: We always update the document regardless of which path was taken.
             const updateQuery = `
                 UPDATE helpdesk_documents
                 SET internal_approval_status = 'approved_internal',
@@ -1308,12 +1357,12 @@ export class HelpdeskDocumentsService {
                 input.approved_by || null,
                 input.approved_by_name || null,
                 input.comments || null,
-                doc.e_stamp_url, // Keep existing or null
-                doc.e_stamp_public_id, // Keep existing or null
+                doc.e_stamp_url,
+                doc.e_stamp_public_id,
                 wasSigned,
                 finalFileUrl,
                 finalPublicId,
-                wasSigned && input.generate_e_stamp, // is_stamped only true if we went the stamp path
+                wasSigned && input.generate_e_stamp,
                 input.stamp_type || 'approved',
                 input.stamp_position_x || null,
                 input.stamp_position_y || null,
@@ -1541,177 +1590,174 @@ export class HelpdeskDocumentsService {
         }
     }
 
-  /**
- * Send Back to Requester - This is when the requester finally sees the status
- */
-static async sendBackToRequester(
-    id: string,
-    input: SendBackToRequesterRequest
-): Promise<HelpdeskDocument> {
-    const doc = await this.findById(id);
-    if (!doc) {
-        throw new AppError(404, 'Document not found');
-    }
-
-    if (!doc.is_internal_approval_complete) {
-        throw new AppError(400, 'Internal approval decision must be made before sending back');
-    }
-
-    const internalToRequesterMap: Record<string, RequesterVisibleStatus> = {
-        'approved_internal': 'approved',
-        'rejected_internal': 'rejected',
-        'changes_requested_internal': 'changes_requested',
-    };
-
-    const requesterStatus = internalToRequesterMap[doc.internal_approval_status];
-    if (!requesterStatus) {
-        throw new AppError(400, `Cannot send back from internal status: ${doc.internal_approval_status}`);
-    }
-
-    const finalStatus = input.final_status || requesterStatus;
-
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
-
-        let newStatus: DocumentStatus;
-        switch (finalStatus) {
-            case 'approved':
-                newStatus = 'approved';
-                break;
-            case 'rejected':
-                newStatus = 'rejected';
-                break;
-            case 'changes_requested':
-                newStatus = 'returned';
-                break;
-            default:
-                newStatus = 'pending_approval';
+    /**
+     * Send Back to Requester - This is when the requester finally sees the status
+     */
+    static async sendBackToRequester(
+        id: string,
+        input: SendBackToRequesterRequest
+    ): Promise<HelpdeskDocument> {
+        const doc = await this.findById(id);
+        if (!doc) {
+            throw new AppError(404, 'Document not found');
         }
 
-        await client.query(
-            `UPDATE helpdesk_documents
-             SET requester_status = $1,
-                 status = $2,
-                 requester_visible_at = NOW(),
-                 requester_visible_by = $3,
-                 requester_visible_by_name = $4,
-                 is_sent_back_to_requester = true,
-                 is_requester_notified = $5,
-                 updated_at = NOW()
-             WHERE id = $6 AND is_active = true`,
-            [
-                finalStatus,
-                newStatus,
-                input.sent_by || null,
-                input.sent_by_name || null,
-                input.notify_requester || false,
-                id
-            ]
-        );
-
-        await this.addApprovalHistory(
-            id,
-            input.sent_by || 'system',
-            'sent_back',
-            doc.uploaded_by || undefined,
-            `Document sent back to requester with status: ${finalStatus}`
-        );
-
-        await client.query('COMMIT');
-
-        const updatedDoc = await this.findById(id);
-        if (!updatedDoc) throw new AppError(500, 'Failed to retrieve updated document');
-
-        // ─── 🚀 SEND EMAIL NOTIFICATION AFTER COMMIT ──────────────────────
-        // Send after successful commit so we know the document is updated
-        if (input.notify_requester !== false && doc.uploaded_by) {
-            await this.sendApprovalNotification(updatedDoc, doc.uploaded_by, finalStatus);
+        if (!doc.is_internal_approval_complete) {
+            throw new AppError(400, 'Internal approval decision must be made before sending back');
         }
 
-        return updatedDoc;
-    } catch (err) {
-        await client.query('ROLLBACK');
-        throw err;
-    } finally {
-        client.release();
+        const internalToRequesterMap: Record<string, RequesterVisibleStatus> = {
+            'approved_internal': 'approved',
+            'rejected_internal': 'rejected',
+            'changes_requested_internal': 'changes_requested',
+        };
+
+        const requesterStatus = internalToRequesterMap[doc.internal_approval_status];
+        if (!requesterStatus) {
+            throw new AppError(400, `Cannot send back from internal status: ${doc.internal_approval_status}`);
+        }
+
+        const finalStatus = input.final_status || requesterStatus;
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            let newStatus: DocumentStatus;
+            switch (finalStatus) {
+                case 'approved':
+                    newStatus = 'approved';
+                    break;
+                case 'rejected':
+                    newStatus = 'rejected';
+                    break;
+                case 'changes_requested':
+                    newStatus = 'returned';
+                    break;
+                default:
+                    newStatus = 'pending_approval';
+            }
+
+            await client.query(
+                `UPDATE helpdesk_documents
+                 SET requester_status = $1,
+                     status = $2,
+                     requester_visible_at = NOW(),
+                     requester_visible_by = $3,
+                     requester_visible_by_name = $4,
+                     is_sent_back_to_requester = true,
+                     is_requester_notified = $5,
+                     updated_at = NOW()
+                 WHERE id = $6 AND is_active = true`,
+                [
+                    finalStatus,
+                    newStatus,
+                    input.sent_by || null,
+                    input.sent_by_name || null,
+                    input.notify_requester || false,
+                    id
+                ]
+            );
+
+            await this.addApprovalHistory(
+                id,
+                input.sent_by || 'system',
+                'sent_back',
+                doc.uploaded_by || undefined,
+                `Document sent back to requester with status: ${finalStatus}`
+            );
+
+            await client.query('COMMIT');
+
+            const updatedDoc = await this.findById(id);
+            if (!updatedDoc) throw new AppError(500, 'Failed to retrieve updated document');
+
+            // ─── 🚀 SEND EMAIL NOTIFICATION AFTER COMMIT ──────────────────────
+            if (input.notify_requester !== false && doc.uploaded_by) {
+                await this.sendApprovalNotification(updatedDoc, doc.uploaded_by, finalStatus);
+            }
+
+            return updatedDoc;
+        } catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+        } finally {
+            client.release();
+        }
     }
-}
 
-// ─── NEW: Send approval notification email ──────────────────────────────────
+    // ─── NEW: Send approval notification email ──────────────────────────────────
 
-private static async sendApprovalNotification(
-    doc: HelpdeskDocument,
-    requesterId: string,
-    status: 'approved' | 'rejected' | 'changes_requested'
-): Promise<void> {
-    try {
-        // Get requester's details
-        const { rows } = await pool.query(
-            `SELECT full_name, email FROM users WHERE id = $1 AND is_active = true`,
-            [requesterId]
-        );
+    private static async sendApprovalNotification(
+        doc: HelpdeskDocument,
+        requesterId: string,
+        status: 'approved' | 'rejected' | 'changes_requested'
+    ): Promise<void> {
+        try {
+            const { rows } = await pool.query(
+                `SELECT full_name, email FROM users WHERE id = $1 AND is_active = true`,
+                [requesterId]
+            );
 
-        if (rows.length === 0) {
-            console.warn(`[sendApprovalNotification] Requester ${requesterId} not found`);
-            return;
+            if (rows.length === 0) {
+                console.warn(`[sendApprovalNotification] Requester ${requesterId} not found`);
+                return;
+            }
+
+            const requester = rows[0];
+
+            switch (status) {
+                case 'approved':
+                    await sendHelpdeskApproved({
+                        to: requester.email,
+                        requesterName: requester.full_name,
+                        ref: doc.ref,
+                        subject: doc.subject,
+                        entityType: doc.entity_type,
+                        approvedBy: doc.internal_approved_by_name || 'Super Admin',
+                        approvedAt: new Date(doc.internal_approved_at || doc.updated_at),
+                        comments: doc.internal_comments || undefined,
+                        documentUrl: doc.stamped_file_url || doc.file_url,
+                    });
+                    console.log(`[sendApprovalNotification] ✅ Approved email sent to ${requester.email} for ${doc.ref}`);
+                    break;
+
+                case 'rejected':
+                    await sendHelpdeskRejected({
+                        to: requester.email,
+                        requesterName: requester.full_name,
+                        ref: doc.ref,
+                        subject: doc.subject,
+                        entityType: doc.entity_type,
+                        rejectedBy: doc.internal_approved_by_name || 'Super Admin',
+                        rejectedAt: new Date(doc.internal_approved_at || doc.updated_at),
+                        reason: doc.internal_rejection_reason || 'No specific reason provided',
+                        comments: doc.internal_comments || undefined,
+                    });
+                    console.log(`[sendApprovalNotification] ❌ Rejected email sent to ${requester.email} for ${doc.ref}`);
+                    break;
+
+                case 'changes_requested':
+                    await sendHelpdeskChangesRequested({
+                        to: requester.email,
+                        requesterName: requester.full_name,
+                        ref: doc.ref,
+                        subject: doc.subject,
+                        entityType: doc.entity_type,
+                        requestedBy: doc.internal_approved_by_name || 'Super Admin',
+                        requestedAt: new Date(doc.internal_approved_at || doc.updated_at),
+                        changes: doc.internal_changes_requested || ['Please review the comments for required changes.'],
+                        comments: doc.internal_comments || undefined,
+                    });
+                    console.log(`[sendApprovalNotification] 🔄 Changes requested email sent to ${requester.email} for ${doc.ref}`);
+                    break;
+            }
+
+        } catch (error) {
+            console.error('[sendApprovalNotification] ❌ Failed to send email:', error);
         }
-
-        const requester = rows[0];
-
-        // Send based on status
-        switch (status) {
-            case 'approved':
-                await sendHelpdeskApproved({
-                    to: requester.email,
-                    requesterName: requester.full_name,
-                    ref: doc.ref,
-                    subject: doc.subject,
-                    entityType: doc.entity_type,
-                    approvedBy: doc.internal_approved_by_name || 'Super Admin',
-                    approvedAt: new Date(doc.internal_approved_at || doc.updated_at),
-                    comments: doc.internal_comments || undefined,
-                    documentUrl: doc.stamped_file_url || doc.file_url,
-                });
-                console.log(`[sendApprovalNotification] ✅ Approved email sent to ${requester.email} for ${doc.ref}`);
-                break;
-
-            case 'rejected':
-                await sendHelpdeskRejected({
-                    to: requester.email,
-                    requesterName: requester.full_name,
-                    ref: doc.ref,
-                    subject: doc.subject,
-                    entityType: doc.entity_type,
-                    rejectedBy: doc.internal_approved_by_name || 'Super Admin',
-                    rejectedAt: new Date(doc.internal_approved_at || doc.updated_at),
-                    reason: doc.internal_rejection_reason || 'No specific reason provided',
-                    comments: doc.internal_comments || undefined,
-                });
-                console.log(`[sendApprovalNotification] ❌ Rejected email sent to ${requester.email} for ${doc.ref}`);
-                break;
-
-            case 'changes_requested':
-                await sendHelpdeskChangesRequested({
-                    to: requester.email,
-                    requesterName: requester.full_name,
-                    ref: doc.ref,
-                    subject: doc.subject,
-                    entityType: doc.entity_type,
-                    requestedBy: doc.internal_approved_by_name || 'Super Admin',
-                    requestedAt: new Date(doc.internal_approved_at || doc.updated_at),
-                    changes: doc.internal_changes_requested || ['Please review the comments for required changes.'],
-                    comments: doc.internal_comments || undefined,
-                });
-                console.log(`[sendApprovalNotification] 🔄 Changes requested email sent to ${requester.email} for ${doc.ref}`);
-                break;
-        }
-
-    } catch (error) {
-        // Don't block the main flow if email fails - just log the error
-        console.error('[sendApprovalNotification] ❌ Failed to send email:', error);
     }
-}
+
     /**
      * Resubmit After Changes - Requester resubmits after making changes
      */
@@ -1895,7 +1941,6 @@ private static async sendApprovalNotification(
             stamped_by_name: doc.stamped_by_name,
             stamped_at: doc.stamped_at,
             stamp_type: doc.stamp_type as StampType | undefined,
-            // ─── NEW: Pass the final file URL to the requester view ─────────────
             stamped_file_url: doc.stamped_file_url || null,
         }));
     }
@@ -1918,7 +1963,16 @@ private static async sendApprovalNotification(
         proposedAssignment?: string,
         aideStatus?: string,
         residenceLocation?: string,
-        sentryStatus?: string
+        sentryStatus?: string,
+        // ─── Conference fields ──────────────────────────────────────────────
+        conferenceType?: ConferenceType,
+        startDate?: string,
+        endDate?: string,
+        numberOfPax?: number,
+        venue?: string,
+        location?: string,
+        budgetEstimate?: number,
+        conferenceStatus?: ConferenceStatus
     ): Promise<HelpdeskDocument> {
         const doc = await this.findById(id);
         if (!doc) throw new AppError(404, 'Document not found');
@@ -2017,6 +2071,55 @@ private static async sendApprovalNotification(
             p++;
         }
 
+        // ─── Conference fields ──────────────────────────────────────────────
+        if (conferenceType !== undefined) {
+            updates.push(`conference_type = $${p}`);
+            values.push(conferenceType || null);
+            p++;
+        }
+
+        if (startDate !== undefined) {
+            updates.push(`start_date = $${p}`);
+            values.push(startDate || null);
+            p++;
+        }
+
+        if (endDate !== undefined) {
+            updates.push(`end_date = $${p}`);
+            values.push(endDate || null);
+            p++;
+        }
+
+        if (numberOfPax !== undefined) {
+            updates.push(`number_of_pax = $${p}`);
+            values.push(numberOfPax || null);
+            p++;
+        }
+
+        if (venue !== undefined) {
+            updates.push(`venue = $${p}`);
+            values.push(venue || null);
+            p++;
+        }
+
+        if (location !== undefined) {
+            updates.push(`location = $${p}`);
+            values.push(location || null);
+            p++;
+        }
+
+        if (budgetEstimate !== undefined) {
+            updates.push(`budget_estimate = $${p}`);
+            values.push(budgetEstimate || null);
+            p++;
+        }
+
+        if (conferenceStatus !== undefined) {
+            updates.push(`conference_status = $${p}`);
+            values.push(conferenceStatus || null);
+            p++;
+        }
+
         updates.push(`updated_at = NOW()`);
         values.push(id);
 
@@ -2050,7 +2153,16 @@ private static async sendApprovalNotification(
         proposedAssignment?: string,
         aideStatus?: string,
         residenceLocation?: string,
-        sentryStatus?: string
+        sentryStatus?: string,
+        // ─── Conference fields ──────────────────────────────────────────────
+        conferenceType?: ConferenceType,
+        startDate?: string,
+        endDate?: string,
+        numberOfPax?: number,
+        venue?: string,
+        location?: string,
+        budgetEstimate?: number,
+        conferenceStatus?: ConferenceStatus
     ): Promise<{ success: string[]; failed: string[] }> {
         const success: string[] = [];
         const failed: string[] = [];
@@ -2073,7 +2185,15 @@ private static async sendApprovalNotification(
                     proposedAssignment,
                     aideStatus,
                     residenceLocation,
-                    sentryStatus
+                    sentryStatus,
+                    conferenceType,
+                    startDate,
+                    endDate,
+                    numberOfPax,
+                    venue,
+                    location,
+                    budgetEstimate,
+                    conferenceStatus
                 );
                 success.push(id);
             } catch (error) {
@@ -2294,7 +2414,6 @@ private static async sendApprovalNotification(
         try {
             await client.query('BEGIN');
 
-            // Soft delete - set is_active to false
             const { rowCount } = await client.query(
                 `UPDATE helpdesk_documents 
                  SET is_active = false, 
@@ -2308,7 +2427,6 @@ private static async sendApprovalNotification(
                 throw new AppError(404, 'Document not found or already deleted');
             }
 
-            // Soft delete comments
             await client.query(
                 `UPDATE helpdesk_document_comments
                  SET is_active = false
@@ -2318,7 +2436,6 @@ private static async sendApprovalNotification(
 
             await client.query('COMMIT');
 
-            // Delete the original file from Cloudinary
             if (doc.public_id) {
                 try {
                     await deleteFromCloudinary(doc.public_id, 'raw');
@@ -2328,7 +2445,6 @@ private static async sendApprovalNotification(
                 }
             }
 
-            // Delete e-stamp from Cloudinary if exists
             if (doc.e_stamp_public_id) {
                 try {
                     await deleteFromCloudinary(doc.e_stamp_public_id, 'raw');
@@ -2338,7 +2454,6 @@ private static async sendApprovalNotification(
                 }
             }
             
-            // ─── NEW: Delete the final generated stamped file ──────────────────────
             if (doc.stamped_file_public_id) {
                 try {
                     await deleteFromCloudinary(doc.stamped_file_public_id, 'raw');
@@ -2368,19 +2483,16 @@ private static async sendApprovalNotification(
         try {
             await client.query('BEGIN');
 
-            // Delete comments
             await client.query(
                 `DELETE FROM helpdesk_document_comments WHERE document_id = $1`,
                 [id]
             );
 
-            // Delete approval history
             await client.query(
                 `DELETE FROM helpdesk_document_approval_history WHERE document_id = $1`,
                 [id]
             );
 
-            // Delete the document
             const { rowCount } = await client.query(
                 `DELETE FROM helpdesk_documents WHERE id = $1`,
                 [id]
@@ -2392,7 +2504,6 @@ private static async sendApprovalNotification(
 
             await client.query('COMMIT');
 
-            // Delete the original file from Cloudinary
             if (doc.public_id) {
                 try {
                     await deleteFromCloudinary(doc.public_id, 'raw');
@@ -2409,7 +2520,6 @@ private static async sendApprovalNotification(
                 }
             }
 
-            // ─── NEW: Delete the final generated stamped file ──────────────────────
             if (doc.stamped_file_public_id) {
                 try {
                     await deleteFromCloudinary(doc.stamped_file_public_id, 'raw');

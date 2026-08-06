@@ -23,6 +23,45 @@ import type { CreateHelpdeskDocumentInput } from './helpdesk.documents.types';
 import { sendSuccess } from '../../utils/response';
 import { AppError } from '../../utils/response';
 
+// ─── Constants ─────────────────────────────────────────────────────────────────
+
+const VALID_ENTITY_TYPES = [
+    'circuit', 'bench', 'partHeard', 'serviceWeek', 
+    'otherPayment', 'ticket', 'medicalClaim', 
+    'generalRequest', 'securityRequest',
+    'visa', 'protocol', 'club', 'utility_memo', 
+    'consolidated_utility_memo', 'consolidated_fuel_memo',
+    'aide', 'sentry', 'conference'
+] as const;
+
+const VALID_FORMATS = ['pdf', 'docx', 'xlsx'] as const;
+
+const VALID_STATUSES = ['draft', 'pending_approval', 'approved', 'rejected', 'returned'] as const;
+
+const VALID_INTERNAL_STATUSES = [
+    'pending', 'previewed', 'approved_internal', 'rejected_internal',
+    'changes_requested_internal', 'changes_ready'
+] as const;
+
+const VALID_REQUESTER_STATUSES = [
+    'pending_approval', 'approved', 'rejected', 'changes_requested', 'in_revision'
+] as const;
+
+const VALID_REQUEST_TYPES = [
+    'Driver', 'Bodyguard', 'Firearm', 'Current Station',
+    'Force Number', 'Residence Security', 'Sentry'
+] as const;
+
+const VALID_STAMP_TYPES = ['approved', 'received', 'official'] as const;
+
+const VALID_CONFERENCE_TYPES = [
+    'judicial', 'administrative', 'training', 'workshop', 'seminar', 'other'
+] as const;
+
+const VALID_CONFERENCE_STATUSES = [
+    'draft', 'pending', 'approved', 'rejected', 'completed', 'cancelled'
+] as const;
+
 // ─── Helper Functions ─────────────────────────────────────────────────────────
 
 function getParam(req: Request, key: string): string {
@@ -109,6 +148,19 @@ export function cleanFormDataBody<T extends Record<string, unknown>>(body: T): T
             continue;
         }
         
+        // ─── Conference numeric fields ──────────────────────────────────────────
+        if (key === 'number_of_pax' || key === 'budget_estimate') {
+            if (typeof value === 'string') {
+                const num = parseFloat(value);
+                cleaned[key] = isNaN(num) ? undefined : num;
+            } else if (typeof value === 'number') {
+                cleaned[key] = value;
+            } else {
+                cleaned[key] = undefined;
+            }
+            continue;
+        }
+        
         cleaned[key] = value;
     }
     
@@ -172,29 +224,19 @@ export class HelpdeskDocumentsController {
                 });
             }
 
-            const validEntityTypes = [
-                'circuit', 'bench', 'partHeard', 'serviceWeek', 
-                'otherPayment', 'ticket', 'medicalClaim', 
-                'generalRequest', 'securityRequest',
-                'visa', 'protocol', 'club', 'utility_memo', 
-                'consolidated_utility_memo', 'consolidated_fuel_memo',
-                'aide', 'sentry'
-            ];
-            
-            if (!validEntityTypes.includes(body.entity_type)) {
+            if (!VALID_ENTITY_TYPES.includes(body.entity_type as any)) {
                 return res.status(400).json({
                     success: false,
-                    message: `Invalid entity_type: ${body.entity_type}. Must be one of: ${validEntityTypes.join(', ')}`,
-                    validEntityTypes
+                    message: `Invalid entity_type: ${body.entity_type}. Must be one of: ${VALID_ENTITY_TYPES.join(', ')}`,
+                    validEntityTypes: VALID_ENTITY_TYPES
                 });
             }
 
-            const validFormats = ['pdf', 'docx', 'xlsx'];
-            if (!validFormats.includes(body.format)) {
+            if (!VALID_FORMATS.includes(body.format as any)) {
                 return res.status(400).json({
                     success: false,
-                    message: `Invalid format: ${body.format}. Must be one of: ${validFormats.join(', ')}`,
-                    validFormats
+                    message: `Invalid format: ${body.format}. Must be one of: ${VALID_FORMATS.join(', ')}`,
+                    validFormats: VALID_FORMATS
                 });
             }
 
@@ -252,7 +294,16 @@ export class HelpdeskDocumentsController {
                 aide_status: body.aide_status || undefined,
                 residence_location: body.residence_location || undefined,
                 sentry_status: body.sentry_status || undefined,
-                // ─── NEW: Stamp Type for initial upload ──────────────────────────
+                // ─── Conference fields ──────────────────────────────────────────
+                conference_type: body.conference_type || undefined,
+                start_date: body.start_date || undefined,
+                end_date: body.end_date || undefined,
+                number_of_pax: body.number_of_pax || undefined,
+                venue: body.venue || undefined,
+                location: body.location || undefined,
+                budget_estimate: body.budget_estimate || undefined,
+                conference_status: body.conference_status || undefined,
+                // ─── Stamp Type for initial upload ──────────────────────────────
                 stamp_type: body.stamp_type || undefined,
             };
 
@@ -378,44 +429,25 @@ export class HelpdeskDocumentsController {
 
     static async list(req: Request, res: Response, next: NextFunction) {
         try {
-            const entity_type = getQueryEnum(req, 'entity_type', [
-                'circuit', 'bench', 'partHeard', 'serviceWeek', 
-                'otherPayment', 'ticket', 'medicalClaim', 
-                'generalRequest', 'securityRequest',
-                'visa', 'protocol', 'club', 'utility_memo', 
-                'consolidated_utility_memo',
-                'consolidated_fuel_memo',
-                'aide', 'sentry'
-            ] as const);
-            
+            const entity_type = getQueryEnum(req, 'entity_type', VALID_ENTITY_TYPES);
             const entity_id = getQueryParam(req, 'entity_id');
-            const format = getQueryEnum(req, 'format', ['pdf', 'docx', 'xlsx'] as const);
-            const status = getQueryEnum(req, 'status', [
-                'draft', 'pending_approval', 'approved', 'rejected', 'returned'
-            ] as const);
+            const format = getQueryEnum(req, 'format', VALID_FORMATS);
+            const status = getQueryEnum(req, 'status', VALID_STATUSES);
             const search = getQueryParam(req, 'search');
             const limit = getQueryNumber(req, 'limit');
             const offset = getQueryNumber(req, 'offset');
             const uploaded_by = getQueryParam(req, 'uploaded_by');
             const pending_my_approval = getQueryBoolean(req, 'pending_my_approval');
             const unlinked = getQueryBoolean(req, 'unlinked');
-            const request_type = getQueryEnum(req, 'request_type', [
-                'Driver', 'Bodyguard', 'Firearm', 'Current Station',
-                'Force Number', 'Residence Security', 'Sentry'
-            ] as const);
+            const request_type = getQueryEnum(req, 'request_type', VALID_REQUEST_TYPES);
             const judge_name = getQueryParam(req, 'judge_name');
             const date_from = getQueryParam(req, 'date_from');
             const date_to = getQueryParam(req, 'date_to');
             const rank = getQueryParam(req, 'rank');
             const reporting_date = getQueryParam(req, 'reporting_date');
             
-            const internal_approval_status = getQueryEnum(req, 'internal_approval_status', [
-                'pending', 'previewed', 'approved_internal', 'rejected_internal',
-                'changes_requested_internal', 'changes_ready'
-            ] as const);
-            const requester_status = getQueryEnum(req, 'requester_status', [
-                'pending_approval', 'approved', 'rejected', 'changes_requested', 'in_revision'
-            ] as const);
+            const internal_approval_status = getQueryEnum(req, 'internal_approval_status', VALID_INTERNAL_STATUSES);
+            const requester_status = getQueryEnum(req, 'requester_status', VALID_REQUESTER_STATUSES);
             const is_sent_back_to_requester = getQueryBoolean(req, 'is_sent_back_to_requester');
             const pending_internal_approval = getQueryBoolean(req, 'pending_internal_approval');
             const ready_to_send_back = getQueryBoolean(req, 'ready_to_send_back');
@@ -430,9 +462,17 @@ export class HelpdeskDocumentsController {
             const residence_location = getQueryParam(req, 'residence_location');
             const sentry_status = getQueryParam(req, 'sentry_status');
 
-            // ─── NEW: Stamp filters ───────────────────────────────────────────
+            // ─── Conference filters ────────────────────────────────────────────
+            const conference_type = getQueryEnum(req, 'conference_type', VALID_CONFERENCE_TYPES);
+            const conference_status = getQueryEnum(req, 'conference_status', VALID_CONFERENCE_STATUSES);
+            const start_date_from = getQueryParam(req, 'start_date_from');
+            const start_date_to = getQueryParam(req, 'start_date_to');
+            const location = getQueryParam(req, 'location');
+            const venue = getQueryParam(req, 'venue');
+
+            // ─── Stamp filters ───────────────────────────────────────────────────
             const is_stamped = getQueryBoolean(req, 'is_stamped');
-            const stamp_type = getQueryEnum(req, 'stamp_type', ['approved', 'received', 'official'] as const);
+            const stamp_type = getQueryEnum(req, 'stamp_type', VALID_STAMP_TYPES);
 
             const docs = await HelpdeskDocumentsService.findAll({
                 entity_type,
@@ -465,7 +505,14 @@ export class HelpdeskDocumentsController {
                 aide_status,
                 residence_location,
                 sentry_status,
-                // ─── NEW: Stamp filters ──────────────────────────────────────
+                // ─── Conference filters ────────────────────────────────────────
+                conference_type,
+                conference_status,
+                start_date_from,
+                start_date_to,
+                location,
+                venue,
+                // ─── Stamp filters ──────────────────────────────────────────────
                 is_stamped,
                 stamp_type,
             });
@@ -603,7 +650,6 @@ export class HelpdeskDocumentsController {
                 console.warn(`[InternalApprove] User ${userId} has no signature uploaded. Signature will not be embedded.`);
             }
 
-            // 🔴 FIX: Pass stamp positions to the service!
             const doc = await HelpdeskDocumentsService.internalApprove(
                 id,
                 {
@@ -617,7 +663,6 @@ export class HelpdeskDocumentsController {
                     signature_position_y: body.signature_position_y,
                     signature_position_width: body.signature_position_width,
                     signature_position_height: body.signature_position_height,
-                    // ─── NEW: Pass stamp positioning and type ──────────────────
                     stamp_position_x: body.stamp_position_x,
                     stamp_position_y: body.stamp_position_y,
                     stamp_position_width: body.stamp_position_width,
@@ -809,20 +854,8 @@ export class HelpdeskDocumentsController {
      */
     static async getPendingInternalApprovals(req: Request, res: Response, next: NextFunction) {
         try {
-            const entity_type = getQueryEnum(req, 'entity_type', [
-                'circuit', 'bench', 'partHeard', 'serviceWeek', 
-                'otherPayment', 'ticket', 'medicalClaim', 
-                'generalRequest', 'securityRequest',
-                'visa', 'protocol', 'club', 'utility_memo', 
-                'consolidated_utility_memo', 'consolidated_fuel_memo',
-                'aide', 'sentry'
-            ] as const);
-            
-            const internal_approval_status = getQueryEnum(req, 'internal_approval_status', [
-                'pending', 'previewed', 'approved_internal', 'rejected_internal',
-                'changes_requested_internal', 'changes_ready'
-            ] as const);
-            
+            const entity_type = getQueryEnum(req, 'entity_type', VALID_ENTITY_TYPES);
+            const internal_approval_status = getQueryEnum(req, 'internal_approval_status', VALID_INTERNAL_STATUSES);
             const search = getQueryParam(req, 'search');
             const limit = getQueryNumber(req, 'limit');
             const offset = getQueryNumber(req, 'offset');
@@ -878,19 +911,8 @@ export class HelpdeskDocumentsController {
                 throw new AppError(401, 'User not authenticated');
             }
 
-            const requester_status = getQueryEnum(req, 'requester_status', [
-                'pending_approval', 'approved', 'rejected', 'changes_requested', 'in_revision'
-            ] as const);
-            
-            const entity_type = getQueryEnum(req, 'entity_type', [
-                'circuit', 'bench', 'partHeard', 'serviceWeek', 
-                'otherPayment', 'ticket', 'medicalClaim', 
-                'generalRequest', 'securityRequest',
-                'visa', 'protocol', 'club', 'utility_memo', 
-                'consolidated_utility_memo', 'consolidated_fuel_memo',
-                'aide', 'sentry'
-            ] as const);
-            
+            const requester_status = getQueryEnum(req, 'requester_status', VALID_REQUESTER_STATUSES);
+            const entity_type = getQueryEnum(req, 'entity_type', VALID_ENTITY_TYPES);
             const search = getQueryParam(req, 'search');
             const limit = getQueryNumber(req, 'limit');
             const offset = getQueryNumber(req, 'offset');
@@ -915,7 +937,6 @@ export class HelpdeskDocumentsController {
                     return acc;
                 }, {} as Record<string, number>),
                 can_resubmit: allDocs.filter(doc => doc.can_resubmit).length,
-                // ─── NEW: Stamp summary for requester ──────────────────────────
                 stamped_count: allDocs.filter(doc => doc.is_stamped).length,
                 signed_count: allDocs.filter(doc => doc.is_signed).length,
                 signed_and_stamped_count: allDocs.filter(doc => doc.is_signed && doc.is_stamped).length,
@@ -975,49 +996,43 @@ export class HelpdeskDocumentsController {
     static async link(req: Request, res: Response, next: NextFunction) {
         try {
             const id = getParam(req, 'id');
-            const { 
-                entity_type, 
-                entity_id, 
-                request_type, 
-                judge_name,
-                rank,
-                reporting_date,
-                officer_rank,
-                officer_name,
-                employment_number,
-                current_station,
-                current_unit,
-                proposed_assignment,
-                aide_status,
-                residence_location,
-                sentry_status,
-            } = req.body as LinkDocumentBody;
+            const body = req.body as LinkDocumentBody;
 
-            if (!entity_type) {
+            if (!body.entity_type) {
                 throw new AppError(400, 'Entity type is required');
             }
-            if (!entity_id) {
+            if (!body.entity_id) {
                 throw new AppError(400, 'Entity ID is required');
             }
 
-            const cleanedRank = rank === null ? undefined : rank;
-            const cleanedReportingDate = reporting_date === null ? undefined : reporting_date;
-            const cleanedOfficerRank = officer_rank === null ? undefined : officer_rank;
-            const cleanedOfficerName = officer_name === null ? undefined : officer_name;
-            const cleanedEmploymentNumber = employment_number === null ? undefined : employment_number;
-            const cleanedCurrentStation = current_station === null ? undefined : current_station;
-            const cleanedCurrentUnit = current_unit === null ? undefined : current_unit;
-            const cleanedProposedAssignment = proposed_assignment === null ? undefined : proposed_assignment;
-            const cleanedAideStatus = aide_status === null ? undefined : aide_status;
-            const cleanedResidenceLocation = residence_location === null ? undefined : residence_location;
-            const cleanedSentryStatus = sentry_status === null ? undefined : sentry_status;
+            const cleanedRank = body.rank === null ? undefined : body.rank;
+            const cleanedReportingDate = body.reporting_date === null ? undefined : body.reporting_date;
+            const cleanedOfficerRank = body.officer_rank === null ? undefined : body.officer_rank;
+            const cleanedOfficerName = body.officer_name === null ? undefined : body.officer_name;
+            const cleanedEmploymentNumber = body.employment_number === null ? undefined : body.employment_number;
+            const cleanedCurrentStation = body.current_station === null ? undefined : body.current_station;
+            const cleanedCurrentUnit = body.current_unit === null ? undefined : body.current_unit;
+            const cleanedProposedAssignment = body.proposed_assignment === null ? undefined : body.proposed_assignment;
+            const cleanedAideStatus = body.aide_status === null ? undefined : body.aide_status;
+            const cleanedResidenceLocation = body.residence_location === null ? undefined : body.residence_location;
+            const cleanedSentryStatus = body.sentry_status === null ? undefined : body.sentry_status;
+            
+            // ─── Conference fields ──────────────────────────────────────────────
+            const cleanedConferenceType = body.conference_type === null ? undefined : body.conference_type;
+            const cleanedStartDate = body.start_date === null ? undefined : body.start_date;
+            const cleanedEndDate = body.end_date === null ? undefined : body.end_date;
+            const cleanedNumberOfPax = body.number_of_pax === null ? undefined : body.number_of_pax;
+            const cleanedVenue = body.venue === null ? undefined : body.venue;
+            const cleanedLocation = body.location === null ? undefined : body.location;
+            const cleanedBudgetEstimate = body.budget_estimate === null ? undefined : body.budget_estimate;
+            const cleanedConferenceStatus = body.conference_status === null ? undefined : body.conference_status;
 
             const doc = await HelpdeskDocumentsService.linkToEntity(
                 id, 
-                entity_type, 
-                entity_id,
-                request_type,
-                judge_name,
+                body.entity_type, 
+                body.entity_id,
+                body.request_type,
+                body.judge_name,
                 cleanedRank,
                 cleanedReportingDate,
                 cleanedOfficerRank,
@@ -1028,7 +1043,15 @@ export class HelpdeskDocumentsController {
                 cleanedProposedAssignment,
                 cleanedAideStatus,
                 cleanedResidenceLocation,
-                cleanedSentryStatus
+                cleanedSentryStatus,
+                cleanedConferenceType,
+                cleanedStartDate,
+                cleanedEndDate,
+                cleanedNumberOfPax,
+                cleanedVenue,
+                cleanedLocation,
+                cleanedBudgetEstimate,
+                cleanedConferenceStatus
             );
 
             return sendSuccess(res, doc, 'Document linked successfully.');
@@ -1041,53 +1064,46 @@ export class HelpdeskDocumentsController {
 
     static async bulkLink(req: Request, res: Response, next: NextFunction) {
         try {
-            const { 
-                document_ids, 
-                entity_type, 
-                entity_id, 
-                request_type, 
-                judge_name,
-                rank,
-                reporting_date,
-                officer_rank,
-                officer_name,
-                employment_number,
-                current_station,
-                current_unit,
-                proposed_assignment,
-                aide_status,
-                residence_location,
-                sentry_status,
-            } = req.body as BulkLinkDocumentsBody;
+            const body = req.body as BulkLinkDocumentsBody;
 
-            if (!document_ids || document_ids.length === 0) {
+            if (!body.document_ids || body.document_ids.length === 0) {
                 throw new AppError(400, 'At least one document ID is required');
             }
-            if (!entity_type) {
+            if (!body.entity_type) {
                 throw new AppError(400, 'Entity type is required');
             }
-            if (!entity_id) {
+            if (!body.entity_id) {
                 throw new AppError(400, 'Entity ID is required');
             }
 
-            const cleanedRank = rank === null ? undefined : rank;
-            const cleanedReportingDate = reporting_date === null ? undefined : reporting_date;
-            const cleanedOfficerRank = officer_rank === null ? undefined : officer_rank;
-            const cleanedOfficerName = officer_name === null ? undefined : officer_name;
-            const cleanedEmploymentNumber = employment_number === null ? undefined : employment_number;
-            const cleanedCurrentStation = current_station === null ? undefined : current_station;
-            const cleanedCurrentUnit = current_unit === null ? undefined : current_unit;
-            const cleanedProposedAssignment = proposed_assignment === null ? undefined : proposed_assignment;
-            const cleanedAideStatus = aide_status === null ? undefined : aide_status;
-            const cleanedResidenceLocation = residence_location === null ? undefined : residence_location;
-            const cleanedSentryStatus = sentry_status === null ? undefined : sentry_status;
+            const cleanedRank = body.rank === null ? undefined : body.rank;
+            const cleanedReportingDate = body.reporting_date === null ? undefined : body.reporting_date;
+            const cleanedOfficerRank = body.officer_rank === null ? undefined : body.officer_rank;
+            const cleanedOfficerName = body.officer_name === null ? undefined : body.officer_name;
+            const cleanedEmploymentNumber = body.employment_number === null ? undefined : body.employment_number;
+            const cleanedCurrentStation = body.current_station === null ? undefined : body.current_station;
+            const cleanedCurrentUnit = body.current_unit === null ? undefined : body.current_unit;
+            const cleanedProposedAssignment = body.proposed_assignment === null ? undefined : body.proposed_assignment;
+            const cleanedAideStatus = body.aide_status === null ? undefined : body.aide_status;
+            const cleanedResidenceLocation = body.residence_location === null ? undefined : body.residence_location;
+            const cleanedSentryStatus = body.sentry_status === null ? undefined : body.sentry_status;
+            
+            // ─── Conference fields ──────────────────────────────────────────────
+            const cleanedConferenceType = body.conference_type === null ? undefined : body.conference_type;
+            const cleanedStartDate = body.start_date === null ? undefined : body.start_date;
+            const cleanedEndDate = body.end_date === null ? undefined : body.end_date;
+            const cleanedNumberOfPax = body.number_of_pax === null ? undefined : body.number_of_pax;
+            const cleanedVenue = body.venue === null ? undefined : body.venue;
+            const cleanedLocation = body.location === null ? undefined : body.location;
+            const cleanedBudgetEstimate = body.budget_estimate === null ? undefined : body.budget_estimate;
+            const cleanedConferenceStatus = body.conference_status === null ? undefined : body.conference_status;
 
             const result = await HelpdeskDocumentsService.bulkLinkToEntity(
-                document_ids,
-                entity_type,
-                entity_id,
-                request_type,
-                judge_name,
+                body.document_ids,
+                body.entity_type,
+                body.entity_id,
+                body.request_type,
+                body.judge_name,
                 cleanedRank,
                 cleanedReportingDate,
                 cleanedOfficerRank,
@@ -1098,7 +1114,15 @@ export class HelpdeskDocumentsController {
                 cleanedProposedAssignment,
                 cleanedAideStatus,
                 cleanedResidenceLocation,
-                cleanedSentryStatus
+                cleanedSentryStatus,
+                cleanedConferenceType,
+                cleanedStartDate,
+                cleanedEndDate,
+                cleanedNumberOfPax,
+                cleanedVenue,
+                cleanedLocation,
+                cleanedBudgetEstimate,
+                cleanedConferenceStatus
             );
 
             return sendSuccess(res, result, `${result.success.length} documents linked successfully.`);
@@ -1134,67 +1158,57 @@ export class HelpdeskDocumentsController {
 
     // ─── Delete Document ─────────────────────────────────────────────────────
 
-// ─── Delete Document ─────────────────────────────────────────────────────
+    static async remove(req: Request, res: Response, next: NextFunction) {
+        try {
+            const id = getParam(req, 'id');
+            const userId = (req as any).user?.id;
+            const userRole = (req as any).user?.role;
 
-
-static async remove(req: Request, res: Response, next: NextFunction) {
-    try {
-        const id = getParam(req, 'id');
-        const userId = (req as any).user?.id;
-        const userRole = (req as any).user?.role;
-
-        const doc = await HelpdeskDocumentsService.findById(id);
-        if (!doc) {
-            throw new AppError(404, 'Document not found');
-        }
-
-        if (!doc.is_active) {
-            throw new AppError(400, 'Document is already deleted');
-        }
-
-        const isOwner = doc.uploaded_by === userId;
-        const isDeptHead = userRole === 'dept_head';
-        const isSuperAdmin = userRole === 'super_admin';
-        const isStaff = userRole === 'staff';
-
-        // ─── Permission Matrix ───────────────────────────────────────────
-        // | Role        | Draft | Returned | Rejected | Pending | Approved |
-        // |-------------|-------|----------|----------|---------|----------|
-        // | Super Admin | ✅    | ✅       | ✅       | ✅      | ✅       |
-        // | Dept Head   | ✅    | ✅       | ✅       | ✅      | ✅       |
-        // | Staff (own) | ✅    | ✅       | ✅       | ✅      | ❌       |
-        // | Staff (other)| ❌   | ❌       | ❌       | ❌      | ❌       |
-        // ───────────────────────────────────────────────────────────────────
-
-        // Check if user has ANY delete permission
-        if (!isSuperAdmin && !isDeptHead && !isStaff) {
-            throw new AppError(403, 'You do not have permission to delete documents');
-        }
-
-        // Staff can only delete their own documents
-        if (isStaff && !isOwner) {
-            throw new AppError(403, 'You can only delete documents you uploaded');
-        }
-
-        // Staff can delete their own documents in these statuses
-        // ✅ Allowed: draft, returned, rejected, pending_approval
-        // ❌ Restricted: approved
-        if (isStaff) {
-            if (!['draft', 'returned', 'rejected', 'pending_approval'].includes(doc.status)) {
-                throw new AppError(403, 'You can only delete draft, returned, rejected, or pending approval documents. Approved documents must be deleted by a department head or super admin.');
+            const doc = await HelpdeskDocumentsService.findById(id);
+            if (!doc) {
+                throw new AppError(404, 'Document not found');
             }
+
+            if (!doc.is_active) {
+                throw new AppError(400, 'Document is already deleted');
+            }
+
+            const isOwner = doc.uploaded_by === userId;
+            const isDeptHead = userRole === 'dept_head';
+            const isSuperAdmin = userRole === 'super_admin';
+            const isStaff = userRole === 'staff';
+
+            // ─── Permission Matrix ───────────────────────────────────────────
+            // | Role        | Draft | Returned | Rejected | Pending | Approved |
+            // |-------------|-------|----------|----------|---------|----------|
+            // | Super Admin | ✅    | ✅       | ✅       | ✅      | ✅       |
+            // | Dept Head   | ✅    | ✅       | ✅       | ✅      | ✅       |
+            // | Staff (own) | ✅    | ✅       | ✅       | ✅      | ❌       |
+            // | Staff (other)| ❌   | ❌       | ❌       | ❌      | ❌       |
+            // ───────────────────────────────────────────────────────────────────
+
+            if (!isSuperAdmin && !isDeptHead && !isStaff) {
+                throw new AppError(403, 'You do not have permission to delete documents');
+            }
+
+            if (isStaff && !isOwner) {
+                throw new AppError(403, 'You can only delete documents you uploaded');
+            }
+
+            if (isStaff) {
+                if (!['draft', 'returned', 'rejected', 'pending_approval'].includes(doc.status)) {
+                    throw new AppError(403, 'You can only delete draft, returned, rejected, or pending approval documents. Approved documents must be deleted by a department head or super admin.');
+                }
+            }
+
+            await HelpdeskDocumentsService.delete(id);
+
+            return sendSuccess(res, null, 'Document deleted successfully.');
+        } catch (err) {
+            console.error('[DELETE] Error:', err);
+            next(err);
         }
-
-        // Dept head and super admin can delete any document
-
-        await HelpdeskDocumentsService.delete(id);
-
-        return sendSuccess(res, null, 'Document deleted successfully.');
-    } catch (err) {
-        console.error('[DELETE] Error:', err);
-        next(err);
     }
-}
 
     // ─── Hard Delete (Admin Only) ───────────────────────────────────────────
 

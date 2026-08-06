@@ -22,6 +22,7 @@ const documentEntityEnum = z.enum([
     'consolidated_fuel_memo',
     'aide',
     'sentry',
+    'conference',
 ]);
 
 // ─── DIAGNOSTIC: confirm which copy of this module the running server loaded ──
@@ -32,6 +33,7 @@ console.log('[SCHEMA-LOAD] helpdesk.documents.schema.ts', {
     documentEntityEnumValues: documentEntityEnum.options,
     hasConsolidatedUtility: documentEntityEnum.options.includes('consolidated_utility_memo'),
     hasConsolidatedFuel: documentEntityEnum.options.includes('consolidated_fuel_memo'),
+    hasConference: documentEntityEnum.options.includes('conference'),
 });
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -73,6 +75,26 @@ const requestTypeEnum = z.enum([
 const aideStatusEnum = z.enum(['pending', 'in_progress', 'rejected', 'attached']);
 
 const sentryStatusEnum = z.enum(['pending', 'active', 'resolved', 'rejected']);
+
+// ─── Conference Enums ─────────────────────────────────────────────────────────
+
+const conferenceStatusEnum = z.enum([
+    'draft',
+    'pending',
+    'approved',
+    'rejected',
+    'completed',
+    'cancelled'
+]);
+
+const conferenceTypeEnum = z.enum([
+    'judicial',
+    'administrative',
+    'training',
+    'workshop',
+    'seminar',
+    'other'
+]);
 
 const officerRankEnum = z.enum([
     'Police Constable (PC)',
@@ -152,6 +174,34 @@ export const uploadHelpdeskDocumentSchema = z.object({
         residence_location: z.string().max(200).optional().nullable(),
         sentry_status: z.string().pipe(sentryStatusEnum).optional().nullable(),
         
+        // ─── Conference Request Fields ──────────────────────────────────────────
+        conference_type: z.string().pipe(conferenceTypeEnum).optional().nullable(),
+        start_date: dateStringSchema.optional().nullable(),
+        end_date: dateStringSchema.optional().nullable(),
+        number_of_pax: z.preprocess(
+            (val) => {
+                if (typeof val === 'string') {
+                    const num = parseInt(val, 10);
+                    return isNaN(num) ? val : num;
+                }
+                return val;
+            },
+            z.number().int().positive().optional().nullable()
+        ),
+        venue: z.string().max(300).optional().nullable(),
+        location: z.string().max(300).optional().nullable(),
+        budget_estimate: z.preprocess(
+            (val) => {
+                if (typeof val === 'string') {
+                    const num = parseFloat(val);
+                    return isNaN(num) ? val : num;
+                }
+                return val;
+            },
+            z.number().positive().optional().nullable()
+        ),
+        conference_status: z.string().pipe(conferenceStatusEnum).optional().nullable(),
+        
         // ─── Legacy fields ──────────────────────────────────────────────────────
         rank: z.string().max(50).optional().nullable(),
         reporting_date: dateStringSchema.optional().nullable(),
@@ -214,6 +264,14 @@ export const listHelpdeskDocumentsSchema = z.object({
         // ─── Sentry Request Filters ──────────────────────────────────────────────
         residence_location: z.string().optional(),
         sentry_status: z.string().pipe(sentryStatusEnum).optional(),
+        
+        // ─── Conference Request Filters ──────────────────────────────────────────
+        conference_type: z.string().pipe(conferenceTypeEnum).optional(),
+        conference_status: z.string().pipe(conferenceStatusEnum).optional(),
+        start_date_from: dateStringSchema.optional(),
+        start_date_to: dateStringSchema.optional(),
+        location: z.string().optional(),
+        venue: z.string().optional(),
         
         // ─── Legacy fields ──────────────────────────────────────────────────────
         rank: z.string().optional(),
@@ -451,6 +509,34 @@ export const linkDocumentSchema = z.object({
         residence_location: z.string().max(200).optional().nullable(),
         sentry_status: z.string().pipe(sentryStatusEnum).optional().nullable(),
         
+        // ─── Conference Request Fields ──────────────────────────────────────────
+        conference_type: z.string().pipe(conferenceTypeEnum).optional().nullable(),
+        start_date: dateStringSchema.optional().nullable(),
+        end_date: dateStringSchema.optional().nullable(),
+        number_of_pax: z.preprocess(
+            (val) => {
+                if (typeof val === 'string') {
+                    const num = parseInt(val, 10);
+                    return isNaN(num) ? val : num;
+                }
+                return val;
+            },
+            z.number().int().positive().optional().nullable()
+        ),
+        venue: z.string().max(300).optional().nullable(),
+        location: z.string().max(300).optional().nullable(),
+        budget_estimate: z.preprocess(
+            (val) => {
+                if (typeof val === 'string') {
+                    const num = parseFloat(val);
+                    return isNaN(num) ? val : num;
+                }
+                return val;
+            },
+            z.number().positive().optional().nullable()
+        ),
+        conference_status: z.string().pipe(conferenceStatusEnum).optional().nullable(),
+        
         // ─── Legacy fields ──────────────────────────────────────────────────────
         rank: z.string().max(50).optional().nullable(),
         reporting_date: dateStringSchema.optional().nullable(),
@@ -527,6 +613,34 @@ export const bulkLinkDocumentsSchema = z.object({
         residence_location: z.string().max(200).optional().nullable(),
         sentry_status: z.string().pipe(sentryStatusEnum).optional().nullable(),
         
+        // ─── Conference Request Fields ──────────────────────────────────────────
+        conference_type: z.string().pipe(conferenceTypeEnum).optional().nullable(),
+        start_date: dateStringSchema.optional().nullable(),
+        end_date: dateStringSchema.optional().nullable(),
+        number_of_pax: z.preprocess(
+            (val) => {
+                if (typeof val === 'string') {
+                    const num = parseInt(val, 10);
+                    return isNaN(num) ? val : num;
+                }
+                return val;
+            },
+            z.number().int().positive().optional().nullable()
+        ),
+        venue: z.string().max(300).optional().nullable(),
+        location: z.string().max(300).optional().nullable(),
+        budget_estimate: z.preprocess(
+            (val) => {
+                if (typeof val === 'string') {
+                    const num = parseFloat(val);
+                    return isNaN(num) ? val : num;
+                }
+                return val;
+            },
+            z.number().positive().optional().nullable()
+        ),
+        conference_status: z.string().pipe(conferenceStatusEnum).optional().nullable(),
+        
         // ─── Legacy fields ──────────────────────────────────────────────────────
         rank: z.string().max(50).optional().nullable(),
         reporting_date: dateStringSchema.optional().nullable(),
@@ -569,6 +683,34 @@ export const batchUploadSchema = z.object({
                 // ─── Sentry Request Fields ──────────────────────────────────────────────
                 residence_location: z.string().max(200).optional().nullable(),
                 sentry_status: z.string().pipe(sentryStatusEnum).optional().nullable(),
+                
+                // ─── Conference Request Fields ──────────────────────────────────────────
+                conference_type: z.string().pipe(conferenceTypeEnum).optional().nullable(),
+                start_date: dateStringSchema.optional().nullable(),
+                end_date: dateStringSchema.optional().nullable(),
+                number_of_pax: z.preprocess(
+                    (val) => {
+                        if (typeof val === 'string') {
+                            const num = parseInt(val, 10);
+                            return isNaN(num) ? val : num;
+                        }
+                        return val;
+                    },
+                    z.number().int().positive().optional().nullable()
+                ),
+                venue: z.string().max(300).optional().nullable(),
+                location: z.string().max(300).optional().nullable(),
+                budget_estimate: z.preprocess(
+                    (val) => {
+                        if (typeof val === 'string') {
+                            const num = parseFloat(val);
+                            return isNaN(num) ? val : num;
+                        }
+                        return val;
+                    },
+                    z.number().positive().optional().nullable()
+                ),
+                conference_status: z.string().pipe(conferenceStatusEnum).optional().nullable(),
                 
                 // ─── Legacy fields ──────────────────────────────────────────────────────
                 rank: z.string().max(50).optional().nullable(),
@@ -797,6 +939,10 @@ export type RequesterDashboardQuery = z.infer<typeof requesterDashboardSchema>['
 // ─── NEW: Stamp Type ──────────────────────────────────────────────────────────
 export type StampType = z.infer<typeof stampTypeEnum>;
 
+// ─── Conference Types ─────────────────────────────────────────────────────────
+export type ConferenceStatus = z.infer<typeof conferenceStatusEnum>;
+export type ConferenceType = z.infer<typeof conferenceTypeEnum>;
+
 // Export enums for use in routes
 export {
     documentFormatEnum,
@@ -808,6 +954,8 @@ export {
     requestTypeEnum,
     aideStatusEnum,
     sentryStatusEnum,
+    conferenceStatusEnum,
+    conferenceTypeEnum,
     officerRankEnum,
     unitTypeEnum,
     dateStringSchema,

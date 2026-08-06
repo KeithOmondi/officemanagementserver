@@ -2,7 +2,6 @@
 
 import { pool } from '../../config/db';
 import { AppError } from '../../utils/response';
-//import crypto from 'crypto';
 import { uploadToCloudinary, deleteFromCloudinary } from '../../config/cloudinary';
 import type {
   Document,
@@ -25,6 +24,7 @@ import type {
   BringUpSummary,
   BringUpStatus,
   DocumentAttachment,
+  FollowUpSummary,
 } from './documents.types';
 import type {
   CreateComposedDocumentInput,
@@ -44,13 +44,9 @@ import type {
   CancelFollowUpInput,
   AddFollowUpCommentInput,
   FollowUpFilters,
-  FileAwayFollowUpInput,
   SetBringUpInput,
   UpdateBringUpInput,
-  CompleteBringUpInput,
   BringUpFilters,
-  SendFollowUpInput,
-  FileAwayBringUpInput,
 } from './documents.validator';
 import axios from 'axios';
 import { generateOTP } from '../../utils/SendOTP';
@@ -2227,7 +2223,7 @@ export class DocumentService {
   }
 
   // ════════════════════════════════════════════════════════════════════════════
-  //  BRING UP OPERATIONS
+  //  BRING UP OPERATIONS (Super Admin only - Date-based reminders)
   // ════════════════════════════════════════════════════════════════════════════
 
   static async setBringUp(
@@ -2242,6 +2238,7 @@ export class DocumentService {
       throw new AppError(404, 'Document not found');
     }
 
+    // If there's an existing bring up, auto-complete it
     if (doc.bring_up_date && !doc.bring_up_completed_at) {
       await this.completePreviousBringUp(documentId, userId);
     }
@@ -2290,6 +2287,7 @@ export class DocumentService {
         ]
       );
 
+      // If document was completed or filed, move it back to pending review
       if (doc.status === 'completed' || doc.status === 'filed') {
         await client.query(
           `UPDATE documents SET status = 'pending_review' WHERE id = $1`,
@@ -2355,6 +2353,7 @@ export class DocumentService {
     try {
       await client.query('BEGIN');
 
+      // Deactivate old history entry
       await client.query(
         `UPDATE bring_up_history SET is_active = false WHERE document_id = $1 AND is_active = true`,
         [documentId]
@@ -2426,243 +2425,92 @@ export class DocumentService {
     }
   }
 
-  static async completeBringUp(
-    documentId: string,
-    userId: string,
-    notes?: string
-  ): Promise<Document> {
-    console.log(`[BringUp] Completing bring up for document ${documentId}`);
+static async completeBringUp(
+  documentId: string,
+  userId: string,
+  notes?: string
+): Promise<Document> {
+  console.log(`[BringUp] Completing bring up for document ${documentId}`);
 
-    const doc = await this.findById(documentId);
-    if (!doc) {
-      throw new AppError(404, 'Document not found');
-    }
+  const doc = await this.findById(documentId);
+  if (!doc) {
+    throw new AppError(404, 'Document not found');
+  }
 
-    if (!doc.bring_up_date) {
-      throw new AppError(400, 'No bring up date set for this document');
-    }
+  if (!doc.bring_up_date) {
+    throw new AppError(400, 'No bring up date set for this document');
+  }
 
-    if (doc.bring_up_completed_at) {
-      throw new AppError(409, 'Bring up already completed');
-    }
+  if (doc.bring_up_completed_at) {
+    throw new AppError(409, 'Bring up already completed');
+  }
 
-    const { rows: userRows } = await pool.query(
-      `SELECT full_name FROM users WHERE id = $1 AND is_active = true`,
-      [userId]
+  const { rows: userRows } = await pool.query(
+    `SELECT full_name FROM users WHERE id = $1 AND is_active = true`,
+    [userId]
+  );
+  const userName = userRows[0]?.full_name || userId;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Update bring up fields AND document status
+    await client.query(
+      `UPDATE documents
+       SET bring_up_completed_at = NOW(),
+           bring_up_completed_by = $1,
+           bring_up_completed_by_name = $2,
+           bring_up_notes = COALESCE($3, bring_up_notes),
+           status = $4,
+           updated_at = NOW()
+       WHERE id = $5`,
+      [userId, userName, notes, 'completed', documentId]
     );
-    const userName = userRows[0]?.full_name || userId;
 
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
+    // Update bring up history
+    await client.query(
+      `UPDATE bring_up_history
+       SET completed_at = NOW(),
+           completed_by = $1,
+           completed_by_name = $2,
+           completion_notes = $3,
+           is_active = false
+       WHERE document_id = $4 AND is_active = true`,
+      [userId, userName, notes, documentId]
+    );
 
-      await client.query(
-        `UPDATE documents
-         SET bring_up_completed_at = NOW(),
-             bring_up_completed_by = $1,
-             bring_up_completed_by_name = $2,
-             bring_up_notes = COALESCE($3, bring_up_notes),
-             updated_at = NOW()
-         WHERE id = $4`,
-        [userId, userName, notes, documentId]
-      );
+    await this.logFlow(
+      client,
+      documentId,
+      'bring_up_completed',
+      userId,
+      doc.created_by,
+      `Bring up completed${notes ? ` - ${notes}` : ''}`
+    );
 
-      await client.query(
-        `UPDATE bring_up_history
-         SET completed_at = NOW(),
-             completed_by = $1,
-             completed_by_name = $2,
-             completion_notes = $3,
-             is_active = false
-         WHERE document_id = $4 AND is_active = true`,
-        [userId, userName, notes, documentId]
-      );
+    await client.query('COMMIT');
 
-      await this.logFlow(
-        client,
-        documentId,
-        'bring_up_completed',
-        userId,
+    if (doc.created_by) {
+      await this.createNotification(
         doc.created_by,
-        `Bring up completed${notes ? ` - ${notes}` : ''}`
+        `Bring Up Completed: ${doc.title}`,
+        `The bring up for "${doc.title}" has been completed by ${userName}.${notes ? `\n\nNotes: ${notes}` : ''}`,
+        'bring_up',
+        documentId
       );
-
-      await client.query('COMMIT');
-
-      if (doc.created_by) {
-        await this.createNotification(
-          doc.created_by,
-          `Bring Up Completed: ${doc.title}`,
-          `The bring up for "${doc.title}" has been completed by ${userName}.${notes ? `\n\nNotes: ${notes}` : ''}`,
-          'bring_up',
-          documentId
-        );
-      }
-
-      console.log(`[BringUp] Bring up completed successfully for document ${documentId}`);
-      return (await this.findById(documentId))!;
-    } catch (err) {
-      await client.query('ROLLBACK');
-      console.error('[BringUp] Error completing bring up:', err);
-      throw err;
-    } finally {
-      client.release();
     }
+
+    console.log(`[BringUp] Bring up completed successfully for document ${documentId}`);
+    return (await this.findById(documentId))!;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('[BringUp] Error completing bring up:', err);
+    throw err;
+  } finally {
+    client.release();
   }
-
-  // ─── NEW: File Away Bring Up ──────────────────────────────────────────────────
-
-  static async fileAwayBringUp(
-    documentId: string,
-    userId: string,
-    input: {
-      notes?: string;
-      completion_notes?: string;
-      return_to_helpdesk?: boolean;
-    }
-  ): Promise<Document> {
-    console.log(`[BringUp] Filing away bring up for document ${documentId}`);
-
-    const doc = await this.findById(documentId);
-    if (!doc) {
-      throw new AppError(404, 'Document not found');
-    }
-
-    if (!doc.bring_up_date) {
-      throw new AppError(400, 'No bring up date set for this document');
-    }
-
-    if (doc.bring_up_completed_at) {
-      throw new AppError(409, 'Bring up already completed');
-    }
-
-    const { rows: userRows } = await pool.query(
-      `SELECT full_name FROM users WHERE id = $1 AND is_active = true`,
-      [userId]
-    );
-    const userName = userRows[0]?.full_name || userId;
-
-    let returnToUserId: string | null = null;
-    let returnToUserName: string | null = null;
-
-    if (doc.active_mark) {
-      returnToUserId = doc.active_mark.marked_by;
-      const { rows: markerRows } = await pool.query(
-        `SELECT full_name FROM users WHERE id = $1 AND is_active = true`,
-        [returnToUserId]
-      );
-      returnToUserName = markerRows[0]?.full_name || null;
-    }
-
-    if (!returnToUserId) {
-      returnToUserId = doc.created_by;
-      const { rows: creatorRows } = await pool.query(
-        `SELECT full_name FROM users WHERE id = $1 AND is_active = true`,
-        [returnToUserId]
-      );
-      returnToUserName = creatorRows[0]?.full_name || null;
-    }
-
-    const shouldReturn = input.return_to_helpdesk !== false;
-
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-
-      await client.query(
-        `UPDATE documents
-         SET bring_up_completed_at = NOW(),
-             bring_up_completed_by = $1,
-             bring_up_completed_by_name = $2,
-             bring_up_notes = COALESCE($3, bring_up_notes),
-             updated_at = NOW()
-         WHERE id = $4`,
-        [userId, userName, input.completion_notes || input.notes, documentId]
-      );
-
-      await client.query(
-        `UPDATE bring_up_history
-         SET completed_at = NOW(),
-             completed_by = $1,
-             completed_by_name = $2,
-             completion_notes = $3,
-             is_active = false
-         WHERE document_id = $4 AND is_active = true`,
-        [userId, userName, input.completion_notes || input.notes || 'Filed away', documentId]
-      );
-
-      if (shouldReturn && returnToUserId) {
-        if (doc.active_mark) {
-          await client.query(
-            `UPDATE document_marks 
-             SET is_active = false 
-             WHERE document_id = $1 AND is_active = true`,
-            [documentId]
-          );
-        }
-
-        await client.query(
-          `UPDATE documents
-           SET status = 'pending_review',
-               assigned_to = $1,
-               department_id = NULL,
-               updated_at = NOW()
-           WHERE id = $2`,
-          [returnToUserId, documentId]
-        );
-
-        await this.logFlow(
-          client,
-          documentId,
-          'bring_up_filed_away',
-          userId,
-          returnToUserId,
-          `Bring up filed away and returned to ${returnToUserName || 'helpdesk'}.${input.completion_notes ? ` Notes: ${input.completion_notes}` : ''}`
-        );
-
-        await this.createNotification(
-          returnToUserId,
-          `📁 Document Returned: ${doc.title}`,
-          `Document "${doc.title}" has been filed away from bring up and returned to you.\n\n` +
-          `Filed away by: ${userName}\n` +
-          `Notes: ${input.completion_notes || input.notes || 'None'}`,
-          'bring_up',
-          documentId
-        );
-      } else {
-        await this.logFlow(
-          client,
-          documentId,
-          'bring_up_filed_away',
-          userId,
-          null,
-          `Bring up filed away${input.completion_notes ? ` - ${input.completion_notes}` : ''}`
-        );
-      }
-
-      await client.query('COMMIT');
-
-      if (doc.created_by && doc.created_by !== returnToUserId) {
-        await this.createNotification(
-          doc.created_by,
-          `✅ Bring Up Filed Away: ${doc.title}`,
-          `The bring up for "${doc.title}" has been filed away by ${userName}.${input.completion_notes ? `\n\nNotes: ${input.completion_notes}` : ''}`,
-          'bring_up',
-          documentId
-        );
-      }
-
-      console.log(`[BringUp] Bring up filed away successfully for document ${documentId}`);
-      return (await this.findById(documentId))!;
-
-    } catch (err) {
-      await client.query('ROLLBACK');
-      console.error('[BringUp] Error filing away bring up:', err);
-      throw err;
-    } finally {
-      client.release();
-    }
-  }
+}
 
   private static async completePreviousBringUp(documentId: string, userId: string): Promise<void> {
     console.log(`[BringUp] Auto-completing previous bring up for document ${documentId}`);
@@ -2831,87 +2679,75 @@ export class DocumentService {
     };
   }
 
- static async getBringUpSummary(userId?: string): Promise<BringUpSummary> {
-  const now = new Date().toISOString();
-  const today = new Date().toISOString().split('T')[0];
-  const nowDate = new Date();
-  const startOfWeek = new Date(nowDate);
-  startOfWeek.setDate(nowDate.getDate() - nowDate.getDay());
-  const endOfWeek = new Date(nowDate);
-  endOfWeek.setDate(nowDate.getDate() + (6 - nowDate.getDay()));
-  const startOfWeekStr = startOfWeek.toISOString().split('T')[0];
-  const endOfWeekStr = endOfWeek.toISOString().split('T')[0];
+  static async getBringUpSummary(userId?: string): Promise<BringUpSummary> {
+    const now = new Date().toISOString();
+    const today = new Date().toISOString().split('T')[0];
+    const nowDate = new Date();
+    const startOfWeek = new Date(nowDate);
+    startOfWeek.setDate(nowDate.getDate() - nowDate.getDay());
+    const endOfWeek = new Date(nowDate);
+    endOfWeek.setDate(nowDate.getDate() + (6 - nowDate.getDay()));
+    const startOfWeekStr = startOfWeek.toISOString().split('T')[0];
+    const endOfWeekStr = endOfWeek.toISOString().split('T')[0];
 
-  const conditions: string[] = ['d.is_active = true', 'd.bring_up_date IS NOT NULL'];
-  const values: unknown[] = [];
-  let p = 1;
+    const conditions: string[] = ['d.is_active = true', 'd.bring_up_date IS NOT NULL'];
+    const values: unknown[] = [];
+    let p = 1;
 
-  if (userId) {
-    conditions.push(`(d.assigned_to = $${p} OR d.created_by = $${p + 1})`);
-    values.push(userId, userId);
-    p += 2;
+    if (userId) {
+      conditions.push(`(d.assigned_to = $${p} OR d.created_by = $${p + 1})`);
+      values.push(userId, userId);
+      p += 2;
+    }
+
+    const where = `WHERE ${conditions.join(' AND ')}`;
+
+    const { rows } = await pool.query(
+      `SELECT 
+         COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NULL AND d.bring_up_date >= $1) AS total_pending,
+         COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NULL AND d.bring_up_date < $1) AS total_overdue,
+         COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NOT NULL) AS total_completed,
+         COUNT(*) FILTER (WHERE DATE(d.bring_up_date) = $2) AS due_today,
+         COUNT(*) FILTER (WHERE DATE(d.bring_up_date) BETWEEN $3 AND $4) AS due_this_week,
+         COUNT(*) FILTER (WHERE d.assigned_to IS NOT NULL AND d.bring_up_completed_at IS NULL AND d.bring_up_date >= $1) AS my_pending,
+         COUNT(*) FILTER (WHERE d.assigned_to IS NOT NULL AND d.bring_up_completed_at IS NULL AND d.bring_up_date < $1) AS my_overdue
+       FROM documents d
+       ${where}`,
+      [now, today, startOfWeekStr, endOfWeekStr, ...values]
+    );
+
+    const { rows: deptRows } = await pool.query(
+      `SELECT 
+         d.department_id,
+         dep.name AS department_name,
+         COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NULL AND d.bring_up_date >= $1) AS pending,
+         COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NULL AND d.bring_up_date < $1) AS overdue
+       FROM documents d
+       LEFT JOIN departments dep ON dep.id = d.department_id
+       WHERE d.is_active = true AND d.bring_up_date IS NOT NULL
+       GROUP BY d.department_id, dep.name
+       ORDER BY pending DESC`,
+      [now]
+    );
+
+    const row = rows[0] || {};
+
+    return {
+      total_pending: parseInt(row.total_pending || '0', 10),
+      total_overdue: parseInt(row.total_overdue || '0', 10),
+      total_completed: parseInt(row.total_completed || '0', 10),
+      due_today: parseInt(row.due_today || '0', 10),
+      due_this_week: parseInt(row.due_this_week || '0', 10),
+      by_department: deptRows.map(r => ({
+        department_id: r.department_id || 'unassigned',
+        department_name: r.department_name || 'Unassigned',
+        pending: parseInt(r.pending || '0', 10),
+        overdue: parseInt(r.overdue || '0', 10),
+      })),
+      my_pending: parseInt(row.my_pending || '0', 10),
+      my_overdue: parseInt(row.my_overdue || '0', 10),
+    };
   }
-
-  const where = `WHERE ${conditions.join(' AND ')}`;
-
-  const { rows } = await pool.query(
-    `SELECT 
-       COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NULL AND d.bring_up_date >= $1) AS total_pending,
-       COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NULL AND d.bring_up_date < $1) AS total_overdue,
-       COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NOT NULL) AS total_completed,
-       COUNT(*) FILTER (WHERE DATE(d.bring_up_date) = $2) AS due_today,
-       COUNT(*) FILTER (WHERE DATE(d.bring_up_date) BETWEEN $3 AND $4) AS due_this_week,
-       COUNT(*) FILTER (WHERE d.assigned_to IS NOT NULL AND d.bring_up_completed_at IS NULL AND d.bring_up_date >= $1) AS my_pending,
-       COUNT(*) FILTER (WHERE d.assigned_to IS NOT NULL AND d.bring_up_completed_at IS NULL AND d.bring_up_date < $1) AS my_overdue
-     FROM documents d
-     ${where}`,
-    [now, today, startOfWeekStr, endOfWeekStr, ...values]
-  );
-
-  const { rows: deptRows } = await pool.query(
-    `SELECT 
-       d.department_id,
-       dep.name AS department_name,
-       COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NULL AND d.bring_up_date >= $1) AS pending,
-       COUNT(*) FILTER (WHERE d.bring_up_completed_at IS NULL AND d.bring_up_date < $1) AS overdue
-     FROM documents d
-     LEFT JOIN departments dep ON dep.id = d.department_id
-     WHERE d.is_active = true AND d.bring_up_date IS NOT NULL
-     GROUP BY d.department_id, dep.name
-     ORDER BY pending DESC`,
-    [now]
-  );
-
-  const { rows: filedAwayRows } = await pool.query(
-    `SELECT COUNT(*) AS total_filed_away
-     FROM documents d
-     WHERE d.is_active = true 
-       AND d.bring_up_date IS NOT NULL 
-       AND d.bring_up_completed_at IS NOT NULL
-       AND d.bring_up_completed_by_name = 'Filed Away'`,
-    []
-  );
-
-  const row = rows[0] || {};
-  const filedAwayRow = filedAwayRows[0] || {};
-
-  return {
-    total_pending: parseInt(row.total_pending || '0', 10),
-    total_overdue: parseInt(row.total_overdue || '0', 10),
-    total_completed: parseInt(row.total_completed || '0', 10),
-    total_filed_away: parseInt(filedAwayRow.total_filed_away || '0', 10),
-    due_today: parseInt(row.due_today || '0', 10),
-    due_this_week: parseInt(row.due_this_week || '0', 10),
-    by_department: deptRows.map(r => ({
-      department_id: r.department_id || 'unassigned',
-      department_name: r.department_name || 'Unassigned',
-      pending: parseInt(r.pending || '0', 10),
-      overdue: parseInt(r.overdue || '0', 10),
-    })),
-    my_pending: parseInt(row.my_pending || '0', 10),
-    my_overdue: parseInt(row.my_overdue || '0', 10),
-  };
-}
 
   static async getBringUpHistory(documentId: string): Promise<BringUpHistoryEntry[]> {
     const { rows } = await pool.query(
@@ -2942,7 +2778,8 @@ export class DocumentService {
        FROM documents d
        WHERE d.is_active = true
          AND d.bring_up_date IS NOT NULL
-         AND d.bring_up_completed_at IS NULL         AND DATE(d.bring_up_date) = $1`,
+         AND d.bring_up_completed_at IS NULL
+         AND DATE(d.bring_up_date) = $1`,
       [today]
     );
 
@@ -3029,10 +2866,8 @@ export class DocumentService {
     return { dueToday: dueTodayCount, overdue: overdueCount };
   }
 
- 
-
   // ════════════════════════════════════════════════════════════════════════════
-  //  FOLLOW-UP OPERATIONS
+  //  FOLLOW-UP OPERATIONS (Super Admin ↔ User communication)
   // ════════════════════════════════════════════════════════════════════════════
 
   static async sendFollowUp(
@@ -3044,7 +2879,7 @@ export class DocumentService {
     },
     createdBy: string
   ): Promise<FollowUp> {
-    console.log('[FollowUp] Sending follow-up (simplified)');
+    console.log('[FollowUp] Sending follow-up');
 
     const doc = await this.findById(input.document_id);
     if (!doc) {
@@ -3114,7 +2949,7 @@ export class DocumentService {
     input: CreateFollowUpInput,
     createdBy: string
   ): Promise<FollowUp> {
-    console.log('[FollowUp] Creating new follow-up');
+    console.log('[FollowUp] Creating new follow-up with due date');
 
     const doc = await this.findById(input.document_id);
     if (!doc) {
@@ -3128,8 +2963,6 @@ export class DocumentService {
     if (!userRows.length) {
       throw new AppError(400, 'Assigned user not found or inactive');
     }
-
-    const status = input.due_date ? 'pending' : 'filed_away';
 
     const client = await pool.connect();
     try {
@@ -3148,7 +2981,7 @@ export class DocumentService {
           createdBy,
           input.due_date || null,
           input.priority || 'normal',
-          status,
+          input.due_date ? 'pending' : 'pending', // Always pending if it has a due date
         ]
       );
 
@@ -3157,12 +2990,10 @@ export class DocumentService {
       await this.logFlow(
         client,
         input.document_id,
-        status === 'filed_away' ? 'follow_up_filed_away' : 'follow_up_created',
+        'follow_up_created',
         createdBy,
         input.assigned_to,
-        status === 'filed_away' 
-          ? `Follow-up filed away: ${input.notes}`
-          : `Follow-up created: ${input.notes}`
+        `Follow-up created: ${input.notes}`
       );
 
       await client.query('COMMIT');
@@ -3173,68 +3004,14 @@ export class DocumentService {
         input.document_id,
         followUpId,
         input.notes,
-        status === 'filed_away' ? 'filed_away' : 'created'
+        'created'
       );
 
-      console.log(`[FollowUp] Follow-up created successfully with ID: ${followUpId}, status: ${status}`);
+      console.log(`[FollowUp] Follow-up created successfully with ID: ${followUpId}`);
       return (await this.getFollowUpById(followUpId))!;
     } catch (err) {
       await client.query('ROLLBACK');
       console.error('[FollowUp] Error creating follow-up:', err);
-      throw err;
-    } finally {
-      client.release();
-    }
-  }
-
-  static async fileAwayFollowUp(
-    input: FileAwayFollowUpInput,
-    userId: string
-  ): Promise<FollowUp> {
-    console.log('[FollowUp] Filing away follow-up');
-
-    const doc = await this.findById(input.document_id);
-    if (!doc) {
-      throw new AppError(404, 'Document not found');
-    }
-
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-
-      const { rows } = await client.query(
-        `INSERT INTO follow_ups
-           (document_id, mark_id, notes, assigned_to, created_by, due_date, priority, status, completion_notes)
-         VALUES ($1, $2, $3, $4, $5, NULL, 'normal', 'filed_away', $6)
-         RETURNING id`,
-        [
-          input.document_id,
-          input.mark_id || null,
-          input.notes.trim(),
-          userId,
-          userId,
-          input.completion_notes?.trim() || input.notes.trim(),
-        ]
-      );
-
-      const followUpId = rows[0].id;
-
-      await this.logFlow(
-        client,
-        input.document_id,
-        'follow_up_filed_away',
-        userId,
-        null,
-        `Follow-up filed away: ${input.notes}`
-      );
-
-      await client.query('COMMIT');
-
-      console.log(`[FollowUp] Follow-up filed away successfully with ID: ${followUpId}`);
-      return (await this.getFollowUpById(followUpId))!;
-    } catch (err) {
-      await client.query('ROLLBACK');
-      console.error('[FollowUp] Error filing away follow-up:', err);
       throw err;
     } finally {
       client.release();
@@ -3253,7 +3030,6 @@ export class DocumentService {
       due_to,
       search,
       active_only,
-      filed_only,
       page = 1,
       limit = 20,
       sort_by = 'due_date',
@@ -3269,11 +3045,7 @@ export class DocumentService {
     let p = 1;
 
     if (active_only) {
-      conditions.push(`fu.due_date IS NOT NULL AND fu.status IN ('pending', 'in_progress')`);
-    }
-    
-    if (filed_only) {
-      conditions.push(`(fu.due_date IS NULL OR fu.status = 'filed_away')`);
+      conditions.push(`fu.status IN ('pending', 'in_progress')`);
     }
 
     if (document_id) {
@@ -3442,10 +3214,6 @@ export class DocumentService {
       values.push(input.priority);
     }
     if (input.status !== undefined) {
-      if (input.status === 'filed_away') {
-        updates.push(`due_date = $${p++}`);
-        values.push(null);
-      }
       updates.push(`status = $${p++}`);
       values.push(input.status);
     }
@@ -3512,36 +3280,62 @@ export class DocumentService {
       throw new AppError(403, 'Only the assigned user or a super admin can complete this follow-up');
     }
 
-    await pool.query(
-      `UPDATE follow_ups
-       SET status = 'completed',
-           completed_at = NOW(),
-           completion_notes = COALESCE($1, notes),
-           updated_at = NOW()
-       WHERE id = $2`,
-      [input.completion_notes?.trim() || null, followUpId]
-    );
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
 
-    await this.logFlow(
-      pool,
-      existing.document_id,
-      'follow_up_completed',
-      userId,
-      existing.created_by,
-      `Follow-up completed: ${existing.notes}`
-    );
+      // Mark follow-up as completed
+      await client.query(
+        `UPDATE follow_ups
+         SET status = 'completed',
+             completed_at = NOW(),
+             completion_notes = $1,
+             updated_at = NOW()
+         WHERE id = $2`,
+        [input.completion_notes.trim(), followUpId]
+      );
 
-    await this.createFollowUpNotification(
-      existing.created_by,
-      userId,
-      existing.document_id,
-      followUpId,
-      existing.notes,
-      'completed'
-    );
+      // Return document to the user who created the follow-up
+      await client.query(
+        `UPDATE documents
+         SET assigned_to = $1,
+             status = 'pending_review',
+             updated_at = NOW()
+         WHERE id = $2`,
+        [existing.created_by, existing.document_id]
+      );
 
-    console.log(`[FollowUp] Follow-up ${followUpId} completed successfully`);
-    return (await this.getFollowUpById(followUpId))!;
+      await this.logFlow(
+        client,
+        existing.document_id,
+        'follow_up_completed',
+        userId,
+        existing.created_by,
+        `Follow-up completed and returned to user. Notes: ${input.completion_notes}`
+      );
+
+      await client.query('COMMIT');
+
+      // Notify the user who created the follow-up that it's complete and document is returned
+      await this.createFollowUpNotification(
+        existing.created_by,
+        userId,
+        existing.document_id,
+        followUpId,
+        existing.notes,
+        'completed',
+        input.completion_notes
+      );
+
+      console.log(`[FollowUp] Follow-up ${followUpId} completed and document returned to user ${existing.created_by}`);
+      return (await this.getFollowUpById(followUpId))!;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      console.error('[FollowUp] Error completing follow-up:', err);
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   static async cancelFollowUp(
@@ -3675,7 +3469,7 @@ export class DocumentService {
     documentId: string,
     followUpId: string,
     notes: string,
-    action: 'created' | 'completed' | 'cancelled' | 'updated' | 'filed_away',
+    action: 'created' | 'completed' | 'cancelled' | 'updated',
     reason?: string
   ): Promise<void> {
     try {
@@ -3687,25 +3481,28 @@ export class DocumentService {
 
       const actionMessages = {
         created: `created a follow-up for you. Notes: "${notes}"`,
-        completed: `has completed the follow-up. Notes: "${notes}"`,
+        completed: `has completed the follow-up. Notes: "${notes}"${reason ? `\n\nCompletion Notes: ${reason}` : ''}`,
         cancelled: `has cancelled the follow-up.${reason ? ` Reason: ${reason}` : ''}`,
         updated: `has updated the follow-up. Notes: "${notes}"`,
-        filed_away: `has filed away the follow-up. Notes: "${notes}"`,
       };
+
+      const link = `/documents/${documentId}`;
+      const message = `${actorName} ${actionMessages[action]}`;
 
       await NotificationsService.createNotification({
         user_id: userId,
         type_name: 'follow_up',
         title: `Follow-up ${action}: ${notes.slice(0, 50)}${notes.length > 50 ? '...' : ''}`,
-        message: `${actorName} ${actionMessages[action]}`,
-        icon: 'Clipboard',
-        color: action === 'created' ? '#2563eb' : action === 'completed' ? '#16a34a' : action === 'filed_away' ? '#6b7280' : '#dc2626',
-        link: `/documents/${documentId}?followUp=${followUpId}`,
+        message,
+        icon: action === 'completed' ? 'CheckCircle' : 'Clipboard',
+        color: action === 'completed' ? '#16a34a' : action === 'cancelled' ? '#dc2626' : '#2563eb',
+        link,
         priority: 'high',
         metadata: {
           document_id: documentId,
           follow_up_id: followUpId,
           action,
+          completion_notes: reason,
         },
         send_email: true,
       });
@@ -3744,7 +3541,7 @@ export class DocumentService {
             message: `Follow-up "${followUp.notes}" is due today.`,
             icon: 'Clock',
             color: '#2563eb',
-            link: `/documents/${followUp.document_id}?followUp=${followUp.id}`,
+            link: `/documents/${followUp.document_id}`,
             priority: 'high',
             metadata: {
               document_id: followUp.document_id,
@@ -3772,7 +3569,7 @@ export class DocumentService {
             message: `Follow-up "${followUp.notes}" was due on ${new Date(followUp.due_date).toLocaleDateString()} and is now overdue.`,
             icon: 'AlertTriangle',
             color: '#dc2626',
-            link: `/documents/${followUp.document_id}?followUp=${followUp.id}`,
+            link: `/documents/${followUp.document_id}`,
             priority: 'urgent',
             metadata: {
               document_id: followUp.document_id,
@@ -3794,35 +3591,27 @@ export class DocumentService {
     return { dueToday: dueTodayCount, overdue: overdueCount };
   }
 
-  static async getFollowUpSummary(userId: string): Promise<{ 
-    pending: number; 
-    overdue: number; 
-    completed: number; 
-    filed_away: number; 
-    total: number;
-    active: number;
-  }> {
+  static async getFollowUpSummary(userId: string): Promise<FollowUpSummary> {
     const { rows } = await pool.query(
       `SELECT 
-         COUNT(*) FILTER (WHERE fu.status = 'pending' AND fu.due_date IS NOT NULL) AS pending,
-         COUNT(*) FILTER (WHERE fu.status IN ('pending', 'in_progress') AND fu.due_date IS NOT NULL AND fu.due_date < NOW()) AS overdue,
+         COUNT(*) FILTER (WHERE fu.status = 'pending') AS pending,
+         COUNT(*) FILTER (WHERE fu.status = 'in_progress') AS in_progress,
          COUNT(*) FILTER (WHERE fu.status = 'completed') AS completed,
-         COUNT(*) FILTER (WHERE fu.status = 'filed_away' OR fu.due_date IS NULL) AS filed_away,
-         COUNT(*) AS total,
-         COUNT(*) FILTER (WHERE fu.status IN ('pending', 'in_progress')) AS active
+         COUNT(*) FILTER (WHERE fu.status IN ('pending', 'in_progress') AND fu.due_date IS NOT NULL AND fu.due_date < NOW()) AS overdue,
+         COUNT(*) AS total
        FROM follow_ups fu
        WHERE fu.is_active = true 
          AND fu.assigned_to = $1`,
       [userId]
     );
 
+    const row = rows[0] || {};
     return {
-      pending: parseInt(rows[0]?.pending || '0', 10),
-      overdue: parseInt(rows[0]?.overdue || '0', 10),
-      completed: parseInt(rows[0]?.completed || '0', 10),
-      filed_away: parseInt(rows[0]?.filed_away || '0', 10),
-      total: parseInt(rows[0]?.total || '0', 10),
-      active: parseInt(rows[0]?.active || '0', 10),
+      pending: parseInt(row.pending || '0', 10),
+      in_progress: parseInt(row.in_progress || '0', 10),
+      completed: parseInt(row.completed || '0', 10),
+      overdue: parseInt(row.overdue || '0', 10),
+      total: parseInt(row.total || '0', 10),
     };
   }
 

@@ -27,7 +27,6 @@ import {
   // ── Follow-up schemas ──────────────────────────────────────────────
   createFollowUpSchema,
   sendFollowUpSchema,
-  fileAwayFollowUpSchema,
   updateFollowUpSchema,
   completeFollowUpSchema,
   cancelFollowUpSchema,
@@ -38,7 +37,6 @@ import {
   setBringUpSchema,
   updateBringUpSchema,
   completeBringUpSchema,
-  fileAwayBringUpSchema,
   bringUpFiltersSchema,
   // ── Attachment schemas ──────────────────────────────────────────────
   addAttachmentSchema,
@@ -706,32 +704,32 @@ export const documentController = {
 
   // ─── Remove Attachment from Document ────────────────────────────────────────
 
-removeDocumentAttachment: asyncHandler(async (req: Request, res: Response) => {
-  const paramsResult = documentIdSchema.safeParse({ params: req.params });
-  if (!paramsResult.success) {
-    throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid document ID');
-  }
+  removeDocumentAttachment: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = documentIdSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) {
+      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid document ID');
+    }
 
-  const attachmentId = req.params.attachmentId;
-  if (!attachmentId || typeof attachmentId !== 'string') {
-    throw new AppError(400, 'Valid Attachment ID is required');
-  }
+    const attachmentId = req.params.attachmentId;
+    if (!attachmentId || typeof attachmentId !== 'string') {
+      throw new AppError(400, 'Valid Attachment ID is required');
+    }
 
-  const doc = await DocumentService.removeAttachment(
-    paramsResult.data.params.id,
-    attachmentId,
-    req.user!.id
-  );
+    const doc = await DocumentService.removeAttachment(
+      paramsResult.data.params.id,
+      attachmentId,
+      req.user!.id
+    );
 
-  safeDocumentUpdated(req, doc);
-  safeEmitToRoom(req, `document:${paramsResult.data.params.id}`, 'attachment_removed', {
-    document_id: doc.id,
-    attachment_id: attachmentId,
-    attachments: doc.attachments,
-  });
+    safeDocumentUpdated(req, doc);
+    safeEmitToRoom(req, `document:${paramsResult.data.params.id}`, 'attachment_removed', {
+      document_id: doc.id,
+      attachment_id: attachmentId,
+      attachments: doc.attachments,
+    });
 
-  return sendSuccess(res, doc, 'Attachment removed successfully');
-}),
+    return sendSuccess(res, doc, 'Attachment removed successfully');
+  }),
 
   // ─── Get Document Attachments ───────────────────────────────────────────────
 
@@ -746,10 +744,10 @@ removeDocumentAttachment: asyncHandler(async (req: Request, res: Response) => {
   }),
 
   // ════════════════════════════════════════════════════════════════════════════
-  //  BRING UP CONTROLLER METHODS
+  //  BRING UP CONTROLLER METHODS (Super Admin only)
   // ════════════════════════════════════════════════════════════════════════════
 
-  // ── Set Bring Up Date (Super Admin only) ────────────────────────────────────
+  // ── Set Bring Up Date ────────────────────────────────────────────────────────
 
   setBringUp: asyncHandler(async (req: Request, res: Response) => {
     if (req.user!.role !== 'super_admin') {
@@ -786,7 +784,7 @@ removeDocumentAttachment: asyncHandler(async (req: Request, res: Response) => {
     return sendSuccess(res, doc, 'Bring up date set successfully');
   }),
 
-  // ── Update Bring Up Date (Super Admin only) ─────────────────────────────────
+  // ── Update Bring Up Date ─────────────────────────────────────────────────────
 
   updateBringUp: asyncHandler(async (req: Request, res: Response) => {
     if (req.user!.role !== 'super_admin') {
@@ -857,59 +855,6 @@ removeDocumentAttachment: asyncHandler(async (req: Request, res: Response) => {
     return sendSuccess(res, doc, 'Bring up completed successfully');
   }),
 
-  // ── NEW: File Away Bring Up ──────────────────────────────────────────────────
-
-  fileAwayBringUp: asyncHandler(async (req: Request, res: Response) => {
-    if (req.user!.role !== 'super_admin') {
-      throw new AppError(403, 'Only Super Administrators can file away bring ups');
-    }
-
-    const paramsResult = documentIdSchema.safeParse({ params: req.params });
-    if (!paramsResult.success) {
-      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid document ID');
-    }
-
-    const bodyResult = fileAwayBringUpSchema.safeParse({ body: req.body });
-    if (!bodyResult.success) {
-      throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid file away data');
-    }
-
-    const doc = await DocumentService.fileAwayBringUp(
-      paramsResult.data.params.id,
-      req.user!.id,
-      {
-        notes: bodyResult.data.body.notes,
-        completion_notes: bodyResult.data.body.completion_notes,
-        return_to_helpdesk: bodyResult.data.body.return_to_helpdesk,
-      }
-    );
-
-    safeDocumentUpdated(req, doc);
-
-    // Emit realtime events
-    safeEmitToRoom(req, `document:${paramsResult.data.params.id}`, 'bring_up_filed_away', {
-      document_id: doc.id,
-      title: doc.title,
-      filed_away_by: req.user!.full_name,
-      filed_away_at: new Date().toISOString(),
-      notes: bodyResult.data.body.completion_notes || bodyResult.data.body.notes,
-    });
-
-    if (bodyResult.data.body.return_to_helpdesk !== false) {
-      // Notify the person who gets the document back
-      const returnToUserId = doc.active_mark?.marked_by || doc.created_by;
-      if (returnToUserId) {
-        safeEmitToUser(req, returnToUserId, 'document_returned_from_bringup', {
-          document_id: doc.id,
-          title: doc.title,
-          message: `Document "${doc.title}" has been returned from bring up and filed away.`
-        });
-      }
-    }
-
-    return sendSuccess(res, doc, 'Bring up filed away successfully');
-  }),
-
   // ── Get Bring Ups ────────────────────────────────────────────────────────────
 
   getBringUps: asyncHandler(async (req: Request, res: Response) => {
@@ -943,10 +888,10 @@ removeDocumentAttachment: asyncHandler(async (req: Request, res: Response) => {
   }),
 
   // ════════════════════════════════════════════════════════════════════════════
-  //  FOLLOW-UP CONTROLLER METHODS
+  //  FOLLOW-UP CONTROLLER METHODS (Super Admin ↔ User communication)
   // ════════════════════════════════════════════════════════════════════════════
 
-  // ── NEW: Send Follow Up (simplified - just notes and send) ─────────────────
+  // ── Send Follow Up (simplified - just notes and send) ─────────────────────
 
   sendFollowUp: asyncHandler(async (req: Request, res: Response) => {
     const result = sendFollowUpSchema.safeParse({ body: req.body });
@@ -954,7 +899,6 @@ removeDocumentAttachment: asyncHandler(async (req: Request, res: Response) => {
       throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid follow-up data');
     }
 
-    // Clean the data - convert null to undefined for mark_id
     const cleanData = {
       document_id: result.data.body.document_id,
       notes: result.data.body.notes,
@@ -978,7 +922,7 @@ removeDocumentAttachment: asyncHandler(async (req: Request, res: Response) => {
     return sendSuccess(res, followUp, 'Follow-up sent successfully', 201);
   }),
 
-  // ── Create Follow-Up (with due date) ──────────────────────────────────────────
+  // ── Create Follow-Up (with due date) ────────────────────────────────────────
 
   createFollowUp: asyncHandler(async (req: Request, res: Response) => {
     const result = createFollowUpSchema.safeParse({ body: req.body });
@@ -1000,27 +944,6 @@ removeDocumentAttachment: asyncHandler(async (req: Request, res: Response) => {
     }
 
     return sendSuccess(res, followUp, 'Follow-up created successfully', 201);
-  }),
-
-  // ── File Away Follow-Up ─────────────────────────────────────────────────────
-
-  fileAwayFollowUp: asyncHandler(async (req: Request, res: Response) => {
-    const result = fileAwayFollowUpSchema.safeParse({ body: req.body });
-    if (!result.success) {
-      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid file away data');
-    }
-
-    const followUp = await DocumentService.fileAwayFollowUp(
-      result.data.body,
-      req.user!.id
-    );
-
-    safeBroadcast(req, 'follow_up_filed_away', followUp);
-    if (followUp.document_id) {
-      safeEmitToRoom(req, `document:${followUp.document_id}`, 'follow_up_filed_away', followUp);
-    }
-
-    return sendSuccess(res, followUp, 'Follow-up filed away successfully', 201);
   }),
 
   // ── Get Follow-Up Summary ────────────────────────────────────────────────────

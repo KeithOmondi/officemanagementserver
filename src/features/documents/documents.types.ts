@@ -47,27 +47,28 @@ export type RefType =
 // ─── Document Metadata Types ───────────────────────────────────────────────────
 
 export interface DocumentMetadata {
-  fromFirst?: boolean; // Controls whether FROM appears before TO in memos
-  // Add other metadata fields here as needed
+  fromFirst?: boolean;
 }
 
 // ─── Document Attachment Types ───────────────────────────────────────────────
 
 export interface DocumentAttachment {
-  id?: string; // Unique identifier for the attachment
+  id?: string;
   name: string;
   url: string;
-  public_id?: string; // Cloudinary public ID for deletion
+  public_id?: string;
   size?: number;
   mimeType?: string;
-  uploaded_by?: string; // User ID who uploaded
-  uploaded_by_name?: string; // Name of user who uploaded
-  uploaded_at?: string; // Timestamp when uploaded
+  uploaded_by?: string;
+  uploaded_by_name?: string;
+  uploaded_at?: string;
 }
 
-// ─── Bring Up Types ────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+//  BRING UP TYPES (Super Admin only - Date-based reminders)
+// ════════════════════════════════════════════════════════════════════════════
 
-export type BringUpStatus = 'pending' | 'completed' | 'overdue' | 'filed_away' | 'all';
+export type BringUpStatus = 'pending' | 'overdue' | 'completed';
 
 export interface BringUpHistoryEntry {
   id: string;
@@ -84,17 +85,12 @@ export interface BringUpHistoryEntry {
   is_active: boolean;
   created_at: string;
   updated_at: string;
-  filed_away_at: string | null;
-  filed_away_by: string | null;
-  filed_away_by_name: string | null;
-  filed_away_notes: string | null;
 }
 
 export interface BringUpSummary {
   total_pending: number;
   total_overdue: number;
   total_completed: number;
-  total_filed_away: number;
   due_today: number;
   due_this_week: number;
   by_department: {
@@ -106,8 +102,6 @@ export interface BringUpSummary {
   my_pending: number;
   my_overdue: number;
 }
-
-// ─── Bring Up Input Types ────────────────────────────────────────────────────
 
 export interface SetBringUpInput {
   bring_up_date: Date | string;
@@ -124,12 +118,6 @@ export interface CompleteBringUpInput {
   notes?: string;
 }
 
-export interface FileAwayBringUpInput {
-  notes?: string;
-  completion_notes?: string;
-  return_to_helpdesk?: boolean;
-}
-
 export interface BringUpFilters {
   status?: BringUpStatus | 'all';
   date_from?: Date | string;
@@ -143,18 +131,13 @@ export interface BringUpFilters {
   sort_order?: 'ASC' | 'DESC';
 }
 
-// ─── Follow-Up Types ────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+//  FOLLOW UP TYPES (Super Admin ↔ User communication)
+// ════════════════════════════════════════════════════════════════════════════
 
-export type FollowUpStatus =
-  | 'pending'
-  | 'in_progress'
-  | 'completed'
-  | 'cancelled'
-  | 'filed_away';
+export type FollowUpStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled';
 
 export type FollowUpPriority = 'low' | 'normal' | 'urgent';
-
-export type FollowUpReminderType = 'one_day_before' | 'due_date' | 'overdue';
 
 export interface FollowUp {
   id: string;
@@ -169,9 +152,10 @@ export interface FollowUp {
   priority: FollowUpPriority;
   status: FollowUpStatus;
   completed_at: string | null;
+  completed_by: string | null;
+  completion_notes: string | null;
   cancelled_at: string | null;
   cancellation_reason: string | null;
-  completion_notes: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -201,17 +185,6 @@ export interface FollowUpPaginationResponse {
   totalPages: number;
 }
 
-export interface FollowUpReminder {
-  id: string;
-  follow_up_id: string;
-  reminder_date: string;
-  reminder_type: FollowUpReminderType;
-  sent_at: string | null;
-  created_at: string;
-}
-
-// ─── Follow-up Input Types ──────────────────────────────────────────────────
-
 export interface CreateFollowUpInput {
   document_id: string;
   mark_id?: string;
@@ -228,13 +201,6 @@ export interface SendFollowUpInput {
   assigned_to: string;
 }
 
-export interface FileAwayFollowUpInput {
-  document_id: string;
-  mark_id?: string;
-  notes: string;
-  completion_notes?: string;
-}
-
 export interface UpdateFollowUpInput {
   notes?: string;
   assigned_to?: string;
@@ -246,7 +212,7 @@ export interface UpdateFollowUpInput {
 }
 
 export interface CompleteFollowUpInput {
-  completion_notes?: string;
+  completion_notes: string; // Required - admin must give instructions
 }
 
 export interface CancelFollowUpInput {
@@ -270,19 +236,19 @@ export interface FollowUpFilters {
   sort_by?: 'created_at' | 'due_date' | 'priority' | 'status' | 'notes';
   sort_order?: 'ASC' | 'DESC';
   active_only?: boolean;
-  filed_only?: boolean;
 }
 
 export interface FollowUpSummary {
   pending: number;
-  overdue: number;
+  in_progress: number;
   completed: number;
-  filed_away: number;
   total: number;
-  active: number;
+  overdue: number;
 }
 
-// ─── Basic Interfaces ─────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+//  BASIC INTERFACES
+// ════════════════════════════════════════════════════════════════════════════
 
 export interface DocumentMark {
   id: string;
@@ -351,12 +317,10 @@ export type DocumentFlowAction =
   | 'follow_up_completed'
   | 'follow_up_cancelled'
   | 'follow_up_comment_added'
-  | 'follow_up_filed_away'
   | 'pdf_regenerated'
   | 'bring_up_set'
   | 'bring_up_updated'
   | 'bring_up_completed'
-  | 'bring_up_filed_away'
   | 'attachment_added'
   | 'attachment_removed';
 
@@ -372,7 +336,9 @@ export interface DocumentFlowEntry {
   created_at: Date;
 }
 
-// ─── Document Interface ──────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+//  DOCUMENT INTERFACE
+// ════════════════════════════════════════════════════════════════════════════
 
 export interface Document {
   id: string;
@@ -426,7 +392,7 @@ export interface Document {
   signature_position_width: number | null;
   signature_position_height: number | null;
   metadata: DocumentMetadata | null;
-  attachments?: DocumentAttachment[]; // Document attachments (supporting files)
+  attachments?: DocumentAttachment[];
   follow_ups?: FollowUp[];
 
   // ─── Bring Up Fields ──────────────────────────────────────────────────────
@@ -504,8 +470,6 @@ export interface FolderDocumentFilters {
   status?: DocumentStatus;
 }
 
-// ─── Document Operation Input Types ──────────────────────────────────────────
-
 export interface MarkDocumentInput {
   department_id: string;
   assigned_to?: string;
@@ -554,8 +518,8 @@ export interface ComposeMemoInput {
   signatureTitle?: string;
   department_id?: string;
   reference_no?: string;
-  cc?: string; // CC field for memos
-  attachments?: DocumentAttachment[]; // Attachments for the memo
+  cc?: string;
+  attachments?: DocumentAttachment[];
   fromFirst?: boolean;
 }
 
@@ -572,8 +536,6 @@ export interface ComposeLetterInput {
   cc?: string;
   enclosures?: string;
 }
-
-// ─── Certificate Template Types ────────────────────────────────────────────────
 
 export interface CertificateTemplateData {
   title: string;
@@ -638,8 +600,6 @@ export interface CreateUploadDocumentInput {
   priority?: RoutePriority;
 }
 
-// ─── Update Document Input ───────────────────────────────────────────────────
-
 export interface UpdateDocumentInput {
   title?: string;
   category?: DocumentCategory | null;
@@ -662,7 +622,7 @@ export interface UpdateDocumentInput {
   signature_position_width?: number | null;
   signature_position_height?: number | null;
   metadata?: DocumentMetadata | null;
-  attachments?: DocumentAttachment[] | null; // Update document attachments
+  attachments?: DocumentAttachment[] | null;
 }
 
 // ─── Import/Export Types ─────────────────────────────────────────────────────
@@ -707,13 +667,12 @@ export interface FollowUpListItem {
   status: FollowUpStatus;
   priority: FollowUpPriority;
   created_at: string;
-  is_filed_away: boolean;
 }
 
 export interface MyFollowUpSummary {
   pending: number;
-  overdue: number;
+  in_progress: number;
   completed: number;
-  filed_away: number;
   total: number;
+  overdue: number;
 }

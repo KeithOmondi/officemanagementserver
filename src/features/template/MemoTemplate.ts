@@ -9,6 +9,8 @@ export interface MemoData {
   signatureTitle: string;
   draftedByInitials?: string;
   enclosure?: string;
+  cc?: string; // Added CC field
+  attachments?: Array<{ name: string; url: string }>; // Added attachments support
   logoUrl?: string;
   footerEmblemUrl?: string;
   footerAddress?: string;
@@ -57,7 +59,6 @@ function formatBodyHtml(rawBody: string): string {
   const isHtml = /<[a-z][\s\S]*>/i.test(rawBody);
 
   if (isHtml) {
-    // Enhanced table formatting for existing HTML
     let html = rawBody;
     
     // Add responsive table wrapper for better display
@@ -76,7 +77,6 @@ function formatBodyHtml(rawBody: string): string {
       
       // Check if this paragraph looks like a table (contains pipe separators or tabs)
       if (trimmed.includes('|') && trimmed.includes('\n')) {
-        // Convert simple pipe tables to HTML
         return convertPipeTableToHtml(trimmed);
       }
       
@@ -87,9 +87,6 @@ function formatBodyHtml(rawBody: string): string {
 
 /**
  * Converts pipe-separated tables to HTML tables
- * Example: 
- * | Header 1 | Header 2 |
- * | Cell 1   | Cell 2   |
  */
 function convertPipeTableToHtml(tableText: string): string {
   const lines = tableText.split('\n').filter(line => line.trim());
@@ -99,7 +96,6 @@ function convertPipeTableToHtml(tableText: string): string {
   let isHeader = true;
   
   for (const line of lines) {
-    // Skip separator lines (e.g., |---|---|)
     if (/^\|[\s:-]+\|$/.test(line.trim())) continue;
     
     const cells = line.split('|')
@@ -140,30 +136,29 @@ export function getMemoHTML(data: MemoData): string {
     signatureTitle,
     draftedByInitials,
     enclosure,
+    cc,
+    attachments = [],
     logoUrl = DEFAULTS.logoUrl,
     footerEmblemUrl = DEFAULTS.footerEmblemUrl,
     footerAddress = DEFAULTS.footerAddress,
     footerContact = DEFAULTS.footerContact,
     footerTagline = DEFAULTS.footerTagline,
-    fromFirst = false, // Default: TO first
+    fromFirst = false,
   } = data;
 
   const escaped = (value: string) => escapeHtml(value);
 
-  // Build fields array
   const fields = [
     { label: "TO", value: to },
     { label: "FROM", value: from },
-    { label: "CC", value: "" },
+    { label: "CC", value: cc || "" },
     { label: "REF", value: ref },
     { label: "DATE", value: date },
     { label: "SUBJECT", value: subject },
   ];
 
-  // Filter out empty CC if not provided
   const filteredFields = fields.filter(f => f.label !== "CC" || f.value);
 
-  // Order fields based on fromFirst flag
   const orderedFields = fromFirst
     ? [filteredFields[1], filteredFields[0], ...filteredFields.slice(2)]
     : filteredFields;
@@ -178,6 +173,27 @@ export function getMemoHTML(data: MemoData): string {
     </div>`
     )
     .join("");
+
+  const attachmentsHtml = attachments.length > 0 ? `
+    <div class="attachments-section">
+      <div class="attachments-title">Attachments:</div>
+      <ul class="attachments-list">
+        ${attachments.map(att => `
+          <li>
+            <a href="${escaped(att.url)}" target="_blank" rel="noopener noreferrer">
+              <svg class="attachment-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+                <line x1="16" y1="13" x2="8" y2="13" />
+                <line x1="16" y1="17" x2="8" y2="17" />
+              </svg>
+              ${escaped(att.name)}
+            </a>
+          </li>
+        `).join('')}
+      </ul>
+    </div>
+  ` : '';
 
   return `
 <!DOCTYPE html>
@@ -264,7 +280,6 @@ export function getMemoHTML(data: MemoData): string {
       background-color: #f5f3eb;
     }
     
-    /* Table Caption Support */
     .body-content table caption {
       font-weight: bold;
       margin-bottom: 6px;
@@ -272,34 +287,103 @@ export function getMemoHTML(data: MemoData): string {
       font-size: 10.5pt;
     }
 
+    /* Attachments Styles */
+    .attachments-section {
+      margin: 8px 0 12px 0;
+      font-family: Tahoma, Geneva, Verdana, sans-serif;
+    }
+    .attachments-title {
+      font-size: 10.5pt;
+      font-weight: bold;
+      margin-bottom: 4px;
+      color: #333;
+    }
+    .attachments-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    .attachments-list li {
+      margin: 2px 0;
+      padding: 2px 0;
+    }
+    .attachments-list a {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: #1E4620;
+      text-decoration: none;
+      font-size: 10pt;
+      font-weight: normal;
+      border-bottom: 1px dashed #c9a84c;
+      padding-bottom: 1px;
+    }
+    .attachments-list a:hover {
+      color: #c9a84c;
+      border-bottom-color: #1E4620;
+    }
+    .attachment-icon {
+      width: 14px;
+      height: 14px;
+      flex-shrink: 0;
+      color: #c9a84c;
+    }
+
+    /* Signature Section - Reserved Box for Stamper (Mimicking Letter structure) */
     .signature-section {
-      margin-top: 12px;
-      page-break-inside: avoid;
-      break-inside: avoid;
+      margin-top: 8px;
+      page-break-inside: avoid !important;
+      break-inside: avoid !important;
+      font-family: Tahoma, Geneva, Verdana, sans-serif;
     }
 
     .signature-anchor {
-      font-size: 1px;
-      line-height: 1px;
-      height: 1px;
+      display: block;
+      width: 220px;
+      height: 65px;
+      margin-top: 6px;
+      margin-bottom: 4px;
+      font-size: 1pt;
       color: transparent;
-      overflow: hidden;
+      line-height: 1;
       user-select: none;
+      overflow: hidden;
+    }
+
+    /* Styling if stamp injects an <img> tag into .signature-anchor */
+    .signature-anchor img,
+    .signature-section img {
+      height: 60px !important;
+      width: auto !important;
+      max-width: 220px;
+      object-fit: contain;
+      display: block;
     }
 
     .signature {
-      font-size: 11pt;
-      font-weight: bold;
-      text-align: left;
-      margin-top: 45px;
-      page-break-inside: avoid;
-      break-inside: avoid;
-      font-family: Tahoma, Geneva, Verdana, sans-serif;
+      margin-top: 0;
     }
-    .signature .signatory-name { text-transform: uppercase; margin-bottom: 2px; }
-    .signature .org-unit { text-transform: uppercase; }
+
+    .signature .name {
+      font-weight: bold;
+      font-size: 11pt;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+
+    .signature .title {
+      font-weight: bold;
+      font-size: 11pt;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      margin-top: 1px;
+    }
     
-    .signature .enclosure { font-weight: normal; font-size: 11pt; margin-top: 6px; }
+    .signature .enclosure { 
+      font-weight: normal; 
+      font-size: 11pt; 
+      margin-top: 6px; 
+    }
     
     .signature .drafted-by { 
       font-weight: normal; 
@@ -336,6 +420,10 @@ export function getMemoHTML(data: MemoData): string {
       .table-wrapper { overflow-x: visible; }
       .body-content table { page-break-inside: avoid; }
       .body-content table tr { page-break-inside: avoid; }
+      .attachments-list a { 
+        color: #1E4620 !important;
+        border-bottom: 1px dashed #c9a84c !important;
+      }
     }
   </style>
 </head>
@@ -362,12 +450,14 @@ export function getMemoHTML(data: MemoData): string {
     ${formatBodyHtml(body)}
   </div>
 
+  ${attachmentsHtml}
+
   <div class="signature-section">
-    <div class="signature-anchor" aria-hidden="true">${SIGNATURE_ANCHOR_TEXT}</div>
+    <div class="signature-anchor">${SIGNATURE_ANCHOR_TEXT}</div>
 
     <div class="signature">
-      <div class="signatory-name">${escaped(signatureName || from || "")}</div>
-      <div class="org-unit">${escaped(signatureTitle || "REGISTRAR, HIGH COURT")}</div>
+      <div class="name">${escaped(signatureName || from || "")}</div>
+      <div class="title">${escaped(signatureTitle || "REGISTRAR HIGH COURT")}</div>
       ${enclosure ? `<div class="enclosure">${escaped(enclosure)}</div>` : ""}
       ${draftedByInitials ? `<div class="drafted-by">rhc/${escaped(draftedByInitials)}</div>` : ""}
     </div>

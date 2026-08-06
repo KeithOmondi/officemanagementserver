@@ -48,7 +48,21 @@ export type RefType =
 
 export interface DocumentMetadata {
   fromFirst?: boolean; // Controls whether FROM appears before TO in memos
-  [key: string]: any; // Allow for future metadata fields
+  // Add other metadata fields here as needed
+}
+
+// ─── Document Attachment Types ───────────────────────────────────────────────
+
+export interface DocumentAttachment {
+  id?: string; // Unique identifier for the attachment
+  name: string;
+  url: string;
+  public_id?: string; // Cloudinary public ID for deletion
+  size?: number;
+  mimeType?: string;
+  uploaded_by?: string; // User ID who uploaded
+  uploaded_by_name?: string; // Name of user who uploaded
+  uploaded_at?: string; // Timestamp when uploaded
 }
 
 // ─── Bring Up Types ────────────────────────────────────────────────────────────
@@ -342,7 +356,9 @@ export type DocumentFlowAction =
   | 'bring_up_set'
   | 'bring_up_updated'
   | 'bring_up_completed'
-  | 'bring_up_filed_away';
+  | 'bring_up_filed_away'
+  | 'attachment_added'
+  | 'attachment_removed';
 
 export interface DocumentFlowEntry {
   id: string;
@@ -409,7 +425,8 @@ export interface Document {
   signature_position_y: number | null;
   signature_position_width: number | null;
   signature_position_height: number | null;
-  metadata: DocumentMetadata | null; // Added metadata field
+  metadata: DocumentMetadata | null;
+  attachments?: DocumentAttachment[]; // Document attachments (supporting files)
   follow_ups?: FollowUp[];
 
   // ─── Bring Up Fields ──────────────────────────────────────────────────────
@@ -537,7 +554,9 @@ export interface ComposeMemoInput {
   signatureTitle?: string;
   department_id?: string;
   reference_no?: string;
-  fromFirst?: boolean; // Added fromFirst flag
+  cc?: string; // CC field for memos
+  attachments?: DocumentAttachment[]; // Attachments for the memo
+  fromFirst?: boolean;
 }
 
 export interface ComposeLetterInput {
@@ -642,7 +661,8 @@ export interface UpdateDocumentInput {
   signature_position_y?: number | null;
   signature_position_width?: number | null;
   signature_position_height?: number | null;
-  metadata?: DocumentMetadata | null; // Added metadata field
+  metadata?: DocumentMetadata | null;
+  attachments?: DocumentAttachment[] | null; // Update document attachments
 }
 
 // ─── Import/Export Types ─────────────────────────────────────────────────────

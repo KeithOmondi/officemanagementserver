@@ -40,6 +40,10 @@ import {
   completeBringUpSchema,
   fileAwayBringUpSchema,
   bringUpFiltersSchema,
+  // ── Attachment schemas ──────────────────────────────────────────────
+  addAttachmentSchema,
+  removeAttachmentSchema,
+  getAttachmentsSchema,
 } from './documents.validator';
 import { getRealtimeService } from '../../middleware/realtime.middleware';
 
@@ -246,7 +250,7 @@ export const documentController = {
     const doc = await DocumentService.findById(paramsResult.data.params.id);
     if (!doc) throw new AppError(404, 'Document not found');
 
-    // Check if any memo-specific fields are being updated
+    // Check if any memo-specific fields are being updated (including attachments)
     const hasMemoFields =
       bodyResult.data.body.to_recipient !== undefined ||
       bodyResult.data.body.from_sender !== undefined ||
@@ -257,11 +261,12 @@ export const documentController = {
       bodyResult.data.body.signature_name !== undefined ||
       bodyResult.data.body.signature_title !== undefined ||
       bodyResult.data.body.from_first !== undefined ||
-      bodyResult.data.body.metadata?.fromFirst !== undefined;
+      bodyResult.data.body.metadata?.fromFirst !== undefined ||
+      bodyResult.data.body.attachments !== undefined;
 
     if (hasMemoFields && (doc.type === 'memo' || doc.type === 'letter' || doc.type === 'certificate')) {
       if (req.user!.role !== 'super_admin') {
-        throw new AppError(403, 'Only super administrators can edit memo, letter, and certificate fields (TO, FROM, DATE, SUBJECT, CC, ENCLOSURES, SIGNATURE, SIGNATURE ORDER, SIGNATURE PLACEMENT)');
+        throw new AppError(403, 'Only super administrators can edit memo, letter, and certificate fields (TO, FROM, DATE, SUBJECT, CC, ENCLOSURES, SIGNATURE, SIGNATURE ORDER, SIGNATURE PLACEMENT, ATTACHMENTS)');
       }
     }
 
@@ -664,6 +669,80 @@ export const documentController = {
     safeDocumentUpdated(req, doc);
     
     return sendSuccess(res, doc, 'Document PDF regenerated successfully');
+  }),
+
+  // ════════════════════════════════════════════════════════════════════════════
+  //  DOCUMENT ATTACHMENT CONTROLLER METHODS
+  // ════════════════════════════════════════════════════════════════════════════
+
+  // ─── Add Attachment to Document ─────────────────────────────────────────────
+
+  addDocumentAttachment: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = documentIdSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) {
+      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid document ID');
+    }
+
+    const file = req.file;
+    if (!file) {
+      throw new AppError(400, 'No file provided');
+    }
+
+    const doc = await DocumentService.addAttachment(
+      paramsResult.data.params.id,
+      file,
+      req.user!.id,
+      req.user!.full_name || 'Unknown'
+    );
+
+    safeDocumentUpdated(req, doc);
+    safeEmitToRoom(req, `document:${paramsResult.data.params.id}`, 'attachment_added', {
+      document_id: doc.id,
+      attachments: doc.attachments,
+    });
+
+    return sendSuccess(res, doc, 'Attachment added successfully');
+  }),
+
+  // ─── Remove Attachment from Document ────────────────────────────────────────
+
+removeDocumentAttachment: asyncHandler(async (req: Request, res: Response) => {
+  const paramsResult = documentIdSchema.safeParse({ params: req.params });
+  if (!paramsResult.success) {
+    throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid document ID');
+  }
+
+  const attachmentId = req.params.attachmentId;
+  if (!attachmentId || typeof attachmentId !== 'string') {
+    throw new AppError(400, 'Valid Attachment ID is required');
+  }
+
+  const doc = await DocumentService.removeAttachment(
+    paramsResult.data.params.id,
+    attachmentId,
+    req.user!.id
+  );
+
+  safeDocumentUpdated(req, doc);
+  safeEmitToRoom(req, `document:${paramsResult.data.params.id}`, 'attachment_removed', {
+    document_id: doc.id,
+    attachment_id: attachmentId,
+    attachments: doc.attachments,
+  });
+
+  return sendSuccess(res, doc, 'Attachment removed successfully');
+}),
+
+  // ─── Get Document Attachments ───────────────────────────────────────────────
+
+  getDocumentAttachments: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = documentIdSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) {
+      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid document ID');
+    }
+
+    const attachments = await DocumentService.getAttachments(paramsResult.data.params.id);
+    return sendSuccess(res, attachments, 'Attachments retrieved successfully');
   }),
 
   // ════════════════════════════════════════════════════════════════════════════

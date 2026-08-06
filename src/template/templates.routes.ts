@@ -10,7 +10,7 @@ const router = Router();
 router.use(protect);
 
 // Get active template - department heads can access
-router.get('/active', requireRole('dept_head'), templatesController.getActive);
+router.get('/active', requireRole('dept_head', 'staff'), templatesController.getActive);
 
 // Get all templates - super admins and department heads can access
 router.get('/', requireRole('super_admin', 'dept_head'), templatesController.getAll);

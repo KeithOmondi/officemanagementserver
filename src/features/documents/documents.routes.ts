@@ -358,7 +358,45 @@ router.post(
 );
 
 // ════════════════════════════════════════════════════════════════════════════
-//  3. GENERIC /:id ROUTES (MUST BE LAST)
+//  3. DOCUMENT ATTACHMENT ROUTES (specific patterns before generic :id)
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * @route   POST /api/documents/:id/attachments
+ * @desc    Add an attachment to a document
+ * @access  Staff and above (document owner or super admin)
+ * @body    multipart/form-data with 'file' field
+ */
+router.post(
+  '/:id/attachments',
+  requireRole('staff', 'dept_head', 'super_admin'),
+  upload.single('file'),
+  documentController.addDocumentAttachment
+);
+
+/**
+ * @route   DELETE /api/documents/:id/attachments/:attachmentId
+ * @desc    Remove an attachment from a document
+ * @access  Staff and above (document owner or super admin)
+ */
+router.delete(
+  '/:id/attachments/:attachmentId',
+  requireRole('staff'),
+  documentController.removeDocumentAttachment
+);
+
+/**
+ * @route   GET /api/documents/:id/attachments
+ * @desc    Get all attachments for a document
+ * @access  Authenticated users
+ */
+router.get(
+  '/:id/attachments',
+  documentController.getDocumentAttachments
+);
+
+// ════════════════════════════════════════════════════════════════════════════
+//  4. GENERIC /:id ROUTES (MUST BE LAST)
 // ════════════════════════════════════════════════════════════════════════════
 
 // ── Read ──────────────────────────────────────────────────────────────────────
@@ -569,7 +607,7 @@ router.get(
 );
 
 // ════════════════════════════════════════════════════════════════════════════
-//  4. FILE UPLOAD FOR EXISTING DOCUMENT
+//  5. FILE UPLOAD FOR EXISTING DOCUMENT
 // ════════════════════════════════════════════════════════════════════════════
 
 /**

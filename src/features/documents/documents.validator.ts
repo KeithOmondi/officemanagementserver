@@ -208,6 +208,23 @@ export const updateDocumentSchema = z.object({
         })
         .passthrough() // Allow other metadata fields
         .optional(),
+      // Add attachments support for updates
+      attachments: z
+        .array(
+          z.object({
+            id: z.string().optional(),
+            name: z.string().min(1),
+            url: z.string().url(),
+            public_id: z.string().optional(),
+            size: z.number().optional(),
+            mimeType: z.string().optional(),
+            uploaded_by: z.string().optional(),
+            uploaded_by_name: z.string().optional(),
+            uploaded_at: z.string().optional(),
+          })
+        )
+        .optional()
+        .nullable(),
     })
     .strict()
     .refine((b) => Object.keys(b).length > 0, {
@@ -369,6 +386,22 @@ export const sendToUserSchema = z.object({
 //  Memo, Letter & Certificate composition schemas
 // ════════════════════════════════════════════════════════════════════════
 
+// ─── Attachment schema ────────────────────────────────────────────────────────
+
+const attachmentSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1, 'Attachment name is required'),
+  url: z.string().url('Attachment URL must be valid'),
+  public_id: z.string().optional(),
+  size: z.number().optional(),
+  mimeType: z.string().optional(),
+  uploaded_by: z.string().optional(),
+  uploaded_by_name: z.string().optional(),
+  uploaded_at: z.string().optional(),
+});
+
+// ─── Base compose schema with memo fields ──────────────────────────────────
+
 const baseComposeSchema = z.object({
   title: z.string().min(1, 'Title is required').max(255).trim(),
   to: z.string().min(1, 'Recipient is required').max(500).trim(),
@@ -377,14 +410,21 @@ const baseComposeSchema = z.object({
   from: z.string().optional(),
   signatureName: z.string().optional(),
   signatureTitle: z.string().optional(),
-  fromFirst: z.boolean().default(false), // Added fromFirst flag
+  fromFirst: z.boolean().default(false),
   department_id: z.string().uuid().optional(),
   reference_no: z.string().max(100).trim().optional(),
 });
 
+// ─── Memo schema with CC and attachments ───────────────────────────────────
+
 export const composeMemoSchema = z.object({
-  body: baseComposeSchema,
+  body: baseComposeSchema.extend({
+    cc: z.string().max(500).trim().optional(),
+    attachments: z.array(attachmentSchema).optional(),
+  }),
 });
+
+// ─── Letter schema ──────────────────────────────────────────────────────────
 
 export const composeLetterSchema = z.object({
   body: baseComposeSchema.extend({
@@ -392,6 +432,8 @@ export const composeLetterSchema = z.object({
     enclosures: z.string().optional(),
   }),
 });
+
+// ─── Certificate schema ─────────────────────────────────────────────────────
 
 export const composeCertificateSchema = z.object({
   body: z
@@ -417,6 +459,30 @@ export const composeCertificateSchema = z.object({
       reference_no: z.string().max(100).trim().optional(),
     })
     .strict(),
+});
+
+// ─── Attachment operation schemas ─────────────────────────────────────────────
+
+export const addAttachmentSchema = z.object({
+  params: z.object({
+    id: z.string().uuid('Document ID must be a valid UUID'),
+  }),
+  file: z.any().refine((val) => val !== undefined, {
+    message: 'File is required',
+  }),
+});
+
+export const removeAttachmentSchema = z.object({
+  params: z.object({
+    id: z.string().uuid('Document ID must be a valid UUID'),
+    attachmentId: z.string().min(1, 'Attachment ID is required'),
+  }),
+});
+
+export const getAttachmentsSchema = z.object({
+  params: z.object({
+    id: z.string().uuid('Document ID must be a valid UUID'),
+  }),
 });
 
 // ════════════════════════════════════════════════════════════════════════
@@ -808,3 +874,12 @@ export type CompleteFollowUpInput = z.infer<typeof completeFollowUpSchema>['body
 export type CancelFollowUpInput = z.infer<typeof cancelFollowUpSchema>['body'];
 export type AddFollowUpCommentInput = z.infer<typeof addFollowUpCommentSchema>['body'];
 export type FollowUpFilters = z.infer<typeof followUpFiltersSchema>['query'];
+
+// ─── Attachment operation types ───────────────────────────────────────────────
+
+export type AddAttachmentInput = z.infer<typeof addAttachmentSchema>['params'] & {
+  file: Express.Multer.File;
+};
+
+export type RemoveAttachmentInput = z.infer<typeof removeAttachmentSchema>['params'];
+export type GetAttachmentsInput = z.infer<typeof getAttachmentsSchema>['params'];

@@ -24,6 +24,7 @@ import type {
   BringUpHistoryEntry,
   BringUpSummary,
   BringUpStatus,
+  DocumentAttachment,
 } from './documents.types';
 import type {
   CreateComposedDocumentInput,
@@ -82,6 +83,7 @@ const DOC_SELECT = `
   d.signature_position_width,
   d.signature_position_height,
   d.metadata,
+  d.attachments,
   -- Bring Up fields
   d.bring_up_date,
   d.bring_up_set_by,
@@ -213,8 +215,6 @@ const ALLOWED_FOLLOW_UP_SORT = new Set(['created_at', 'due_date', 'priority', 's
 
 // ─── Helper to map DB row to Document ─────────────────────────────────────────
 
-// Update the mapRowToDocument function to handle metadata safely
-
 function mapRowToDocument(row: any): Document {
   const bringUpStatus = row.bring_up_date 
     ? row.bring_up_completed_at 
@@ -224,20 +224,31 @@ function mapRowToDocument(row: any): Document {
         : 'pending'
     : null;
 
-  // ─── SAFELY PARSE METADATA ────────────────────────────────────────────────
   let metadata = null;
   if (row.metadata) {
     try {
-      // If it's already an object, use it directly
       if (typeof row.metadata === 'object') {
         metadata = row.metadata;
       } else {
-        // Otherwise try to parse it as JSON
         metadata = JSON.parse(row.metadata);
       }
     } catch (e) {
       console.warn(`Failed to parse metadata for document ${row.id}:`, row.metadata);
       metadata = null;
+    }
+  }
+
+  let attachments: DocumentAttachment[] = [];
+  if (row.attachments) {
+    try {
+      if (typeof row.attachments === 'object') {
+        attachments = row.attachments;
+      } else {
+        attachments = JSON.parse(row.attachments);
+      }
+    } catch (e) {
+      console.warn(`Failed to parse attachments for document ${row.id}:`, row.attachments);
+      attachments = [];
     }
   }
 
@@ -307,9 +318,9 @@ function mapRowToDocument(row: any): Document {
     signature_position_y: row.signature_position_y ?? null,
     signature_position_width: row.signature_position_width ?? null,
     signature_position_height: row.signature_position_height ?? null,
-    metadata: metadata, // Use the safely parsed metadata
+    metadata: metadata,
+    attachments: attachments,
     follow_ups: [],
-    // Bring Up fields
     bring_up_date: row.bring_up_date || null,
     bring_up_set_by: row.bring_up_set_by || null,
     bring_up_set_by_name: row.bring_up_set_by_name || null,
@@ -484,7 +495,6 @@ export class DocumentService {
       conditions.push(`d.bring_up_date IS NOT NULL`);
     }
 
-    // Only apply status filter if a specific status is provided (not 'all' or undefined)
     if (bring_up_status && bring_up_status !== 'all') {
       const now = new Date().toISOString();
       if (bring_up_status === 'pending') {
@@ -553,7 +563,6 @@ export class DocumentService {
       ),
     ]);
 
-    // ─── Fetch follow-ups for all documents ──────────────────────────────────
     const documentIds = dataResult.rows.map(row => row.id);
     let followUpsMap: Record<string, FollowUp[]> = {};
 
@@ -573,7 +582,6 @@ export class DocumentService {
       }, {} as Record<string, FollowUp[]>);
     }
 
-    // ─── Fetch bring up history for all documents ────────────────────────────
     let bringUpHistoryMap: Record<string, BringUpHistoryEntry[]> = {};
 
     if (documentIds.length > 0) {
@@ -592,7 +600,6 @@ export class DocumentService {
       }, {} as Record<string, BringUpHistoryEntry[]>);
     }
 
-    // ─── Map rows to documents and attach follow-ups & history ──────────────
     const documents = dataResult.rows.map(row => {
       const doc = mapRowToDocument(row);
       doc.follow_ups = followUpsMap[doc.id] || [];
@@ -620,7 +627,6 @@ export class DocumentService {
     if (!rows[0]) return null;
     const doc = mapRowToDocument(rows[0]);
     
-    // Fetch bring up history
     const { rows: historyRows } = await pool.query(
       `SELECT ${BRING_UP_HISTORY_SELECT} ${BRING_UP_HISTORY_JOIN}
        WHERE bh.document_id = $1
@@ -675,7 +681,6 @@ export class DocumentService {
 
     const doc = mapRowToDocument(docResult.rows[0]);
     
-    // Fetch bring up history
     const { rows: historyRows } = await pool.query(
       `SELECT ${BRING_UP_HISTORY_SELECT} ${BRING_UP_HISTORY_JOIN}
        WHERE bh.document_id = $1
@@ -728,16 +733,19 @@ export class DocumentService {
     if (input.signature_name !== undefined) { updates.push(`signature_name = $${p++}`); values.push(input.signature_name.trim()); }
     if (input.signature_title !== undefined) { updates.push(`signature_title = $${p++}`); values.push(input.signature_title.trim()); }
     
-    // Position fields
     if (input.signature_position_x !== undefined) { updates.push(`signature_position_x = $${p++}`); values.push(input.signature_position_x); }
     if (input.signature_position_y !== undefined) { updates.push(`signature_position_y = $${p++}`); values.push(input.signature_position_y); }
     if (input.signature_position_width !== undefined) { updates.push(`signature_position_width = $${p++}`); values.push(input.signature_position_width); }
     if (input.signature_position_height !== undefined) { updates.push(`signature_position_height = $${p++}`); values.push(input.signature_position_height); }
     
-    // Metadata updates (for fromFirst and other settings)
     if (input.metadata !== undefined) {
       updates.push(`metadata = $${p++}`);
       values.push(JSON.stringify(input.metadata));
+    }
+
+    if (input.attachments !== undefined) {
+      updates.push(`attachments = $${p++}`);
+      values.push(JSON.stringify(input.attachments));
     }
 
     if (!updates.length) return existing;
@@ -818,7 +826,6 @@ export class DocumentService {
       }
     }
 
-    // Determine the new status based on the marker's role
     const { rows: userRows } = await pool.query(
       `SELECT role FROM users WHERE id = $1 AND is_active = true`,
       [markedBy]
@@ -1185,7 +1192,6 @@ export class DocumentService {
     if (!doc) throw new AppError(404, 'Document not found');
     if (doc.is_signed) throw new AppError(409, 'Document is already signed');
 
-    // ── OTP verification ──────────────────────────────────────────────────────
     const { rows: otpRows } = await pool.query(
       `SELECT sign_otp, sign_otp_expires_at FROM documents WHERE id = $1`,
       [id]
@@ -1203,7 +1209,6 @@ export class DocumentService {
       throw new AppError(400, 'Invalid OTP');
     }
 
-    // ── Fetch signer (super admin) ──────────────────────────────────────────
     const { rows: userRows } = await pool.query(
       `SELECT full_name, signature_url FROM users 
        WHERE id = $1 AND role = 'super_admin' AND is_active = true`,
@@ -1216,7 +1221,6 @@ export class DocumentService {
 
     const signatoryName = doc.signature_name || signer.full_name;
 
-    // ─── ADDED: certificate to templated document types ──────────────────────
     const isTemplatedDocument = doc.type === 'memo' || doc.type === 'letter' || doc.type === 'certificate';
 
     const position = (!isTemplatedDocument && doc.signature_position_x !== null && doc.signature_position_x !== undefined)
@@ -1228,28 +1232,9 @@ export class DocumentService {
         }
       : null;
 
-    // Certificate's signatory block, by design, has NO name line — the
-    // signer's actual name lives only in the body's "I, <NAME>,
-    // Registrar..." opening line (see CertificateTemplate.ts). That means
-    // fuzzy name/title matching in embedSignatureIntoPDF/HTML is unsafe for
-    // certificates: it will happily match that intro-paragraph mention and
-    // place the signature near the top of the page instead of above
-    // "REGISTRAR,". So certificates must be restricted to the explicit
-    // RHC-SIGNATURE-ANCHOR marker (anchorOnly=true) — if the anchor isn't
-    // found, embedSignatureIntoPDF/HTML correctly return the document
-    // unchanged rather than guessing. Letter and Memo keep the previous
-    // (default) behaviour, since their signatory block DOES include a name
-    // line and their signer's name doesn't otherwise appear in the body, so
-    // fuzzy matching has always resolved correctly for them.
     const isCertificate = doc.type === 'certificate';
-    // Certificate's real anchor-to-name gap (~32pt) is tighter than
-    // Letter/Memo's (~46pt) — see the ANCHOR_DEFAULT_MAX_HEIGHT comment in
-    // embedSignature.ts. Passing 35 here (instead of leaving the function's
-    // 65pt default) keeps the no-next-line fallback from computing a y low
-    // enough to land on the footer for certificates specifically.
     const certificateAnchorMaxHeight = 35;
 
-    // ── HTML document (no file) ─────────────────────────────────────────────
     if (doc.body && !doc.file_url) {
       const signedBody = embedSignatureIntoHTML(
         doc.body,
@@ -1284,7 +1269,6 @@ export class DocumentService {
       return (await this.findById(id))!;
     }
 
-    // ── File-based document ──────────────────────────────────────────────────
     if (doc.file_url) {
       if (doc.mime_type !== 'application/pdf') {
         await pool.query(
@@ -1750,11 +1734,12 @@ export class DocumentService {
     signatureName: string;
     signatureTitle: string;
     metadata?: any;
+    attachments?: DocumentAttachment[];
   }): Promise<Document> {
     const {
       title, type, ref, body, pdfBuffer, createdBy, departmentId,
       toRecipient, fromSender, documentDate, subject, cc, enclosures,
-      signatureName, signatureTitle, metadata = {},
+      signatureName, signatureTitle, metadata = {}, attachments = [],
     } = params;
 
     const multerFile: Express.Multer.File = {
@@ -1777,8 +1762,8 @@ export class DocumentService {
          (title, type, category, reference_no, body, file_url, file_public_id,
           file_size_bytes, mime_type, original_name, created_by, department_id, status, is_draft,
           to_recipient, from_sender, document_date, subject, cc, enclosures, 
-          signature_name, signature_title, metadata)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+          signature_name, signature_title, metadata, attachments)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
        RETURNING id`,
       [
         title, type, null, ref, body, uploaded.secure_url, uploaded.public_id, pdfBuffer.length,
@@ -1786,6 +1771,7 @@ export class DocumentService {
         toRecipient, fromSender, documentDate, subject, cc || null, enclosures || null,
         signatureName, signatureTitle,
         JSON.stringify(metadata),
+        JSON.stringify(attachments),
       ]
     );
 
@@ -1803,6 +1789,8 @@ export class DocumentService {
       year: 'numeric', month: 'long', day: 'numeric',
     });
 
+    const attachments = input.attachments || [];
+
     const pdfBuffer = await generateDocumentFromTemplate('memo', {
       to: input.to,
       from: fromDepartment,
@@ -1810,6 +1798,8 @@ export class DocumentService {
       date: dateDisplay,
       subject: input.title,
       body: input.body,
+      cc: input.cc || '',
+      attachments: attachments,
       signatureName,
       signatureTitle,
       fromFirst: input.fromFirst ?? false,
@@ -1829,9 +1819,11 @@ export class DocumentService {
       fromSender: fromDepartment,
       documentDate: documentDateIso,
       subject: input.title,
+      cc: input.cc || '',
       signatureName,
       signatureTitle,
       metadata: { fromFirst: input.fromFirst ?? false },
+      attachments: attachments,
     });
   }
 
@@ -1872,8 +1864,8 @@ export class DocumentService {
       fromSender: fromDepartment,
       documentDate: documentDateIso,
       subject: input.title,
-      cc: input.cc,
-      enclosures: input.enclosures,
+      cc: input.cc || '',
+      enclosures: input.enclosures || '',
       signatureName,
       signatureTitle,
     });
@@ -1938,7 +1930,6 @@ export class DocumentService {
       ? new Date(doc.document_date).toLocaleDateString('en-KE', { year: 'numeric', month: 'long', day: 'numeric' })
       : new Date().toLocaleDateString('en-KE', { year: 'numeric', month: 'long', day: 'numeric' });
 
-    // Get fromFirst from metadata
     const fromFirst = doc.metadata?.fromFirst ?? false;
 
     let pdfBuffer: Buffer;
@@ -1951,6 +1942,8 @@ export class DocumentService {
         date: dateDisplay,
         subject: doc.subject || doc.title,
         body: doc.body || '',
+        cc: doc.cc || '',
+        attachments: doc.attachments || [],
         signatureName: doc.signature_name || '',
         signatureTitle: doc.signature_title || 'Registrar, High Court',
         fromFirst,
@@ -2121,6 +2114,116 @@ export class DocumentService {
     );
     if (!rows.length) throw new AppError(404, 'Mark not found');
     return rows[0];
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  //  DOCUMENT ATTACHMENT OPERATIONS
+  // ════════════════════════════════════════════════════════════════════════════
+
+  // ─── Add attachment to document ──────────────────────────────────────────────
+
+  static async addAttachment(
+    documentId: string,
+    file: Express.Multer.File,
+    userId: string,
+    userName: string
+  ): Promise<Document> {
+    const doc = await this.findById(documentId);
+    if (!doc) throw new AppError(404, 'Document not found');
+
+    // Validate file size (10MB limit)
+    if (file.size > 10 * 1024 * 1024) {
+      throw new AppError(400, 'File size exceeds 10MB limit');
+    }
+
+    // Upload to Cloudinary
+    const uploaded = await uploadToCloudinary(file, 'registrar/document-attachments');
+
+    const attachment: DocumentAttachment = {
+      id: `att_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      name: file.originalname,
+      url: uploaded.secure_url,
+      public_id: uploaded.public_id,
+      size: file.size,
+      mimeType: file.mimetype,
+      uploaded_by: userId,
+      uploaded_by_name: userName,
+      uploaded_at: new Date().toISOString(),
+    };
+
+    const currentAttachments = doc.attachments || [];
+    const updatedAttachments = [...currentAttachments, attachment];
+
+    await pool.query(
+      `UPDATE documents 
+       SET attachments = $1, 
+           updated_at = NOW()
+       WHERE id = $2 AND is_active = true`,
+      [JSON.stringify(updatedAttachments), documentId]
+    );
+
+    await this.logFlow(
+      pool,
+      documentId,
+      'attachment_added',
+      userId,
+      null,
+      `Added attachment: ${attachment.name}`
+    );
+
+    return (await this.findById(documentId))!;
+  }
+
+  // ─── Remove attachment from document ─────────────────────────────────────────
+
+  static async removeAttachment(
+    documentId: string,
+    attachmentId: string,
+    userId: string
+  ): Promise<Document> {
+    const doc = await this.findById(documentId);
+    if (!doc) throw new AppError(404, 'Document not found');
+
+    const currentAttachments = doc.attachments || [];
+    const attachmentToRemove = currentAttachments.find(a => a.id === attachmentId);
+    
+    if (!attachmentToRemove) {
+      throw new AppError(404, 'Attachment not found');
+    }
+
+    // Remove from Cloudinary if it has a public_id
+    if (attachmentToRemove.public_id) {
+      await deleteFromCloudinary(attachmentToRemove.public_id).catch(console.error);
+    }
+
+    const updatedAttachments = currentAttachments.filter(a => a.id !== attachmentId);
+
+    await pool.query(
+      `UPDATE documents 
+       SET attachments = $1, 
+           updated_at = NOW()
+       WHERE id = $2 AND is_active = true`,
+      [JSON.stringify(updatedAttachments), documentId]
+    );
+
+    await this.logFlow(
+      pool,
+      documentId,
+      'attachment_removed',
+      userId,
+      null,
+      `Removed attachment: ${attachmentToRemove.name}`
+    );
+
+    return (await this.findById(documentId))!;
+  }
+
+  // ─── Get document attachments ────────────────────────────────────────────────
+
+  static async getAttachments(documentId: string): Promise<DocumentAttachment[]> {
+    const doc = await this.findById(documentId);
+    if (!doc) throw new AppError(404, 'Document not found');
+    return doc.attachments || [];
   }
 
   // ════════════════════════════════════════════════════════════════════════════
@@ -2779,7 +2882,6 @@ export class DocumentService {
     [now]
   );
 
-  // ─── NEW: Get filed away count ─────────────────────────────────────────────
   const { rows: filedAwayRows } = await pool.query(
     `SELECT COUNT(*) AS total_filed_away
      FROM documents d
@@ -2926,6 +3028,8 @@ export class DocumentService {
     console.log(`[BringUp] Sent ${dueTodayCount} due today reminders and ${overdueCount} overdue reminders`);
     return { dueToday: dueTodayCount, overdue: overdueCount };
   }
+
+ 
 
   // ════════════════════════════════════════════════════════════════════════════
   //  FOLLOW-UP OPERATIONS

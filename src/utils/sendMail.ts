@@ -1,4 +1,5 @@
 // src/utils/email.ts
+
 import { BrevoClient } from "@getbrevo/brevo";
 import { env } from "../config/env";
 
@@ -11,7 +12,7 @@ interface SendMailOptions {
   subject: string;
   html: string;
   attachments?: {
-    content: string; // base64 string
+    content: string;
     filename: string;
     type: string;
     disposition?: 'attachment' | 'inline';
@@ -52,9 +53,6 @@ export const LOGO_URL =
 
 // ─── AUTH EMAILS ─────────────────────────────────────────────────────────────
 
-/**
- * Dispatches a formatted 6-digit login validation code
- */
 export const sendOtpMail = async (
   email: string,
   pjNumber: string,
@@ -162,20 +160,32 @@ export const sendOtpMail = async (
 };
 
 // ─── GENERAL REQUEST EMAILS ──────────────────────────────────────────────────
+// Simplified to only use the core fields: Requester name, status, type, remarks, details, request date
 
-interface GeneralRequestAcknowledgementOptions {
+interface GeneralRequestEmailOptions {
   to: string;
   ticketNumber: string;
   judgeName: string;
   request: string;
+  requestType?: string;
+  status: string;
+  remarks?: string;
+  requestDate?: string;
 }
 
+/**
+ * General Request Acknowledgement - Sent when a request is created
+ */
 export const sendGeneralRequestAcknowledgement = async ({
   to,
   ticketNumber,
   judgeName,
   request,
-}: GeneralRequestAcknowledgementOptions) => {
+  requestType,
+  status,
+  remarks,
+  requestDate,
+}: GeneralRequestEmailOptions) => {
   const subject = `General Request Acknowledgement - ${ticketNumber}`;
 
   const html = `<!DOCTYPE html>
@@ -227,6 +237,8 @@ export const sendGeneralRequestAcknowledgement = async ({
               <p style="margin:0 0 24px;font-size:14px;color:#6b7280;text-align:center;line-height:1.6;">
                 Your request has been received and is under review.
               </p>
+
+              <!-- Ticket Number -->
               <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:24px;">
                 <tr>
                   <td align="center" style="background:linear-gradient(135deg,#f8fdf8 0%,#eef7ef 100%);border:1.5px solid #c6e0c8;border-radius:10px;padding:20px;">
@@ -239,28 +251,24 @@ export const sendGeneralRequestAcknowledgement = async ({
                   </td>
                 </tr>
               </table>
-              <div style="background:#f9fafb;border-radius:8px;padding:16px 20px;margin-bottom:24px;">
-                <p style="margin:0 0 4px;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">
-                  Judge
-                </p>
-                <p style="margin:0 0 12px;font-size:15px;font-weight:500;color:#111827;">
-                  ${judgeName}
-                </p>
-                <p style="margin:0 0 4px;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">
-                  Request
-                </p>
-                <p style="margin:0;font-size:14px;color:#374151;line-height:1.6;">
-                  ${request}
-                </p>
-              </div>
-              <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:12px 16px;margin-bottom:24px;">
-                <p style="margin:0;font-size:13px;color:#92400e;line-height:1.5;text-align:center;">
-                  <strong>Status:</strong> Pending Review
-                </p>
-              </div>
+
+              <!-- Details -->
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb;margin-bottom:24px;">
+                <tr><td style="padding:16px 20px;">
+                  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr><td style="padding:4px 0;font-size:13px;color:#6b7280;"><strong>Requester:</strong></td><td style="padding:4px 0;font-size:13px;color:#111827;font-weight:500;">${judgeName}</td></tr>
+                    ${requestType ? `<tr><td style="padding:4px 0;font-size:13px;color:#6b7280;"><strong>Type:</strong></td><td style="padding:4px 0;font-size:13px;color:#111827;">${requestType}</td></tr>` : ''}
+                    <tr><td style="padding:4px 0;font-size:13px;color:#6b7280;"><strong>Status:</strong></td><td style="padding:4px 0;font-size:13px;color:#92400e;font-weight:500;">${status}</td></tr>
+                    ${requestDate ? `<tr><td style="padding:4px 0;font-size:13px;color:#6b7280;"><strong>Date:</strong></td><td style="padding:4px 0;font-size:13px;color:#111827;">${requestDate}</td></tr>` : ''}
+                    <tr><td style="padding:4px 0;font-size:13px;color:#6b7280;"><strong>Details:</strong></td><td style="padding:4px 0;font-size:13px;color:#374151;">${request}</td></tr>
+                    ${remarks ? `<tr><td style="padding:4px 0;font-size:13px;color:#6b7280;"><strong>Remarks:</strong></td><td style="padding:4px 0;font-size:13px;color:#374151;">${remarks}</td></tr>` : ''}
+                  </table>
+                </td></tr>
+              </table>
+
               <p style="margin:0;font-size:12px;color:#9ca3af;text-align:center;line-height:1.5;">
-                You will receive updates on this request via email.<br />
-                Please keep your ticket number for reference.
+                Please keep your ticket number for reference.<br />
+                You will receive updates on this request via email.
               </p>
             </td>
           </tr>
@@ -275,7 +283,7 @@ export const sendGeneralRequestAcknowledgement = async ({
               </p>
               <div style="width:32px;height:1px;background:rgba(255,255,255,0.15);margin:0 auto 12px;"></div>
               <p style="margin:0;font-size:10px;color:rgba(255,255,255,0.3);text-align:center;">
-                Do not reply to this email &middot; For support contact the Support Desk
+                Do not reply to this email &middot; For support contact the Help Desk
               </p>
             </td>
           </tr>
@@ -291,12 +299,138 @@ export const sendGeneralRequestAcknowledgement = async ({
   return await sendMail({ to, subject, html });
 };
 
-// ─── HELPDESK DOCUMENT EMAILS ─────────────────────────────────────────────────
-
 /**
- * Sends Helpdesk Document Approved notification
+ * General Request Status Update - Sent when status changes (Resolved, Rejected, In Progress)
  */
-interface HelpdeskApprovedOptions {
+export const sendGeneralRequestStatusUpdate = async ({
+  to,
+  ticketNumber,
+  judgeName,
+  request,
+  requestType,
+  status,
+  remarks,
+  requestDate,
+}: GeneralRequestEmailOptions & { status: string }) => {
+  const statusColors: Record<string, string> = {
+    'Resolved': '#065f46',
+    'In Progress': '#d97706',
+    'Rejected': '#991b1b',
+    'Pending': '#92400e',
+  };
+  const statusIcons: Record<string, string> = {
+    'Resolved': '✅',
+    'In Progress': '⏳',
+    'Rejected': '❌',
+    'Pending': '⏰',
+  };
+  
+  const statusMessages: Record<string, string> = {
+    'Resolved': 'Your request has been resolved.',
+    'In Progress': 'Your request is now being processed.',
+    'Rejected': 'Your request has been rejected.',
+    'Pending': 'Your request is still under review.',
+  };
+
+  const color = statusColors[status] || '#92400e';
+  const icon = statusIcons[status] || '📋';
+  const message = statusMessages[status] || 'Your request status has been updated.';
+
+  const subject = `General Request ${status} - ${ticketNumber}`;
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>General Request ${status}</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f0f2f5;font-family:'Segoe UI',Arial,sans-serif;">
+
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f0f2f5;padding:40px 16px;">
+    <tr>
+      <td align="center">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;">
+
+          <tr>
+            <td align="center" style="background-color:${color};border-radius:12px 12px 0 0;padding:32px 40px 24px;">
+              <img
+                src="${LOGO_URL}"
+                alt="Judiciary of Kenya"
+                width="80"
+                height="80"
+                style="display:block;margin:0 auto 16px;border-radius:50%;border:3px solid rgba(255,255,255,0.20);object-fit:cover;"
+              />
+              <p style="margin:0 0 2px;font-size:10px;font-weight:600;letter-spacing:3px;color:rgba(255,255,255,0.55);text-transform:uppercase;">
+                Republic of Kenya
+              </p>
+              <h1 style="margin:0;font-size:15px;font-weight:700;letter-spacing:1.5px;color:#ffffff;text-transform:uppercase;line-height:1.4;">
+                Office of the Registrar
+              </h1>
+              <p style="margin:2px 0 0;font-size:13px;font-weight:500;letter-spacing:1px;color:rgba(255,255,255,0.75);text-transform:uppercase;">
+                High Court
+              </p>
+              <div style="width:48px;height:2px;background:#C29B38;border-radius:1px;margin:18px auto 0;"></div>
+              <p style="margin:12px 0 0;font-size:18px;font-weight:700;color:#ffffff;letter-spacing:0.5px;">
+                ${icon} ${status}
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="background-color:#ffffff;padding:36px 40px 32px;">
+              <p style="margin:0 0 4px;font-size:14px;color:#374151;line-height:1.6;">Dear <strong>${judgeName}</strong>,</p>
+              <p style="margin:0 0 20px;font-size:14px;color:#374151;line-height:1.6;">${message}</p>
+
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb;margin-bottom:24px;">
+                <tr><td style="padding:16px 20px;">
+                  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr><td style="padding:4px 0;font-size:13px;color:#6b7280;"><strong>Ticket Number:</strong></td><td style="padding:4px 0;font-size:13px;color:#111827;font-weight:600;">${ticketNumber}</td></tr>
+                    <tr><td style="padding:4px 0;font-size:13px;color:#6b7280;"><strong>Requester:</strong></td><td style="padding:4px 0;font-size:13px;color:#111827;">${judgeName}</td></tr>
+                    ${requestType ? `<tr><td style="padding:4px 0;font-size:13px;color:#6b7280;"><strong>Type:</strong></td><td style="padding:4px 0;font-size:13px;color:#111827;">${requestType}</td></tr>` : ''}
+                    <tr><td style="padding:4px 0;font-size:13px;color:#6b7280;"><strong>Status:</strong></td><td style="padding:4px 0;font-size:13px;color:${color};font-weight:600;">${status}</td></tr>
+                    ${requestDate ? `<tr><td style="padding:4px 0;font-size:13px;color:#6b7280;"><strong>Date:</strong></td><td style="padding:4px 0;font-size:13px;color:#111827;">${requestDate}</td></tr>` : ''}
+                    <tr><td style="padding:4px 0;font-size:13px;color:#6b7280;"><strong>Details:</strong></td><td style="padding:4px 0;font-size:13px;color:#374151;">${request}</td></tr>
+                    ${remarks ? `<tr><td style="padding:4px 0;font-size:13px;color:#6b7280;"><strong>Remarks:</strong></td><td style="padding:4px 0;font-size:13px;color:#374151;">${remarks}</td></tr>` : ''}
+                  </table>
+                </td></tr>
+              </table>
+
+              <p style="margin:0;font-size:12px;color:#9ca3af;text-align:center;line-height:1.5;">
+                If you have any questions, please contact the Help Desk.
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="background-color:#1a2e1b;border-radius:0 0 12px 12px;padding:20px 40px;">
+              <p style="margin:0 0 4px;font-size:11px;color:rgba(255,255,255,0.5);text-align:center;letter-spacing:0.5px;">
+                This is an automated message from the
+              </p>
+              <p style="margin:0 0 12px;font-size:11px;font-weight:600;color:rgba(255,255,255,0.75);text-align:center;letter-spacing:1px;text-transform:uppercase;">
+                Office of the Registrar — High Court of Kenya
+              </p>
+              <div style="width:32px;height:1px;background:rgba(255,255,255,0.15);margin:0 auto 12px;"></div>
+              <p style="margin:0;font-size:10px;color:rgba(255,255,255,0.3);text-align:center;">
+                Do not reply to this email &middot; For support contact the Help Desk
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>`;
+
+  return await sendMail({ to, subject, html });
+};
+
+// ─── HELPDESK DOCUMENT EMAILS ──────────────────────────────────────────────
+
+interface HelpdeskDocumentEmailOptions {
   to: string;
   requesterName: string;
   ref: string;
@@ -318,7 +452,7 @@ export const sendHelpdeskApproved = async ({
   approvedAt,
   comments,
   documentUrl,
-}: HelpdeskApprovedOptions) => {
+}: HelpdeskDocumentEmailOptions) => {
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -341,20 +475,14 @@ export const sendHelpdeskApproved = async ({
               <p style="margin:2px 0 0;font-size:13px;font-weight:500;letter-spacing:1px;color:rgba(255,255,255,0.75);text-transform:uppercase;">High Court</p>
               <div style="width:48px;height:2px;background:#C29B38;border-radius:1px;margin:18px auto 0;"></div>
               <p style="margin:12px 0 0;font-size:16px;font-weight:700;color:#ffffff;letter-spacing:0.5px;">✅ Document Approved</p>
-              <p style="margin:4px 0 0;font-size:13px;color:rgba(255,255,255,0.7);">Your document has been approved</p>
             </td>
           </tr>
 
           <tr>
             <td style="background-color:#ffffff;padding:36px 40px 32px;">
-              <div style="text-align:center;margin-bottom:24px;">
-                <div style="display:inline-block;background:#D4EDDA;border-radius:50%;width:64px;height:64px;line-height:64px;font-size:32px;color:#155724;">✓</div>
-              </div>
-              <div style="background:#D4EDDA;border:1px solid #15572440;border-radius:8px;padding:12px 16px;margin-bottom:24px;text-align:center;">
-                <p style="margin:0;font-size:16px;font-weight:700;color:#155724;">✅ Approved</p>
-              </div>
               <p style="margin:0 0 4px;font-size:14px;color:#374151;line-height:1.6;">Dear <strong>${requesterName}</strong>,</p>
               <p style="margin:0 0 24px;font-size:14px;color:#374151;line-height:1.6;">Your document has been reviewed and <strong>approved</strong> by ${approvedBy}.</p>
+
               <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f8fafc;border-radius:8px;border:1px solid #e2e8f0;margin-bottom:24px;">
                 <tr><td style="padding:16px 20px;">
                   <table width="100%" cellpadding="0" cellspacing="0" border="0">
@@ -366,16 +494,23 @@ export const sendHelpdeskApproved = async ({
                   </table>
                 </td></tr>
               </table>
-              ${comments ? `<div style="background:#F0FDF4;border:1px solid #86EFAC;border-radius:8px;padding:12px 16px;margin-bottom:24px;"><p style="margin:0 0 4px;font-size:12px;font-weight:600;color:#166534;">📝 Comments from Approver:</p><p style="margin:0;font-size:13px;color:#166534;line-height:1.6;">${comments}</p></div>` : ''}
-              ${documentUrl ? `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:20px;"><tr><td align="center"><a href="${documentUrl}" style="display:inline-block;padding:12px 40px;background-color:#1E4620;color:#ffffff;font-size:14px;font-weight:600;text-decoration:none;border-radius:8px;">📄 View Document</a></td></tr></table>` : ''}
-              <p style="margin:0;font-size:12px;color:#9CA3AF;text-align:center;line-height:1.5;">Your document has been approved and is now available. You can view it in the system.</p>
+
+              ${comments ? `<div style="background:#F0FDF4;border:1px solid #86EFAC;border-radius:8px;padding:12px 16px;margin-bottom:24px;">
+                <p style="margin:0 0 4px;font-size:12px;font-weight:600;color:#166534;">📝 Comments:</p>
+                <p style="margin:0;font-size:13px;color:#166534;line-height:1.6;">${comments}</p>
+              </div>` : ''}
+
+              ${documentUrl ? `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:20px;">
+                <tr><td align="center"><a href="${documentUrl}" style="display:inline-block;padding:12px 40px;background-color:#1E4620;color:#ffffff;font-size:14px;font-weight:600;text-decoration:none;border-radius:8px;">📄 View Document</a></td></tr>
+              </table>` : ''}
+
+              <p style="margin:0;font-size:12px;color:#9CA3AF;text-align:center;line-height:1.5;">Your document has been approved and is now available.</p>
             </td>
           </tr>
 
           <tr>
             <td style="background-color:#1a2e1b;border-radius:0 0 12px 12px;padding:20px 40px;" align="center">
               <p style="margin:0 0 4px;font-size:11px;color:rgba(255,255,255,0.5);letter-spacing:0.5px;">Office of the Registrar — High Court of Kenya</p>
-              <div style="width:32px;height:1px;background:rgba(255,255,255,0.15);margin:8px auto;"></div>
               <p style="margin:0;font-size:10px;color:rgba(255,255,255,0.3);">This is an automated notification. Please do not reply directly to this email.</p>
             </td>
           </tr>
@@ -389,37 +524,4 @@ export const sendHelpdeskApproved = async ({
 </html>`;
 
   return await sendMail({ to, subject: `✅ Document Approved: ${ref}`, html });
-};
-
-/**
- * Sends Helpdesk Document Rejected notification
- */
-interface HelpdeskRejectedOptions {
-  to: string;
-  requesterName: string;
-  ref: string;
-  subject: string;
-  entityType: string;
-  rejectedBy: string;
-  rejectedAt: Date;
-  reason: string;
-  comments?: string;
-}
-
-export const sendHelpdeskRejected = async ({
-  to,
-  requesterName,
-  ref,
-  subject,
-  entityType,
-  rejectedBy,
-  rejectedAt,
-  reason,
-  comments,
-}: HelpdeskRejectedOptions) => {
-  // ... (similar structure to sendHelpdeskApproved but with rejection content)
-  // I'll keep it brief since it's a similar pattern
-  const html = `<!DOCTYPE html>...`; // Same structure as above with rejection styling
-  
-  return await sendMail({ to, subject: `❌ Document Rejected: ${ref}`, html });
 };

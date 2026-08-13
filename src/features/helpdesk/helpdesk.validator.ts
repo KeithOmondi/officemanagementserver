@@ -11,7 +11,7 @@ const utilityTypeEnum = z.enum(['Electricity', 'Water', 'Internet', 'Fuel', 'Oth
 const visaTypeEnum = z.enum(['Official', 'Conference', 'Personal', 'Other']);
 const paymentStatusEnum = z.enum(['Pending', 'In Process', 'Paid', 'Payment NA']);
 
-// Enums for general requests
+// Enums for general requests - request_type is now free text, but we keep enum for other uses
 const requestTypeEnum = z.enum([
   'Driver',
   'Bodyguard',
@@ -114,6 +114,7 @@ const dsaDetailSchema = z.object({
 
 // ============================================================
 // General Requests (Unified - includes all security/personnel)
+// Simplified to only: Requester name, status, type (free text), remarks, details, request date
 // ============================================================
 
 /**
@@ -121,89 +122,57 @@ const dsaDetailSchema = z.object({
  * Supports: Driver, Bodyguard, Firearm, Current Station, Force Number, 
  * Residence Security, Sentry, and other general requests
  * 
- * Required fields are conditional on request_type:
- * - Driver / Bodyguard: officer_name, rank, reporting_date
- * - Force Number: force_number
- * - Current Station / Residence Security / Sentry: location
- * - Firearm: firearm_type is **optional** initially, but required when `officer_assigned` is provided.
- *
- * Additionally, `email` is required whenever `send_email` is true — otherwise
- * a caller could request a notification with nowhere to send it.
+ * Only fields: judge_name (requester), request (details), request_type (free text), 
+ * status, remarks, request_date, officer_assigned
+ * 
+ * email is required whenever send_email is true
  */
 export const createGeneralRequestSchema = z.object({
     body: z.object({
-        judge_name: z.string().min(1).max(100),
-        request: z.string().min(1, 'Request description is required'),
-        request_type: requestTypeEnum,
+        judge_name: z.string().min(1).max(100),        // Requester name
+        request: z.string().min(1, 'Request details are required'), // Details of request
+        request_type: z.string().min(1, 'Request type is required'), // Type of request - FREE TEXT
         category: generalRequestCategoryEnum.optional(),
+        status: statusEnum.optional(),
+        remarks: z.string().optional(),                // Marks/remarks
+        request_date: dateStringSchema.optional(),     // Request date
         date_received: dateStringSchema.optional(),
         officer_assigned: z.string().optional(),
-        status: statusEnum.optional(),
-        remarks: z.string().optional(),
         remark_type: remarkTypeEnum.optional(),
-
-        request_date: dateStringSchema,
-        location: z.string().optional(),
-        firearm_type: z.string().optional(),
-        force_number: z.string().optional(),
-        officer_name: z.string().optional(),
-        officer_station: z.string().max(100).optional(),   // ← NEW
-        assigned_to: z.string().optional(),
-        priority: z.string().optional(),
-        notes: z.string().optional(),
-
-        rank: z.string().optional(),
-        reporting_date: dateStringSchema.optional(),
 
         email: z.string().email('Valid email is required for notifications').optional(),
         send_email: z.boolean().default(false),
     }).strict()
     .superRefine((data, ctx) => {
-        // unchanged
+        // send_email implies email must be present
+        if (data.send_email && (!data.email || data.email.trim() === '')) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['email'],
+                message: 'email is required when send_email is true',
+            });
+        }
     }),
 });
 
 export const updateGeneralRequestSchema = z.object({
     body: z.object({
-        judge_name: z.string().min(1).max(100).optional(),
-        request: z.string().min(1).optional(),
-        request_type: requestTypeEnum.optional(),
+        judge_name: z.string().min(1).max(100).optional(),  // Requester name
+        request: z.string().min(1).optional(),              // Details of request
+        request_type: z.string().min(1).optional(),         // Type of request - FREE TEXT
         category: generalRequestCategoryEnum.optional(),
+        status: statusEnum.optional(),
+        remarks: z.string().optional(),                     // Marks/remarks
+        request_date: dateStringSchema.optional(),          // Request date
         date_received: dateStringSchema.optional(),
         officer_assigned: z.string().optional(),
-        status: statusEnum.optional(),
-        remarks: z.string().optional(),
         remark_type: remarkTypeEnum.optional(),
-
-        request_date: dateStringSchema.optional(),
-        location: z.string().optional(),
-        firearm_type: z.string().optional(),
-        force_number: z.string().optional(),
-        officer_name: z.string().optional(),
-        assigned_to: z.string().optional(),
-        priority: z.string().optional(),
-        notes: z.string().optional(),
-
-        rank: z.string().optional(),
-        reporting_date: dateStringSchema.optional(),
 
         email: z.string().email('Valid email is required for notifications').optional(),
         send_email: z.boolean().optional(),
     }).strict()
     .superRefine((data, ctx) => {
-        // For update, we enforce the same rule if both request_type and officer_assigned are provided.
-        // If request_type is 'Firearm' and officer_assigned is set, then firearm_type must be set.
-        if (data.request_type === 'Firearm' && data.officer_assigned && data.officer_assigned.trim() !== '') {
-            if (!data.firearm_type || data.firearm_type.trim() === '') {
-                ctx.addIssue({
-                    code: z.ZodIssueCode.custom,
-                    path: ['firearm_type'],
-                    message: 'firearm_type is required when updating a Firearm request with an assigned officer',
-                });
-            }
-        }
-
-        // send_email implies email must be present, same rule as create.
+        // send_email implies email must be present
         if (data.send_email && (!data.email || data.email.trim() === '')) {
             ctx.addIssue({
                 code: z.ZodIssueCode.custom,
@@ -427,7 +396,7 @@ export const createClubMembershipSchema = z.object({
 });
 
 // ============================================================
-// Circuits
+// Circuits - UPDATED with email support
 // ============================================================
 
 export const createCircuitSchema = z.object({
@@ -437,6 +406,8 @@ export const createCircuitSchema = z.object({
         start_date: dateStringSchema,
         end_date: dateStringSchema,
         dsa_details: z.array(dsaDetailSchema).optional(),
+        email: z.string().email('Valid email is required for notifications').optional(),
+        send_email: z.boolean().default(false),
     }).strict(),
 });
 
@@ -455,11 +426,13 @@ export const updateCircuitSchema = z.object({
         end_date: dateStringSchema.optional(),
         status: statusEnum.optional(),
         dsa_details: z.array(dsaDetailSchema).optional(),
+        email: z.string().email('Valid email is required for notifications').optional(),
+        send_email: z.boolean().default(false),
     }).strict(),
 });
 
 // ============================================================
-// Other Payments
+// Other Payments - UPDATED with email support
 // ============================================================
 
 export const createOtherPaymentSchema = z.object({
@@ -469,6 +442,8 @@ export const createOtherPaymentSchema = z.object({
         start_date: dateStringSchema,
         end_date: dateStringSchema,
         dsa_details: z.array(dsaDetailSchema).optional(),
+        email: z.string().email('Valid email is required for notifications').optional(),
+        send_email: z.boolean().default(false),
     }).strict(),
 });
 
@@ -487,11 +462,13 @@ export const updateOtherPaymentSchema = z.object({
         end_date: dateStringSchema.optional(),
         status: statusEnum.optional(),
         dsa_details: z.array(dsaDetailSchema).optional(),
+        email: z.string().email('Valid email is required for notifications').optional(),
+        send_email: z.boolean().default(false),
     }).strict(),
 });
 
 // ============================================================
-// Special Benches
+// Special Benches - UPDATED with email support
 // ============================================================
 
 export const createSpecialBenchSchema = z.object({
@@ -501,6 +478,8 @@ export const createSpecialBenchSchema = z.object({
         start_date: dateStringSchema,
         end_date: dateStringSchema,
         dsa_details: z.array(dsaDetailSchema).optional(),
+        email: z.string().email('Valid email is required for notifications').optional(),
+        send_email: z.boolean().default(false),
     }).strict(),
 });
 
@@ -512,11 +491,13 @@ export const updateBenchSchema = z.object({
         end_date: dateStringSchema.optional(),
         status: statusEnum.optional(),
         dsa_details: z.array(dsaDetailSchema).optional(),
+        email: z.string().email('Valid email is required for notifications').optional(),
+        send_email: z.boolean().default(false),
     }).strict(),
 });
 
 // ============================================================
-// Part-Heards
+// Part-Heards - UPDATED with email support
 // ============================================================
 
 export const createPartHeardSchema = z.object({
@@ -526,6 +507,8 @@ export const createPartHeardSchema = z.object({
         start_date: dateStringSchema,
         end_date: dateStringSchema,
         dsa_details: z.array(dsaDetailSchema).optional(),
+        email: z.string().email('Valid email is required for notifications').optional(),
+        send_email: z.boolean().default(false),
     }).strict(),
 });
 
@@ -537,11 +520,13 @@ export const updatePartHeardSchema = z.object({
         end_date: dateStringSchema.optional(),
         status: statusEnum.optional(),
         dsa_details: z.array(dsaDetailSchema).optional(),
+        email: z.string().email('Valid email is required for notifications').optional(),
+        send_email: z.boolean().default(false),
     }).strict(),
 });
 
 // ============================================================
-// Service Weeks
+// Service Weeks - UPDATED with email support
 // ============================================================
 
 export const createServiceWeekSchema = z.object({
@@ -552,6 +537,8 @@ export const createServiceWeekSchema = z.object({
         start_date: dateStringSchema,
         end_date: dateStringSchema,
         dsa_details: z.array(dsaDetailSchema).optional(),
+        email: z.string().email('Valid email is required for notifications').optional(),
+        send_email: z.boolean().default(false),
     }).strict(),
 });
 
@@ -565,6 +552,8 @@ export const updateServiceWeekSchema = z.object({
         end_date: dateStringSchema.optional(),
         status: statusEnum.optional(),
         dsa_details: z.array(dsaDetailSchema).optional(),
+        email: z.string().email('Valid email is required for notifications').optional(),
+        send_email: z.boolean().default(false),
     }).strict(),
 });
 
@@ -664,7 +653,7 @@ export const helpDeskFiltersSchema = z.object({
         search: z.string().optional(),
         status: statusEnum.optional(),
         judge_name: z.string().optional(),
-        request_type: requestTypeEnum.optional(),
+        request_type: z.string().optional(), // Free text filter
         remark_type: remarkTypeEnum.optional(),
         category: generalRequestCategoryEnum.optional(),
         start_date: dateStringSchema.optional(),
@@ -682,6 +671,162 @@ export const idSchema = z.object({
     params: z.object({
         id: z.string().uuid('ID must be a valid UUID'),
     }),
+});
+
+// ============================================================
+// Email Notification Schemas
+// ============================================================
+
+/**
+ * Schema for General Request email options
+ */
+export const generalRequestEmailSchema = z.object({
+    to: z.string().email('Valid recipient email is required'),
+    ticketNumber: z.string().min(1),
+    judgeName: z.string().min(1),
+    request: z.string().min(1),
+    requestType: z.string().optional(),
+    status: z.string().min(1),
+    remarks: z.string().optional(),
+    requestDate: z.string().optional(),
+});
+
+/**
+ * Schema for Helpdesk Document Approved email
+ */
+export const helpdeskDocumentEmailSchema = z.object({
+    to: z.string().email('Valid recipient email is required'),
+    requesterName: z.string().min(1),
+    ref: z.string().min(1),
+    subject: z.string().min(1),
+    entityType: z.string().min(1),
+    approvedBy: z.string().min(1),
+    approvedAt: z.date(),
+    comments: z.string().optional(),
+    documentUrl: z.string().url().optional(),
+});
+
+/**
+ * Schema for Utility Memo email
+ */
+export const utilityMemoEmailSchema = z.object({
+    to: z.string().email('Valid recipient email is required'),
+    judgeName: z.string().min(1),
+    ref: z.string().min(1),
+    utilityType: z.string().min(1),
+    amount: z.number().min(0),
+    period: z.string().min(1),
+    status: z.string().min(1),
+    submittedBy: z.string().min(1),
+    submittedAt: z.date(),
+});
+
+/**
+ * Schema for DSA Memo email
+ */
+export const dsaMemoEmailSchema = z.object({
+    to: z.string().email('Valid recipient email is required'),
+    judgeName: z.string().min(1),
+    ref: z.string().min(1),
+    moduleType: z.enum(['Circuit', 'Bench', 'Part-Heard', 'Service Week', 'Other Payment']),
+    activityName: z.string().min(1),
+    startDate: z.string().min(1),
+    endDate: z.string().min(1),
+    totalDSA: z.number().min(0),
+    memberCount: z.number().int().min(1),
+    status: z.string().min(1),
+    submittedBy: z.string().min(1),
+    submittedAt: z.date(),
+    memoUrl: z.string().url().optional(),
+});
+
+/**
+ * Schema for Medical Claim email
+ */
+export const medicalClaimEmailSchema = z.object({
+    to: z.string().email('Valid recipient email is required'),
+    officerName: z.string().min(1),
+    ref: z.string().min(1),
+    claimAmount: z.number().min(0),
+    dateForwarded: z.string().min(1),
+    status: z.string().min(1),
+    remarks: z.string().optional(),
+    submittedBy: z.string().min(1),
+    submittedAt: z.date(),
+});
+
+/**
+ * Schema for Visa Request email
+ */
+export const visaRequestEmailSchema = z.object({
+    to: z.string().email('Valid recipient email is required'),
+    judgeName: z.string().min(1),
+    ref: z.string().min(1),
+    destinationCountry: z.string().min(1),
+    dateOfTravel: z.string().min(1),
+    dateOfReturn: z.string().min(1),
+    visaType: z.string().min(1),
+    purposeOfTravel: z.string().optional(),
+    status: z.string().min(1),
+    remarks: z.string().optional(),
+    submittedBy: z.string().min(1),
+    submittedAt: z.date(),
+});
+
+/**
+ * Schema for Protocol Event email
+ */
+export const protocolEventEmailSchema = z.object({
+    to: z.string().email('Valid recipient email is required'),
+    activity: z.string().min(1),
+    ref: z.string().min(1),
+    venue: z.string().optional(),
+    periodFrom: z.string().min(1),
+    periodTo: z.string().min(1),
+    officersAssigned: z.string().optional(),
+    dsaRequired: z.boolean(),
+    totalDSA: z.number().min(0),
+    memberCount: z.number().int().min(0),
+    status: z.string().min(1),
+    remarks: z.string().optional(),
+    submittedBy: z.string().min(1),
+    submittedAt: z.date(),
+});
+
+/**
+ * Schema for Club Membership email
+ */
+export const clubMembershipEmailSchema = z.object({
+    to: z.string().email('Valid recipient email is required'),
+    judgeName: z.string().min(1),
+    ref: z.string().min(1),
+    clubName: z.string().min(1),
+    entryFee: z.number().min(0),
+    annualFee: z.number().min(0),
+    court: z.string().optional(),
+    status: z.string().min(1),
+    remarks: z.string().optional(),
+    submittedBy: z.string().min(1),
+    submittedAt: z.date(),
+});
+
+/**
+ * Schema for Document Notification Data (for emailTemplates)
+ */
+export const documentNotificationDataSchema = z.object({
+    documentTitle: z.string().min(1),
+    documentId: z.string().min(1),
+    referenceNo: z.string().nullable().optional(),
+    markedBy: z.string().min(1),
+    markedByDepartment: z.string().min(1),
+    assignedTo: z.string().min(1),
+    instructions: z.string().nullable().optional(),
+    priority: z.enum(['low', 'normal', 'urgent']).optional(),
+    actionType: z.enum(['marked_to_department', 'assigned_to_user', 'sent_to_super_admin']),
+    createdAt: z.date(),
+    documentType: z.string().min(1),
+    departmentName: z.string().min(1),
+    superAdminName: z.string().optional(),
 });
 
 // ============================================================
@@ -751,6 +896,17 @@ export type DSAReportFilters = z.infer<typeof dsaReportFiltersSchema>['query'];
 // Document Entity Types
 export type DocumentEntityType = z.infer<typeof documentEntityEnum>;
 export type ConsolidatedMemoType = z.infer<typeof consolidatedMemoTypeEnum>;
+
+// Email Notification Types
+export type GeneralRequestEmailOptions = z.infer<typeof generalRequestEmailSchema>;
+export type HelpdeskDocumentEmailOptions = z.infer<typeof helpdeskDocumentEmailSchema>;
+export type UtilityMemoEmailOptions = z.infer<typeof utilityMemoEmailSchema>;
+export type DSAMemoEmailOptions = z.infer<typeof dsaMemoEmailSchema>;
+export type MedicalClaimEmailOptions = z.infer<typeof medicalClaimEmailSchema>;
+export type VisaRequestEmailOptions = z.infer<typeof visaRequestEmailSchema>;
+export type ProtocolEventEmailOptions = z.infer<typeof protocolEventEmailSchema>;
+export type ClubMembershipEmailOptions = z.infer<typeof clubMembershipEmailSchema>;
+export type DocumentNotificationData = z.infer<typeof documentNotificationDataSchema>;
 
 // Export enums for use in routes
 // Note: documentEntityEnum and consolidatedMemoTypeEnum are NOT re-listed here —

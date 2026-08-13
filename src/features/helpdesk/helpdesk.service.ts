@@ -5,7 +5,17 @@
 import { pool } from '../../config/db';
 import type { PoolClient } from 'pg';
 import { AppError } from '../../utils/response';
-import { sendGeneralRequestAcknowledgement } from '../../utils/sendMail';
+import {
+    sendGeneralRequestResolved,
+    sendGeneralRequestRejected,
+    sendUtilityMemoNotification,
+    sendDSAMemoNotification,
+    sendMedicalClaimNotification,
+    sendVisaRequestNotification,
+    sendProtocolEventNotification,
+    sendClubMembershipNotification,
+} from '../../utils/emailTemplate';
+import { sendSuperAdminApprovalNotification } from '../../utils/helpdeskTemplates';
 import type {
     JudgeUtility,
     UtilityItem,
@@ -53,9 +63,15 @@ import type {
     RemarkType,
     GeneralRequestCategory,
     UpdateGeneralRequestInput,
+    UtilityMemoEmailOptions,
+    DSAMemoEmailOptions,
+    MedicalClaimEmailOptions,
+    VisaRequestEmailOptions,
+    ProtocolEventEmailOptions,
+    ClubMembershipEmailOptions,
 } from './helpdesk.types';
 import { UpdateCircuitInput, UpdateOtherPaymentInput, UpdateServiceWeekInput } from './helpdesk.validator';
-import { sendSuperAdminApprovalNotification } from '../../utils/helpdeskTemplates';
+import { sendGeneralRequestAcknowledgement } from '../../utils/sendMail';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -106,9 +122,7 @@ const MEDICAL_CLAIM_SELECT = `
 const GENERAL_REQUEST_SELECT = `
     id, s_no, ticket_number, judge_name, request, request_type, category,
     date_received, officer_assigned, status, remarks, remark_type,
-    request_date, location, firearm_type, force_number, officer_name,
-    assigned_to, priority, notes,
-    rank, reporting_date,
+    request_date,
     created_by, created_at, updated_at
 `;
 
@@ -310,25 +324,6 @@ export class HelpDeskService {
         return this.getDSADetails(config.table, config.foreignKey, parentId, config.parentType);
     }
 
-    // ─── NEW: Firearm validation helper ──────────────────────────────────────
-
-    /**
-     * Validates the business rule for Firearm requests:
-     * firearm_type is required when officer_assigned is provided.
-     */
-    private static validateGeneralRequestInput(
-        input: Partial<CreateGeneralRequestInput | UpdateGeneralRequestInput>,
-        isUpdate: boolean = false
-    ): void {
-        // Only enforce if request_type is Firearm and officer_assigned is set
-        if (input.request_type === 'Firearm' && input.officer_assigned) {
-            const firearm = input.firearm_type;
-            if (!firearm || firearm.trim() === '') {
-                throw new AppError(400, 'firearm_type is required when an officer is assigned to a Firearm request');
-            }
-        }
-    }
-
     // ─── Super Admin Notification Helper ─────────────────────────────────────
 
     /**
@@ -409,8 +404,37 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
         }
     }
 
+    // ─── Helper: Send DSA Memo Notification ─────────────────────────────────
+
+    private static async sendDSAMemoEmail(
+        email: string,
+        moduleType: 'Circuit' | 'Bench' | 'Part-Heard' | 'Service Week' | 'Other Payment',
+        entity: any,
+        dsaDetails: any[],
+        submittedBy: string
+    ): Promise<void> {
+        const totalDSA = dsaDetails.reduce((sum, d) => sum + (d.dsa_per_day * d.days), 0);
+        const memberCount = dsaDetails.length;
+
+        await sendDSAMemoNotification({
+            to: email,
+            judgeName: entity.judge_name || entity.name || 'N/A',
+            ref: entity.id,
+            moduleType,
+            activityName: entity.name || entity.case_reference || entity.activity || 'N/A',
+            startDate: entity.start_date || entity.period_from || 'N/A',
+            endDate: entity.end_date || entity.period_to || 'N/A',
+            totalDSA,
+            memberCount,
+            status: entity.status || 'Pending',
+            submittedBy,
+            submittedAt: new Date(),
+        });
+    }
+
     // ============================================================
-    // GENERAL REQUESTS (UNIFIED - includes all security/personnel)
+    // GENERAL REQUESTS (UNIFIED - simplified)
+    // Only: Requester name, status, type (free text), remarks, details, request date
     // ============================================================
 
     // ─── General Requests ──────────────────────────────────────────────────
@@ -436,8 +460,8 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
             paramCount++;
         }
         if (filters.request_type) {
-            query += ` AND request_type = $${paramCount}`;
-            params.push(filters.request_type);
+            query += ` AND request_type ILIKE $${paramCount}`;
+            params.push(`%${filters.request_type}%`);
             paramCount++;
         }
         if (filters.remark_type) {
@@ -485,13 +509,13 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
         return rows;
     }
 
-    static async findGeneralRequestsByType(requestType: RequestType): Promise<GeneralRequest[]> {
+    static async findGeneralRequestsByType(requestType: string): Promise<GeneralRequest[]> {
         const { rows } = await pool.query(
             `SELECT ${GENERAL_REQUEST_SELECT} 
              FROM general_requests 
-             WHERE request_type = $1 AND is_active = true
+             WHERE request_type ILIKE $1 AND is_active = true
              ORDER BY created_at DESC`,
-            [requestType]
+            [`%${requestType}%`]
         );
         return rows;
     }
@@ -507,15 +531,12 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
         return rows;
     }
 
-    // ─── UPDATED: Added rank, reporting_date, and Firearm validation ──────
+    // ─── UPDATED: Simplified create with only required fields ──────────────
 
     static async createGeneralRequest(
         input: CreateGeneralRequestInput,
         userId: string
     ): Promise<GeneralRequest> {
-        // Validate business rule
-        this.validateGeneralRequestInput(input, false);
-
         const client = await pool.connect();
 
         try {
@@ -527,8 +548,8 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
             // Determine category if not provided
             let category = input.category;
             if (!category) {
-                const securityTypes: RequestType[] = ['Firearm', 'Current Station', 'Force Number', 'Residence Security', 'Sentry'];
-                const personnelTypes: RequestType[] = ['Driver', 'Bodyguard'];
+                const securityTypes = ['Firearm', 'Current Station', 'Force Number', 'Residence Security', 'Sentry'];
+                const personnelTypes = ['Driver', 'Bodyguard'];
 
                 if (securityTypes.includes(input.request_type)) {
                     category = 'Security';
@@ -543,11 +564,9 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
                 `INSERT INTO general_requests (
                     s_no, ticket_number, judge_name, request, request_type, category,
                     date_received, officer_assigned, status, remarks, remark_type,
-                    request_date, location, firearm_type, force_number, officer_name,
-                    assigned_to, priority, notes,
-                    rank, reporting_date,
+                    request_date,
                     created_by
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                 RETURNING id`,
                 [
                     s_no,
@@ -561,16 +580,7 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
                     input.status || 'Pending',
                     input.remarks || null,
                     input.remark_type || null,
-                    input.request_date,
-                    input.location || null,
-                    input.firearm_type || null,
-                    input.force_number || null,
-                    input.officer_name || null,
-                    input.assigned_to || null,
-                    input.priority || null,
-                    input.notes || null,
-                    input.rank || null,
-                    input.reporting_date || null,
+                    input.request_date || null,
                     userId,
                 ]
             );
@@ -588,6 +598,10 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
                         ticketNumber,
                         judgeName: input.judge_name,
                         request: input.request,
+                        requestType: input.request_type,
+                        status: input.status || 'Pending',
+                        remarks: input.remarks || undefined,
+                        requestDate: input.request_date || undefined,
                     });
                 } catch (emailError) {
                     console.error('[EMAIL ERROR] Failed to send general request acknowledgement:', emailError);
@@ -605,13 +619,12 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
         }
     }
 
+    // ─── UPDATED: Simplified update ──────────────────────────────────────────
+
     static async updateGeneralRequest(
         id: string,
         input: UpdateGeneralRequestInput
     ): Promise<GeneralRequest> {
-        // Validate business rule
-        this.validateGeneralRequestInput(input, true);
-
         const existing = await this.findGeneralRequestById(id);
         if (!existing) {
             throw new AppError(404, 'General request not found');
@@ -629,6 +642,7 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
             }
         };
 
+        setField('judge_name', input.judge_name?.trim());
         setField('request', input.request?.trim());
         setField('request_type', input.request_type);
         setField('category', input.category);
@@ -638,15 +652,6 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
         setField('remarks', input.remarks);
         setField('remark_type', input.remark_type);
         setField('request_date', input.request_date);
-        setField('location', input.location);
-        setField('firearm_type', input.firearm_type);
-        setField('force_number', input.force_number);
-        setField('officer_name', input.officer_name);
-        setField('assigned_to', input.assigned_to);
-        setField('priority', input.priority);
-        setField('notes', input.notes);
-        setField('rank', input.rank);
-        setField('reporting_date', input.reporting_date);
 
         if (fields.length === 0) {
             return existing;
@@ -688,8 +693,6 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
         if (input.email) {
             try {
                 if (input.status === 'Resolved') {
-                    const { sendGeneralRequestResolved } = require('../../utils/sendMail');
-                    
                     await sendGeneralRequestResolved({
                         to: input.email,
                         ticketNumber: updated.ticket_number || 'N/A',
@@ -699,8 +702,6 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
                         resolvedBy: input.resolvedBy || 'System Administrator',
                     });
                 } else if (input.status === 'Rejected') {
-                    const { sendGeneralRequestRejected } = require('../../utils/sendMail');
-                    
                     await sendGeneralRequestRejected({
                         to: input.email,
                         ticketNumber: updated.ticket_number || 'N/A',
@@ -733,7 +734,7 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
 
     static async getGeneralRequestStats(): Promise<{
         total: number;
-        byType: Record<RequestType, number>;
+        byType: Record<string, number>;
         byStatus: Record<string, number>;
         byRemarkType: Record<RemarkType, number>;
         byCategory: Record<GeneralRequestCategory, number>;
@@ -773,7 +774,7 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
         const byType = byTypeRows.reduce((acc, row) => {
             acc[row.request_type] = row.count;
             return acc;
-        }, {} as Record<RequestType, number>);
+        }, {} as Record<string, number>);
 
         const byStatus = byStatusRows.reduce((acc, row) => {
             acc[row.status] = row.count;
@@ -818,10 +819,12 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
                     ticketNumber: request.ticket_number || 'N/A',
                     judgeName: request.judge_name,
                     request: request.request,
+                    requestType: request.request_type,
+                    status: request.status,
+                    remarks: request.remarks || undefined,
+                    requestDate: request.request_date || undefined,
                 });
             } else {
-                const { sendGeneralRequestResolved, sendGeneralRequestRejected } = require('../../utils/sendMail');
-                
                 if (type === 'resolved') {
                     await sendGeneralRequestResolved({
                         to: email,
@@ -858,22 +861,22 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
     static async findAllSecurityRequests(filters: HelpDeskFilters = {}): Promise<SecurityRequest[]> {
         const generalRequests = await this.findAllGeneralRequests({
             ...filters,
-            request_type: filters.request_type as RequestType,
+            request_type: filters.request_type as string,
         });
         
         return generalRequests.map(req => ({
             id: req.id,
             s_no: req.s_no,
             judge_name: req.judge_name,
-            request_type: req.request_type,
+            request_type: req.request_type as RequestType,
             request_date: req.request_date,
             officer_assigned: req.officer_assigned,
             status: req.status,
             remarks: req.remarks,
             remark_type: req.remark_type,
-            location: req.location,
-            firearm_type: req.firearm_type,
-            force_number: req.force_number,
+            location: null,
+            firearm_type: null,
+            force_number: null,
             created_by: req.created_by,
             created_at: req.created_at,
             updated_at: req.updated_at,
@@ -891,15 +894,15 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
             id: req.id,
             s_no: req.s_no,
             judge_name: req.judge_name,
-            request_type: req.request_type,
+            request_type: req.request_type as RequestType,
             request_date: req.request_date,
             officer_assigned: req.officer_assigned,
             status: req.status,
             remarks: req.remarks,
             remark_type: req.remark_type,
-            location: req.location,
-            firearm_type: req.firearm_type,
-            force_number: req.force_number,
+            location: null,
+            firearm_type: null,
+            force_number: null,
             created_by: req.created_by,
             created_at: req.created_at,
             updated_at: req.updated_at,
@@ -915,15 +918,15 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
             id: req.id,
             s_no: req.s_no,
             judge_name: req.judge_name,
-            request_type: req.request_type,
+            request_type: req.request_type as RequestType,
             request_date: req.request_date,
             officer_assigned: req.officer_assigned,
             status: req.status,
             remarks: req.remarks,
             remark_type: req.remark_type,
-            location: req.location,
-            firearm_type: req.firearm_type,
-            force_number: req.force_number,
+            location: null,
+            firearm_type: null,
+            force_number: null,
             created_by: req.created_by,
             created_at: req.created_at,
             updated_at: req.updated_at,
@@ -939,15 +942,15 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
             id: req.id,
             s_no: req.s_no,
             judge_name: req.judge_name,
-            request_type: req.request_type,
+            request_type: req.request_type as RequestType,
             request_date: req.request_date,
             officer_assigned: req.officer_assigned,
             status: req.status,
             remarks: req.remarks,
             remark_type: req.remark_type,
-            location: req.location,
-            firearm_type: req.firearm_type,
-            force_number: req.force_number,
+            location: null,
+            firearm_type: null,
+            force_number: null,
             created_by: req.created_by,
             created_at: req.created_at,
             updated_at: req.updated_at,
@@ -971,9 +974,6 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
             remarks: input.remarks,
             remark_type: input.remark_type,
             request_date: input.request_date,
-            location: input.location,
-            firearm_type: input.firearm_type,
-            force_number: input.force_number,
             email: input.email,
             send_email: input.send_email || false,
         };
@@ -984,15 +984,15 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
             id: result.id,
             s_no: result.s_no,
             judge_name: result.judge_name,
-            request_type: result.request_type,
+            request_type: result.request_type as RequestType,
             request_date: result.request_date,
             officer_assigned: result.officer_assigned,
             status: result.status,
             remarks: result.remarks,
             remark_type: result.remark_type,
-            location: result.location,
-            firearm_type: result.firearm_type,
-            force_number: result.force_number,
+            location: null,
+            firearm_type: null,
+            force_number: null,
             created_by: result.created_by,
             created_at: result.created_at,
             updated_at: result.updated_at,
@@ -1013,9 +1013,6 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
             status: input.status,
             remarks: input.remarks,
             remark_type: input.remark_type,
-            location: input.location,
-            firearm_type: input.firearm_type,
-            force_number: input.force_number,
         };
 
         const result = await this.updateGeneralRequest(id, updateInput);
@@ -1024,15 +1021,15 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
             id: result.id,
             s_no: result.s_no,
             judge_name: result.judge_name,
-            request_type: result.request_type,
+            request_type: result.request_type as RequestType,
             request_date: result.request_date,
             officer_assigned: result.officer_assigned,
             status: result.status,
             remarks: result.remarks,
             remark_type: result.remark_type,
-            location: result.location,
-            firearm_type: result.firearm_type,
-            force_number: result.force_number,
+            location: null,
+            firearm_type: null,
+            force_number: null,
             created_by: result.created_by,
             created_at: result.created_at,
             updated_at: result.updated_at,
@@ -1052,15 +1049,15 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
             id: result.id,
             s_no: result.s_no,
             judge_name: result.judge_name,
-            request_type: result.request_type,
+            request_type: result.request_type as RequestType,
             request_date: result.request_date,
             officer_assigned: result.officer_assigned,
             status: result.status,
             remarks: result.remarks,
             remark_type: result.remark_type,
-            location: result.location,
-            firearm_type: result.firearm_type,
-            force_number: result.force_number,
+            location: null,
+            firearm_type: null,
+            force_number: null,
             created_by: result.created_by,
             created_at: result.created_at,
             updated_at: result.updated_at,
@@ -1079,7 +1076,7 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
      */
     static async getSecurityRequestStats(): Promise<{
         total: number;
-        byType: Record<RequestType, number>;
+        byType: Record<string, number>;
         byStatus: Record<string, number>;
         byRemarkType: Record<RemarkType, number>;
     }> {
@@ -1107,54 +1104,51 @@ ${event.dsa_required ? `Members: ${memberCount}` : ''}
         return rows;
     }
 
-static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtility[]> {
-    
-    let query = `SELECT ${UTILITY_REQUEST_SELECT} FROM judge_utility_requests WHERE is_active = true`;
-    const params: unknown[] = [];
-    let paramCount = 1;
+    static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtility[]> {
+        let query = `SELECT ${UTILITY_REQUEST_SELECT} FROM judge_utility_requests WHERE is_active = true`;
+        const params: unknown[] = [];
+        let paramCount = 1;
 
-    if (filters.search) {
-        query += ` AND (judge_name ILIKE $${paramCount} OR pj_number ILIKE $${paramCount})`;
-        params.push(`%${filters.search}%`);
-        paramCount++;
-    }
-    if (filters.judge_name) {
-        query += ` AND judge_name ILIKE $${paramCount}`;
-        params.push(`%${filters.judge_name}%`);
-        paramCount++;
-    }
-    if (filters.pj_number) {
-        query += ` AND pj_number ILIKE $${paramCount}`;
-        params.push(`%${filters.pj_number}%`);
-        paramCount++;
-    }
-
-    query += ` ORDER BY created_at DESC`;
-    if (filters.limit) {
-        query += ` LIMIT $${paramCount}`;
-        params.push(filters.limit);
-        paramCount++;
-    }
-    if (filters.offset) {
-        query += ` OFFSET $${paramCount}`;
-        params.push(filters.offset);
-    }
-
-    
-
-    const { rows } = await pool.query(query, params);
-
-    for (const request of rows) {
-        let items = await this.getUtilityItems(request.id);
-        if (filters.status) {
-            items = items.filter((item) => item.status === filters.status);
+        if (filters.search) {
+            query += ` AND (judge_name ILIKE $${paramCount} OR pj_number ILIKE $${paramCount})`;
+            params.push(`%${filters.search}%`);
+            paramCount++;
         }
-        request.items = items;
-    }
+        if (filters.judge_name) {
+            query += ` AND judge_name ILIKE $${paramCount}`;
+            params.push(`%${filters.judge_name}%`);
+            paramCount++;
+        }
+        if (filters.pj_number) {
+            query += ` AND pj_number ILIKE $${paramCount}`;
+            params.push(`%${filters.pj_number}%`);
+            paramCount++;
+        }
 
-    const result = filters.status ? rows.filter((r) => r.items.length > 0) : rows;
-    return result;
-}
+        query += ` ORDER BY created_at DESC`;
+        if (filters.limit) {
+            query += ` LIMIT $${paramCount}`;
+            params.push(filters.limit);
+            paramCount++;
+        }
+        if (filters.offset) {
+            query += ` OFFSET $${paramCount}`;
+            params.push(filters.offset);
+        }
+
+        const { rows } = await pool.query(query, params);
+
+        for (const request of rows) {
+            let items = await this.getUtilityItems(request.id);
+            if (filters.status) {
+                items = items.filter((item) => item.status === filters.status);
+            }
+            request.items = items;
+        }
+
+        const result = filters.status ? rows.filter((r) => r.items.length > 0) : rows;
+        return result;
+    }
 
     static async findUtilityById(id: string): Promise<JudgeUtility | null> {
         const { rows } = await pool.query(
@@ -1185,162 +1179,244 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
         return request;
     }
 
-    /**
-     * Create a new utility record - PJ number is REQUIRED
-     */
-    static async createUtility(
-        input: CreateUtilityInput,
-        userId: string
-    ): Promise<JudgeUtility> {
-        // Validate PJ number is provided
-        if (!input.pj_number || input.pj_number.trim() === '') {
-            throw new AppError(400, 'PJ number is required to create a utility record');
-        }
-
-        const client = await pool.connect();
-
-        try {
-            await client.query('BEGIN');
-
-            const { rows } = await client.query(
-                `INSERT INTO judge_utility_requests (pj_number, judge_name, created_by)
-                 VALUES ($1, $2, $3)
-                 RETURNING id`,
-                [input.pj_number.trim(), input.judge_name.trim(), userId]
-            );
-
-            const requestId = rows[0].id;
-
-            for (const item of input.items) {
-                await client.query(
-                    `INSERT INTO judge_utility_items (
-                        request_id, utility_type, requisition_number, amount, period, description,
-                        date_received, date_forwarded_dass, date_paid, status
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-                    [
-                        requestId,
-                        item.utility_type,
-                        item.requisition_number || null,
-                        item.amount,
-                        item.period.trim(),
-                        item.description || null,
-                        item.date_received || null,
-                        item.date_forwarded_dass || null,
-                        item.date_paid || null,
-                        item.status || 'Awaiting',
-                    ]
-                );
-            }
-
-            await client.query('COMMIT');
-
-            const utility = await this.findUtilityById(requestId);
-            if (!utility) throw new AppError(500, 'Failed to create judge utility record');
-            return utility;
-        } catch (error) {
-            await client.query('ROLLBACK');
-            throw error;
-        } finally {
-            client.release();
-        }
+/**
+ * Create a new utility record - PJ number is REQUIRED
+ * Updated to include email notification
+ */
+static async createUtility(
+    input: CreateUtilityInput,
+    userId: string,
+    email?: string,
+    sendEmail: boolean = false
+): Promise<JudgeUtility> {
+    // Validate PJ number is provided
+    if (!input.pj_number || input.pj_number.trim() === '') {
+        throw new AppError(400, 'PJ number is required to create a utility record');
     }
+
+    const client = await pool.connect();
+
+    try {
+        await client.query('BEGIN');
+
+        const { rows } = await client.query(
+            `INSERT INTO judge_utility_requests (pj_number, judge_name, created_by)
+             VALUES ($1, $2, $3)
+             RETURNING id`,
+            [input.pj_number.trim(), input.judge_name.trim(), userId]
+        );
+
+        const requestId = rows[0].id;
+
+        for (const item of input.items) {
+            await client.query(
+                `INSERT INTO judge_utility_items (
+                    request_id, utility_type, requisition_number, amount, period, description,
+                    date_received, date_forwarded_dass, date_paid, status
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+                [
+                    requestId,
+                    item.utility_type,
+                    item.requisition_number || null,
+                    item.amount,
+                    item.period.trim(),
+                    item.description || null,
+                    item.date_received || null,
+                    item.date_forwarded_dass || null,
+                    item.date_paid || null,
+                    item.status || 'Awaiting',
+                ]
+            );
+        }
+
+        await client.query('COMMIT');
+
+        const utility = await this.findUtilityById(requestId);
+        if (!utility) throw new AppError(500, 'Failed to create judge utility record');
+
+        // Send email if requested
+        if (sendEmail && email && utility.items && utility.items.length > 0) {
+            try {
+                // Send notification for the first utility item (or all items)
+                const firstItem = utility.items[0];
+                await sendUtilityMemoNotification({
+                    to: email,
+                    judgeName: utility.judge_name,
+                    ref: utility.id,
+                    utilityType: firstItem.utility_type,
+                    amount: firstItem.amount,
+                    period: firstItem.period,
+                    status: firstItem.status,
+                    submittedBy: 'Help Desk Team',
+                    submittedAt: new Date(),
+                });
+                console.log(`[EMAIL] Utility memo notification sent to ${email}`);
+            } catch (emailError) {
+                console.error('[EMAIL ERROR] Failed to send utility memo notification:', emailError);
+                // Don't throw - we don't want to fail the request creation if email fails
+            }
+        }
+
+        return utility;
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    } finally {
+        client.release();
+    }
+}
 
     /**
      * Add a utility item to an existing utility record - uses PJ number to find the request
-     */
-    static async addUtilityItem(
-        input: AddUtilityItemInput
-    ): Promise<JudgeUtility> {
-        // Validate PJ number is provided
-        if (!input.pj_number || input.pj_number.trim() === '') {
-            throw new AppError(400, 'PJ number is required to add a utility item');
-        }
-
-        // Find the utility request by PJ number
-        const existing = await this.findUtilityByPjNumber(input.pj_number);
-        if (!existing) {
-            throw new AppError(404, `Judge utility record not found for PJ number: ${input.pj_number}`);
-        }
-
-        const requestId = existing.id;
-
-        await pool.query(
-            `INSERT INTO judge_utility_items (
-                request_id, utility_type, requisition_number, amount, period, description,
-                date_received, date_forwarded_dass, date_paid, status
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-            [
-                requestId,
-                input.utility_type,
-                input.requisition_number || null,
-                input.amount,
-                input.period.trim(),
-                input.description || null,
-                input.date_received || null,
-                input.date_forwarded_dass || null,
-                input.date_paid || null,
-                input.status || 'Awaiting',
-            ]
-        );
-
-        const updated = await this.findUtilityById(requestId);
-        if (!updated) throw new AppError(500, 'Failed to add utility item');
-        return updated;
+/**
+ * Add a utility item to an existing utility record - uses PJ number to find the request
+ * Updated to include email notification
+ */
+static async addUtilityItem(
+    input: AddUtilityItemInput,
+    email?: string,
+    sendEmail: boolean = false
+): Promise<JudgeUtility> {
+    // Validate PJ number is provided
+    if (!input.pj_number || input.pj_number.trim() === '') {
+        throw new AppError(400, 'PJ number is required to add a utility item');
     }
 
-    static async updateUtilityItem(
-        requestId: string,
-        itemId: string,
-        input: UpdateUtilityItemInput
-    ): Promise<JudgeUtility> {
-        const request = await this.findUtilityById(requestId);
-        if (!request) {
-            throw new AppError(404, 'Judge utility record not found');
+    // Find the utility request by PJ number
+    const existing = await this.findUtilityByPjNumber(input.pj_number);
+    if (!existing) {
+        throw new AppError(404, `Judge utility record not found for PJ number: ${input.pj_number}`);
+    }
+
+    const requestId = existing.id;
+
+    await pool.query(
+        `INSERT INTO judge_utility_items (
+            request_id, utility_type, requisition_number, amount, period, description,
+            date_received, date_forwarded_dass, date_paid, status
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [
+            requestId,
+            input.utility_type,
+            input.requisition_number || null,
+            input.amount,
+            input.period.trim(),
+            input.description || null,
+            input.date_received || null,
+            input.date_forwarded_dass || null,
+            input.date_paid || null,
+            input.status || 'Awaiting',
+        ]
+    );
+
+    const updated = await this.findUtilityById(requestId);
+    if (!updated) throw new AppError(500, 'Failed to add utility item');
+
+    // Send email if requested
+    if (sendEmail && email && updated.items && updated.items.length > 0) {
+        try {
+            const newItem = updated.items[updated.items.length - 1];
+            await sendUtilityMemoNotification({
+                to: email,
+                judgeName: updated.judge_name,
+                ref: updated.id,
+                utilityType: newItem.utility_type,
+                amount: newItem.amount,
+                period: newItem.period,
+                status: newItem.status,
+                submittedBy: 'Help Desk Team',
+                submittedAt: new Date(),
+            });
+        } catch (emailError) {
+            console.error('[EMAIL ERROR] Failed to send utility memo notification:', emailError);
         }
+    }
 
-        const item = request.items.find((i) => i.id === itemId);
-        if (!item) {
-            throw new AppError(404, 'Utility item not found');
+    return updated;
+}
+
+/**
+ * Update an existing utility item - uses item ID to identify the specific item
+ * Updated to include email notification
+ */
+static async updateUtilityItem(
+    requestId: string,
+    itemId: string,
+    input: UpdateUtilityItemInput,
+    email?: string,
+    sendEmail: boolean = false
+): Promise<JudgeUtility> {
+    const request = await this.findUtilityById(requestId);
+    if (!request) {
+        throw new AppError(404, 'Judge utility record not found');
+    }
+
+    const item = request.items.find((i) => i.id === itemId);
+    if (!item) {
+        throw new AppError(404, 'Utility item not found');
+    }
+
+    const fields: string[] = [];
+    const values: unknown[] = [];
+    let paramCount = 1;
+
+    const setField = (column: string, value: unknown) => {
+        if (value !== undefined) {
+            fields.push(`${column} = $${paramCount}`);
+            values.push(value);
+            paramCount++;
         }
+    };
 
-        const fields: string[] = [];
-        const values: unknown[] = [];
-        let paramCount = 1;
+    setField('status', input.status);
+    setField('date_received', input.date_received);
+    setField('date_forwarded_dass', input.date_forwarded_dass);
+    setField('date_paid', input.date_paid);
+    setField('amount', input.amount);
+    setField('period', input.period?.trim());
+    setField('description', input.description);
+    setField('utility_type', input.utility_type);
+    setField('requisition_number', input.requisition_number);
 
-        const setField = (column: string, value: unknown) => {
-            if (value !== undefined) {
-                fields.push(`${column} = $${paramCount}`);
-                values.push(value);
-                paramCount++;
+    if (fields.length === 0) {
+        return request;
+    }
+
+    fields.push(`updated_at = now()`);
+    values.push(itemId);
+
+    await pool.query(
+        `UPDATE judge_utility_items SET ${fields.join(', ')} WHERE id = $${paramCount}`,
+        values
+    );
+
+    const updated = await this.findUtilityById(requestId);
+    if (!updated) throw new AppError(500, 'Failed to update utility item');
+
+    // Send email if requested
+    if (sendEmail && email && input.status) {
+        try {
+            const updatedItem = updated.items.find((i) => i.id === itemId);
+            if (updatedItem) {
+                await sendUtilityMemoNotification({
+                    to: email,
+                    judgeName: updated.judge_name,
+                    ref: updated.id,
+                    utilityType: updatedItem.utility_type,
+                    amount: updatedItem.amount,
+                    period: updatedItem.period,
+                    status: updatedItem.status,
+                    submittedBy: 'System Administrator',
+                    submittedAt: new Date(),
+                });
             }
-        };
-
-        setField('status', input.status);
-        setField('date_received', input.date_received);
-        setField('date_forwarded_dass', input.date_forwarded_dass);
-        setField('date_paid', input.date_paid);
-        setField('amount', input.amount);
-        setField('period', input.period?.trim());
-        setField('description', input.description);
-        setField('utility_type', input.utility_type);
-        setField('requisition_number', input.requisition_number);
-
-        if (fields.length === 0) {
-            return request;
+        } catch (emailError) {
+            console.error('[EMAIL ERROR] Failed to send utility memo notification:', emailError);
         }
-
-        fields.push(`updated_at = now()`);
-        values.push(itemId);
-
-        await pool.query(
-            `UPDATE judge_utility_items SET ${fields.join(', ')} WHERE id = $${paramCount}`,
-            values
-        );
-
-        const updated = await this.findUtilityById(requestId);
-        if (!updated) throw new AppError(500, 'Failed to update utility item');
-        return updated;
     }
+
+    return updated;
+}
 
     /**
      * Update the main utility record (judge name or PJ number)
@@ -1429,7 +1505,7 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
     }
 
     // ============================================================
-    // CLUB MEMBERSHIP
+    // CLUB MEMBERSHIP - With Email Integration
     // ============================================================
 
     static async findAllClubMemberships(filters: HelpDeskFilters = {}): Promise<ClubMembership[]> {
@@ -1478,7 +1554,9 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
     static async createClubMembership(
         input: CreateClubMembershipInput,
-        userId: string
+        userId: string,
+        email?: string,
+        sendEmail: boolean = false
     ): Promise<ClubMembership> {
         const { rows } = await pool.query(
             `INSERT INTO club_memberships (
@@ -1502,6 +1580,30 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
         const membership = await this.findClubMembershipById(rows[0].id);
         if (!membership) throw new AppError(500, 'Failed to create club membership');
+
+        // Send email if requested
+        if (sendEmail && email) {
+            try {
+                await sendClubMembershipNotification({
+                    to: email,
+                    judgeName: membership.judge_name,
+                    ref: membership.id,
+                    clubName: membership.club_name,
+                    entryFee: membership.entry_fee || 0,
+                    annualFee: membership.annual_fee || 0,
+                    court: membership.court || undefined,
+                    status: membership.status,
+                    remarks: membership.remarks || undefined,
+                    submittedBy: 'Help Desk Team',
+                    submittedAt: new Date(),
+                });
+                console.log(`[EMAIL] Club membership notification sent to ${email}`);
+            } catch (emailError) {
+                console.error('[EMAIL ERROR] Failed to send club membership notification:', emailError);
+                // Don't throw - we don't want to fail the request creation if email fails
+            }
+        }
+
         return membership;
     }
 
@@ -1521,6 +1623,28 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
         const updated = await this.findClubMembershipById(id);
         if (!updated) throw new AppError(500, 'Failed to update membership status');
+
+        // Send email on status change
+        if (input.email && input.status) {
+            try {
+                await sendClubMembershipNotification({
+                    to: input.email,
+                    judgeName: updated.judge_name,
+                    ref: updated.id,
+                    clubName: updated.club_name,
+                    entryFee: updated.entry_fee || 0,
+                    annualFee: updated.annual_fee || 0,
+                    court: updated.court || undefined,
+                    status: input.status,
+                    remarks: input.remarks || undefined,
+                    submittedBy: input.resolvedBy || input.rejectedBy || 'System Administrator',
+                    submittedAt: new Date(),
+                });
+            } catch (emailError) {
+                console.error('[EMAIL ERROR] Failed to send club membership status update:', emailError);
+            }
+        }
+
         return updated;
     }
 
@@ -1615,7 +1739,7 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
     }
 
     // ============================================================
-    // CIRCUITS
+    // CIRCUITS - With Email Integration
     // ============================================================
 
     static async findAllCircuits(filters: HelpDeskFilters = {}): Promise<Circuit[]> {
@@ -1686,7 +1810,9 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
     static async createCircuit(
         input: CreateCircuitInput,
-        userId: string
+        userId: string,
+        email?: string,
+        sendEmail: boolean = false
     ): Promise<Circuit> {
         const client = await pool.connect();
         
@@ -1724,6 +1850,22 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
             const circuit = await this.findCircuitById(circuitId);
             if (!circuit) throw new AppError(500, 'Failed to create circuit');
+
+            // Send email if requested
+            if (sendEmail && email && circuit.dsa_details && circuit.dsa_details.length > 0) {
+                try {
+                    await this.sendDSAMemoEmail(
+                        email,
+                        'Circuit',
+                        circuit,
+                        circuit.dsa_details,
+                        'Help Desk Team'
+                    );
+                } catch (emailError) {
+                    console.error('[EMAIL ERROR] Failed to send circuit DSA memo notification:', emailError);
+                }
+            }
+
             return circuit;
             
         } catch (error) {
@@ -1750,6 +1892,22 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
         const updated = await this.findCircuitById(id);
         if (!updated) throw new AppError(500, 'Failed to update circuit status');
+
+        // Send email on status change
+        if (input.email && updated.dsa_details && updated.dsa_details.length > 0) {
+            try {
+                await this.sendDSAMemoEmail(
+                    input.email,
+                    'Circuit',
+                    updated,
+                    updated.dsa_details,
+                    input.resolvedBy || input.rejectedBy || 'System Administrator'
+                );
+            } catch (emailError) {
+                console.error('[EMAIL ERROR] Failed to send circuit status update email:', emailError);
+            }
+        }
+
         return updated;
     }
 
@@ -1820,8 +1978,74 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
         }
     }
 
+    // ─── Circuits – Full Update ──────────────────────────────────────────────
+    static async updateCircuit(
+        id: string,
+        input: UpdateCircuitInput
+    ): Promise<Circuit> {
+        const existing = await this.findCircuitById(id);
+        if (!existing) {
+            throw new AppError(404, 'Circuit not found');
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            const fields: string[] = [];
+            const values: unknown[] = [];
+            let paramCount = 1;
+
+            const setField = (column: string, value: unknown) => {
+                if (value !== undefined) {
+                    fields.push(`${column} = $${paramCount}`);
+                    values.push(value);
+                    paramCount++;
+                }
+            };
+
+            setField('name', input.name?.trim());
+            setField('location', input.location?.trim());
+            setField('start_date', input.start_date);
+            setField('end_date', input.end_date);
+            setField('status', input.status);
+
+            if (fields.length > 0) {
+                fields.push('updated_at = now()');
+                values.push(id);
+                await client.query(
+                    `UPDATE circuits SET ${fields.join(', ')} WHERE id = $${paramCount}`,
+                    values
+                );
+            }
+
+            // Update DSA details if provided
+            if (input.dsa_details !== undefined) {
+                await this.upsertDSADetails(
+                    client,
+                    'circuit_dsa_details',
+                    'circuit_id',
+                    id,
+                    input.dsa_details,
+                    'circuit'
+                );
+            }
+
+            await client.query('COMMIT');
+
+            const updated = await this.findCircuitById(id);
+            if (!updated) throw new AppError(500, 'Failed to update circuit');
+            return updated;
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
     // ============================================================
-    // SPECIAL BENCHES
+    // SPECIAL BENCHES - With Email Integration
     // ============================================================
 
     static async findAllBenches(filters: HelpDeskFilters = {}): Promise<SpecialBench[]> {
@@ -1888,7 +2112,9 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
     static async createSpecialBench(
         input: CreateSpecialBenchInput,
-        userId: string
+        userId: string,
+        email?: string,
+        sendEmail: boolean = false
     ): Promise<SpecialBench> {
         const client = await pool.connect();
         
@@ -1926,6 +2152,22 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
             const bench = await this.findBenchById(benchId);
             if (!bench) throw new AppError(500, 'Failed to create special bench');
+
+            // Send email if requested
+            if (sendEmail && email && bench.dsa_details && bench.dsa_details.length > 0) {
+                try {
+                    await this.sendDSAMemoEmail(
+                        email,
+                        'Bench',
+                        bench,
+                        bench.dsa_details,
+                        'Help Desk Team'
+                    );
+                } catch (emailError) {
+                    console.error('[EMAIL ERROR] Failed to send bench DSA memo notification:', emailError);
+                }
+            }
+
             return bench;
             
         } catch (error) {
@@ -2020,6 +2262,22 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
         const updated = await this.findBenchById(id);
         if (!updated) throw new AppError(500, 'Failed to update bench status');
+
+        // Send email on status change
+        if (input.email && updated.dsa_details && updated.dsa_details.length > 0) {
+            try {
+                await this.sendDSAMemoEmail(
+                    input.email,
+                    'Bench',
+                    updated,
+                    updated.dsa_details,
+                    input.resolvedBy || input.rejectedBy || 'System Administrator'
+                );
+            } catch (emailError) {
+                console.error('[EMAIL ERROR] Failed to send bench status update email:', emailError);
+            }
+        }
+
         return updated;
     }
 
@@ -2054,7 +2312,7 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
     }
 
     // ============================================================
-    // PART-HEARDS
+    // PART-HEARDS - With Email Integration
     // ============================================================
 
     static async findAllPartHeards(filters: HelpDeskFilters = {}): Promise<PartHeard[]> {
@@ -2121,7 +2379,9 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
     static async createPartHeard(
         input: CreatePartHeardInput,
-        userId: string
+        userId: string,
+        email?: string,
+        sendEmail: boolean = false
     ): Promise<PartHeard> {
         const client = await pool.connect();
         
@@ -2159,6 +2419,22 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
             const partHeard = await this.findPartHeardById(phId);
             if (!partHeard) throw new AppError(500, 'Failed to create part-heard');
+
+            // Send email if requested
+            if (sendEmail && email && partHeard.dsa_details && partHeard.dsa_details.length > 0) {
+                try {
+                    await this.sendDSAMemoEmail(
+                        email,
+                        'Part-Heard',
+                        partHeard,
+                        partHeard.dsa_details,
+                        'Help Desk Team'
+                    );
+                } catch (emailError) {
+                    console.error('[EMAIL ERROR] Failed to send part-heard DSA memo notification:', emailError);
+                }
+            }
+
             return partHeard;
             
         } catch (error) {
@@ -2253,6 +2529,22 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
         const updated = await this.findPartHeardById(id);
         if (!updated) throw new AppError(500, 'Failed to update part-heard status');
+
+        // Send email on status change
+        if (input.email && updated.dsa_details && updated.dsa_details.length > 0) {
+            try {
+                await this.sendDSAMemoEmail(
+                    input.email,
+                    'Part-Heard',
+                    updated,
+                    updated.dsa_details,
+                    input.resolvedBy || input.rejectedBy || 'System Administrator'
+                );
+            } catch (emailError) {
+                console.error('[EMAIL ERROR] Failed to send part-heard status update email:', emailError);
+            }
+        }
+
         return updated;
     }
 
@@ -2287,7 +2579,7 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
     }
 
     // ============================================================
-    // SERVICE WEEKS
+    // SERVICE WEEKS - With Email Integration
     // ============================================================
 
     static async findAllServiceWeeks(filters: HelpDeskFilters = {}): Promise<ServiceWeek[]> {
@@ -2354,7 +2646,9 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
     static async createServiceWeek(
         input: CreateServiceWeekInput,
-        userId: string
+        userId: string,
+        email?: string,
+        sendEmail: boolean = false
     ): Promise<ServiceWeek> {
         const client = await pool.connect();
         
@@ -2393,6 +2687,22 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
             const week = await this.findServiceWeekById(weekId);
             if (!week) throw new AppError(500, 'Failed to create service week');
+
+            // Send email if requested
+            if (sendEmail && email && week.dsa_details && week.dsa_details.length > 0) {
+                try {
+                    await this.sendDSAMemoEmail(
+                        email,
+                        'Service Week',
+                        week,
+                        week.dsa_details,
+                        'Help Desk Team'
+                    );
+                } catch (emailError) {
+                    console.error('[EMAIL ERROR] Failed to send service week DSA memo notification:', emailError);
+                }
+            }
+
             return week;
             
         } catch (error) {
@@ -2419,6 +2729,22 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
         const updated = await this.findServiceWeekById(id);
         if (!updated) throw new AppError(500, 'Failed to update service week status');
+
+        // Send email on status change
+        if (input.email && updated.dsa_details && updated.dsa_details.length > 0) {
+            try {
+                await this.sendDSAMemoEmail(
+                    input.email,
+                    'Service Week',
+                    updated,
+                    updated.dsa_details,
+                    input.resolvedBy || input.rejectedBy || 'System Administrator'
+                );
+            } catch (emailError) {
+                console.error('[EMAIL ERROR] Failed to send service week status update email:', emailError);
+            }
+        }
+
         return updated;
     }
 
@@ -2452,8 +2778,74 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
         }
     }
 
+    // ─── Service Weeks – Full Update ──────────────────────────────────────────
+    static async updateServiceWeek(
+        id: string,
+        input: UpdateServiceWeekInput
+    ): Promise<ServiceWeek> {
+        const existing = await this.findServiceWeekById(id);
+        if (!existing) {
+            throw new AppError(404, 'Service week not found');
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            const fields: string[] = [];
+            const values: unknown[] = [];
+            let paramCount = 1;
+
+            const setField = (column: string, value: unknown) => {
+                if (value !== undefined) {
+                    fields.push(`${column} = $${paramCount}`);
+                    values.push(value);
+                    paramCount++;
+                }
+            };
+
+            setField('name', input.name?.trim());
+            setField('week_number', input.week_number?.trim());
+            setField('year', input.year);
+            setField('start_date', input.start_date);
+            setField('end_date', input.end_date);
+            setField('status', input.status);
+
+            if (fields.length > 0) {
+                fields.push('updated_at = now()');
+                values.push(id);
+                await client.query(
+                    `UPDATE service_weeks SET ${fields.join(', ')} WHERE id = $${paramCount}`,
+                    values
+                );
+            }
+
+            if (input.dsa_details !== undefined) {
+                await this.upsertDSADetails(
+                    client,
+                    'service_week_dsa_details',
+                    'service_week_id',
+                    id,
+                    input.dsa_details,
+                    'service_week'
+                );
+            }
+
+            await client.query('COMMIT');
+
+            const updated = await this.findServiceWeekById(id);
+            if (!updated) throw new AppError(500, 'Failed to update service week');
+            return updated;
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
     // ============================================================
-    // MEDICAL EXPENSE CLAIMS
+    // MEDICAL EXPENSE CLAIMS - With Email Integration
     // ============================================================
 
     static async findAllMedicalClaims(filters: HelpDeskFilters = {}): Promise<MedicalClaim[]> {
@@ -2497,7 +2889,9 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
     static async createMedicalClaim(
         input: CreateMedicalClaimInput,
-        userId: string
+        userId: string,
+        email?: string,
+        sendEmail: boolean = false
     ): Promise<MedicalClaim> {
         const client = await pool.connect();
 
@@ -2526,6 +2920,26 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
             const claim = await this.findMedicalClaimById(rows[0].id);
             if (!claim) throw new AppError(500, 'Failed to create medical claim');
+
+            // Send email if requested
+            if (sendEmail && email) {
+                try {
+                    await sendMedicalClaimNotification({
+                        to: email,
+                        officerName: claim.officer_name,
+                        ref: claim.id,
+                        claimAmount: claim.claim_amount,
+                        dateForwarded: claim.date_forwarded_dhr || 'Not specified',
+                        status: claim.status,
+                        remarks: claim.remarks || undefined,
+                        submittedBy: 'Help Desk Team',
+                        submittedAt: new Date(),
+                    });
+                } catch (emailError) {
+                    console.error('[EMAIL ERROR] Failed to send medical claim notification:', emailError);
+                }
+            }
+
             return claim;
 
         } catch (error) {
@@ -2538,7 +2952,7 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
     static async updateMedicalClaimStatus(
         id: string,
-        input: { status: string; remarks?: string }
+        input: { status: string; remarks?: string; email?: string }
     ): Promise<MedicalClaim> {
         const existing = await this.findMedicalClaimById(id);
         if (!existing) {
@@ -2554,6 +2968,26 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
         const updated = await this.findMedicalClaimById(id);
         if (!updated) throw new AppError(500, 'Failed to update medical claim status');
+
+        // Send email on status change
+        if (input.email) {
+            try {
+                await sendMedicalClaimNotification({
+                    to: input.email,
+                    officerName: updated.officer_name,
+                    ref: updated.id,
+                    claimAmount: updated.claim_amount,
+                    dateForwarded: updated.date_forwarded_dhr || 'Not specified',
+                    status: input.status,
+                    remarks: input.remarks || updated.remarks || undefined,
+                    submittedBy: 'System Administrator',
+                    submittedAt: new Date(),
+                });
+            } catch (emailError) {
+                console.error('[EMAIL ERROR] Failed to send medical claim status update:', emailError);
+            }
+        }
+
         return updated;
     }
 
@@ -2568,7 +3002,7 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
     }
 
     // ============================================================
-    // VISA SUPPORT
+    // VISA SUPPORT - With Email Integration
     // ============================================================
 
     static async findAllVisaRequests(filters: HelpDeskFilters = {}): Promise<VisaRequest[]> {
@@ -2636,7 +3070,9 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
     static async createVisaRequest(
         input: CreateVisaRequestInput,
-        userId: string
+        userId: string,
+        email?: string,
+        sendEmail: boolean = false
     ): Promise<VisaRequest> {
         const client = await pool.connect();
 
@@ -2669,6 +3105,29 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
             const visa = await this.findVisaRequestById(rows[0].id);
             if (!visa) throw new AppError(500, 'Failed to create visa request');
+
+            // Send email if requested
+            if (sendEmail && email) {
+                try {
+                    await sendVisaRequestNotification({
+                        to: email,
+                        judgeName: visa.judge_name,
+                        ref: visa.id,
+                        destinationCountry: visa.destination_country,
+                        dateOfTravel: visa.date_of_travel || 'TBD',
+                        dateOfReturn: visa.date_of_return || 'TBD',
+                        visaType: visa.visa_type,
+                        purposeOfTravel: visa.purpose_of_travel || undefined,
+                        status: visa.status,
+                        remarks: visa.remarks || undefined,
+                        submittedBy: 'Help Desk Team',
+                        submittedAt: new Date(),
+                    });
+                } catch (emailError) {
+                    console.error('[EMAIL ERROR] Failed to send visa request notification:', emailError);
+                }
+            }
+
             return visa;
 
         } catch (error) {
@@ -2696,6 +3155,29 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
         const updated = await this.findVisaRequestById(id);
         if (!updated) throw new AppError(500, 'Failed to update visa status');
+
+        // Send email on status change
+        if (input.email) {
+            try {
+                await sendVisaRequestNotification({
+                    to: input.email,
+                    judgeName: updated.judge_name,
+                    ref: updated.id,
+                    destinationCountry: updated.destination_country,
+                    dateOfTravel: updated.date_of_travel || 'TBD',
+                    dateOfReturn: updated.date_of_return || 'TBD',
+                    visaType: updated.visa_type,
+                    purposeOfTravel: updated.purpose_of_travel || undefined,
+                    status: input.status,
+                    remarks: input.remarks || updated.remarks || undefined,
+                    submittedBy: input.resolvedBy || input.rejectedBy || 'System Administrator',
+                    submittedAt: new Date(),
+                });
+            } catch (emailError) {
+                console.error('[EMAIL ERROR] Failed to send visa status update email:', emailError);
+            }
+        }
+
         return updated;
     }
 
@@ -2861,7 +3343,9 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
     static async createProtocolEvent(
         input: CreateProtocolEventInput,
         userId: string,
-        superAdminEmails: string[] = []
+        superAdminEmails: string[] = [],
+        email?: string,
+        sendEmail: boolean = false
     ): Promise<ProtocolEvent> {
         const client = await pool.connect();
         
@@ -2880,7 +3364,7 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
                 [
                     s_no,
                     input.activity.trim(),
-                    input.venue || null,           // NEW: venue
+                    input.venue || null,
                     input.period_from || null,
                     input.period_to || null,
                     input.officers_assigned || null,
@@ -2911,8 +3395,35 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
             if (!event) throw new AppError(500, 'Failed to create protocol event');
 
             // ─── Send Super Admin Notification ──────────────────────────────────
-            const submittedBy = 'Help Desk Team'; // You can pass this from the controller
+            const submittedBy = 'Help Desk Team';
             await this.sendProtocolEventSuperAdminNotification(event, submittedBy, superAdminEmails);
+
+            // ─── Send User Notification ─────────────────────────────────────────
+            if (sendEmail && email) {
+                try {
+                    const totalDSA = event.dsa_details?.reduce((sum, d) => sum + (d.dsa_per_day * d.days), 0) || 0;
+                    const memberCount = event.dsa_details?.length || 0;
+
+                    await sendProtocolEventNotification({
+                        to: email,
+                        activity: event.activity,
+                        ref: event.id,
+                        venue: event.venue || undefined,
+                        periodFrom: event.period_from || 'TBD',
+                        periodTo: event.period_to || 'TBD',
+                        officersAssigned: event.officers_assigned || undefined,
+                        dsaRequired: event.dsa_required,
+                        totalDSA,
+                        memberCount,
+                        status: event.status,
+                        remarks: event.remarks || undefined,
+                        submittedBy: 'Help Desk Team',
+                        submittedAt: new Date(),
+                    });
+                } catch (emailError) {
+                    console.error('[EMAIL ERROR] Failed to send protocol event notification:', emailError);
+                }
+            }
 
             return event;
             
@@ -2941,6 +3452,34 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
         const updated = await this.findProtocolEventById(id);
         if (!updated) throw new AppError(500, 'Failed to update protocol status');
+
+        // Send email on status change
+        if (input.email) {
+            try {
+                const totalDSA = updated.dsa_details?.reduce((sum, d) => sum + (d.dsa_per_day * d.days), 0) || 0;
+                const memberCount = updated.dsa_details?.length || 0;
+
+                await sendProtocolEventNotification({
+                    to: input.email,
+                    activity: updated.activity,
+                    ref: updated.id,
+                    venue: updated.venue || undefined,
+                    periodFrom: updated.period_from || 'TBD',
+                    periodTo: updated.period_to || 'TBD',
+                    officersAssigned: updated.officers_assigned || undefined,
+                    dsaRequired: updated.dsa_required,
+                    totalDSA,
+                    memberCount,
+                    status: input.status,
+                    remarks: input.remarks || updated.remarks || undefined,
+                    submittedBy: input.resolvedBy || input.rejectedBy || 'System Administrator',
+                    submittedAt: new Date(),
+                });
+            } catch (emailError) {
+                console.error('[EMAIL ERROR] Failed to send protocol status update email:', emailError);
+            }
+        }
+
         return updated;
     }
 
@@ -2975,7 +3514,7 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
     }
 
     // ============================================================
-    // OTHER PAYMENTS
+    // OTHER PAYMENTS - With Email Integration
     // ============================================================
 
     static async findAllOtherPayments(filters: HelpDeskFilters = {}): Promise<OtherPayment[]> {
@@ -3046,7 +3585,9 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
     static async createOtherPayment(
         input: CreateOtherPaymentInput,
-        userId: string
+        userId: string,
+        email?: string,
+        sendEmail: boolean = false
     ): Promise<OtherPayment> {
         const client = await pool.connect();
         
@@ -3084,6 +3625,22 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
             const payment = await this.findOtherPaymentById(paymentId);
             if (!payment) throw new AppError(500, 'Failed to create other payment');
+
+            // Send email if requested
+            if (sendEmail && email && payment.dsa_details && payment.dsa_details.length > 0) {
+                try {
+                    await this.sendDSAMemoEmail(
+                        email,
+                        'Other Payment',
+                        payment,
+                        payment.dsa_details,
+                        'Help Desk Team'
+                    );
+                } catch (emailError) {
+                    console.error('[EMAIL ERROR] Failed to send other payment DSA memo notification:', emailError);
+                }
+            }
+
             return payment;
             
         } catch (error) {
@@ -3110,6 +3667,22 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
         const updated = await this.findOtherPaymentById(id);
         if (!updated) throw new AppError(500, 'Failed to update other payment status');
+
+        // Send email on status change
+        if (input.email && updated.dsa_details && updated.dsa_details.length > 0) {
+            try {
+                await this.sendDSAMemoEmail(
+                    input.email,
+                    'Other Payment',
+                    updated,
+                    updated.dsa_details,
+                    input.resolvedBy || input.rejectedBy || 'System Administrator'
+                );
+            } catch (emailError) {
+                console.error('[EMAIL ERROR] Failed to send other payment status update email:', emailError);
+            }
+        }
+
         return updated;
     }
 
@@ -3172,6 +3745,71 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
 
             await client.query('COMMIT');
             
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    // ─── Other Payments – Full Update ──────────────────────────────────────────
+    static async updateOtherPayment(
+        id: string,
+        input: UpdateOtherPaymentInput
+    ): Promise<OtherPayment> {
+        const existing = await this.findOtherPaymentById(id);
+        if (!existing) {
+            throw new AppError(404, 'Other payment not found');
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            const fields: string[] = [];
+            const values: unknown[] = [];
+            let paramCount = 1;
+
+            const setField = (column: string, value: unknown) => {
+                if (value !== undefined) {
+                    fields.push(`${column} = $${paramCount}`);
+                    values.push(value);
+                    paramCount++;
+                }
+            };
+
+            setField('name', input.name?.trim());
+            setField('description', input.description?.trim());
+            setField('start_date', input.start_date);
+            setField('end_date', input.end_date);
+            setField('status', input.status);
+
+            if (fields.length > 0) {
+                fields.push('updated_at = now()');
+                values.push(id);
+                await client.query(
+                    `UPDATE other_payments SET ${fields.join(', ')} WHERE id = $${paramCount}`,
+                    values
+                );
+            }
+
+            if (input.dsa_details !== undefined) {
+                await this.upsertDSADetails(
+                    client,
+                    'other_payment_dsa_details',
+                    'other_payment_id',
+                    id,
+                    input.dsa_details,
+                    'other_payment'
+                );
+            }
+
+            await client.query('COMMIT');
+
+            const updated = await this.findOtherPaymentById(id);
+            if (!updated) throw new AppError(500, 'Failed to update other payment');
+            return updated;
         } catch (error) {
             await client.query('ROLLBACK');
             throw error;
@@ -3248,203 +3886,6 @@ static async findAllUtilities(filters: UtilityFilters = {}): Promise<JudgeUtilit
             return allRows.slice(0, filters.limit);
         }
         return allRows;
-    }
-
-    // ─── Circuits – Full Update ──────────────────────────────────────────────
-    static async updateCircuit(
-        id: string,
-        input: UpdateCircuitInput
-    ): Promise<Circuit> {
-        const existing = await this.findCircuitById(id);
-        if (!existing) {
-            throw new AppError(404, 'Circuit not found');
-        }
-
-        const client = await pool.connect();
-        try {
-            await client.query('BEGIN');
-
-            const fields: string[] = [];
-            const values: unknown[] = [];
-            let paramCount = 1;
-
-            const setField = (column: string, value: unknown) => {
-                if (value !== undefined) {
-                    fields.push(`${column} = $${paramCount}`);
-                    values.push(value);
-                    paramCount++;
-                }
-            };
-
-            setField('name', input.name?.trim());
-            setField('location', input.location?.trim());
-            setField('start_date', input.start_date);
-            setField('end_date', input.end_date);
-            setField('status', input.status);
-
-            if (fields.length > 0) {
-                fields.push('updated_at = now()');
-                values.push(id);
-                await client.query(
-                    `UPDATE circuits SET ${fields.join(', ')} WHERE id = $${paramCount}`,
-                    values
-                );
-            }
-
-            // Update DSA details if provided
-            if (input.dsa_details !== undefined) {
-                await this.upsertDSADetails(
-                    client,
-                    'circuit_dsa_details',
-                    'circuit_id',
-                    id,
-                    input.dsa_details,
-                    'circuit'
-                );
-            }
-
-            await client.query('COMMIT');
-
-            const updated = await this.findCircuitById(id);
-            if (!updated) throw new AppError(500, 'Failed to update circuit');
-            return updated;
-        } catch (error) {
-            await client.query('ROLLBACK');
-            throw error;
-        } finally {
-            client.release();
-        }
-    }
-
-    // ─── Other Payments – Full Update ──────────────────────────────────────────
-    static async updateOtherPayment(
-        id: string,
-        input: UpdateOtherPaymentInput
-    ): Promise<OtherPayment> {
-        const existing = await this.findOtherPaymentById(id);
-        if (!existing) {
-            throw new AppError(404, 'Other payment not found');
-        }
-
-        const client = await pool.connect();
-        try {
-            await client.query('BEGIN');
-
-            const fields: string[] = [];
-            const values: unknown[] = [];
-            let paramCount = 1;
-
-            const setField = (column: string, value: unknown) => {
-                if (value !== undefined) {
-                    fields.push(`${column} = $${paramCount}`);
-                    values.push(value);
-                    paramCount++;
-                }
-            };
-
-            setField('name', input.name?.trim());
-            setField('description', input.description?.trim());
-            setField('start_date', input.start_date);
-            setField('end_date', input.end_date);
-            setField('status', input.status);
-
-            if (fields.length > 0) {
-                fields.push('updated_at = now()');
-                values.push(id);
-                await client.query(
-                    `UPDATE other_payments SET ${fields.join(', ')} WHERE id = $${paramCount}`,
-                    values
-                );
-            }
-
-            if (input.dsa_details !== undefined) {
-                await this.upsertDSADetails(
-                    client,
-                    'other_payment_dsa_details',
-                    'other_payment_id',
-                    id,
-                    input.dsa_details,
-                    'other_payment'
-                );
-            }
-
-            await client.query('COMMIT');
-
-            const updated = await this.findOtherPaymentById(id);
-            if (!updated) throw new AppError(500, 'Failed to update other payment');
-            return updated;
-        } catch (error) {
-            await client.query('ROLLBACK');
-            throw error;
-        } finally {
-            client.release();
-        }
-    }
-
-    // ─── Service Weeks – Full Update ──────────────────────────────────────────
-    static async updateServiceWeek(
-        id: string,
-        input: UpdateServiceWeekInput
-    ): Promise<ServiceWeek> {
-        const existing = await this.findServiceWeekById(id);
-        if (!existing) {
-            throw new AppError(404, 'Service week not found');
-        }
-
-        const client = await pool.connect();
-        try {
-            await client.query('BEGIN');
-
-            const fields: string[] = [];
-            const values: unknown[] = [];
-            let paramCount = 1;
-
-            const setField = (column: string, value: unknown) => {
-                if (value !== undefined) {
-                    fields.push(`${column} = $${paramCount}`);
-                    values.push(value);
-                    paramCount++;
-                }
-            };
-
-            setField('name', input.name?.trim());
-            setField('week_number', input.week_number?.trim());
-            setField('year', input.year);
-            setField('start_date', input.start_date);
-            setField('end_date', input.end_date);
-            setField('status', input.status);
-
-            if (fields.length > 0) {
-                fields.push('updated_at = now()');
-                values.push(id);
-                await client.query(
-                    `UPDATE service_weeks SET ${fields.join(', ')} WHERE id = $${paramCount}`,
-                    values
-                );
-            }
-
-            if (input.dsa_details !== undefined) {
-                await this.upsertDSADetails(
-                    client,
-                    'service_week_dsa_details',
-                    'service_week_id',
-                    id,
-                    input.dsa_details,
-                    'service_week'
-                );
-            }
-
-            await client.query('COMMIT');
-
-            const updated = await this.findServiceWeekById(id);
-            if (!updated) throw new AppError(500, 'Failed to update service week');
-            return updated;
-        } catch (error) {
-            await client.query('ROLLBACK');
-            throw error;
-        } finally {
-            client.release();
-        }
     }
 
 } // end HelpDeskService

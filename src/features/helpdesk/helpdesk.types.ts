@@ -297,78 +297,44 @@ export function validateAddUtilityItemInput(input: AddUtilityItemInput): void {
 export interface GeneralRequest extends BaseEntity {
   s_no: number | null;
   ticket_number: string | null;
-  judge_name: string;
-  request: string;                    // Description of the request
-  request_type: RequestType;          // Specific type of request
-  category: GeneralRequestCategory;   // High-level categorization
+  judge_name: string;                    // Requester name
+  request: string;                       // Details of request
+  request_type: string;                  // Type of request - FREE TEXT
+  category: GeneralRequestCategory;      // High-level categorization
+  status: Status;
+  remarks: string | null;                // Marks/remarks
+  request_date: string | null;           // Request date
   date_received: string | null;
   officer_assigned: string | null;
-  status: Status;
-  remarks: string | null;
-  remark_type: RemarkType | null;     // Onboarding or Release (for security/personnel)
-
-  // Security/Personnel specific fields
-  request_date: string | null;        // Date of request
-  location: string | null;            // For station/security requests
-  firearm_type: string | null;        // For firearm requests
-  force_number: string | null;        // For force number requests
-  officer_name: string | null;        // Name of the officer (for bodyguard/driver)
-  assigned_to: string | null;         // Who it's assigned to
-  priority: string | null;            // Priority level if needed
-  notes: string | null;               // Additional notes
-
-  // ─── NEW FIELDS ──────────────────────────────────────────────────────────
-  rank: string | null;               // Officer's rank (for Driver/Bodyguard)
-  reporting_date: string | null;     // Expected reporting date
+  remark_type: RemarkType | null;
 }
 
 export interface CreateGeneralRequestInput {
-  judge_name: string;
-  request: string;
-  request_type: RequestType;
+  judge_name: string;                    // Requester name
+  request: string;                       // Details of request
+  request_type: string;                  // Type of request - FREE TEXT
   category?: GeneralRequestCategory;
+  status?: Status;
+  remarks?: string;                      // Marks/remarks
+  request_date?: string;                 // Request date
   date_received?: string;
   officer_assigned?: string;
-  status?: Status;
-  remarks?: string;
   remark_type?: RemarkType;
-  request_date?: string;
-  location?: string;
-  firearm_type?: string;
-  force_number?: string;
-  officer_name?: string;
-  assigned_to?: string;
-  priority?: string;
-  notes?: string;
-  email?: string;                    // Recipient email for notification
-  send_email?: boolean;              // Manual control: true = send email, false = don't send
-
-  // ─── NEW FIELDS ──────────────────────────────────────────────────────────
-  rank?: string;                     // Officer's rank
-  reporting_date?: string;           // Expected reporting date
+  email?: string;
+  send_email?: boolean;
 }
 
 export interface UpdateGeneralRequestInput {
-  request?: string;
-  request_type?: RequestType;
+  judge_name?: string;                   // Requester name
+  request?: string;                      // Details of request
+  request_type?: string;                 // Type of request - FREE TEXT
   category?: GeneralRequestCategory;
+  status?: Status;
+  remarks?: string;                      // Marks/remarks
+  request_date?: string;                 // Request date
   date_received?: string;
   officer_assigned?: string;
-  status?: Status;
-  remarks?: string;
   remark_type?: RemarkType;
-  request_date?: string;
-  location?: string;
-  firearm_type?: string;
-  force_number?: string;
-  officer_name?: string;
-  assigned_to?: string;
-  priority?: string;
-  notes?: string;
-
-  // ─── NEW FIELDS ──────────────────────────────────────────────────────────
-  rank?: string;
-  reporting_date?: string;
 }
 
 // ============================================================
@@ -794,7 +760,7 @@ export interface HelpDeskFilters {
   search?: string;
   status?: Status;
   judge_name?: string;
-  request_type?: RequestType;
+  request_type?: string;        // FREE TEXT - changed from RequestType
   remark_type?: RemarkType;
   start_date?: string;
   end_date?: string;
@@ -837,6 +803,163 @@ export interface DocumentWithViewStatus {
   last_viewed_by: string | null;
   last_viewed_at: string | null;
   viewers: DocumentView[];
+}
+
+// ============================================================
+// Email Notification Types for Helpdesk
+// ============================================================
+
+/**
+ * Options for sending General Request emails (Acknowledgement & Status Update)
+ */
+export interface GeneralRequestEmailOptions {
+  to: string;
+  ticketNumber: string;
+  judgeName: string;
+  request: string;
+  requestType?: string;
+  status: string;
+  remarks?: string;
+  requestDate?: string;
+}
+
+/**
+ * Options for sending Helpdesk Document Approved email
+ */
+export interface HelpdeskDocumentEmailOptions {
+  to: string;
+  requesterName: string;
+  ref: string;
+  subject: string;
+  entityType: string;
+  approvedBy: string;
+  approvedAt: Date;
+  comments?: string;
+  documentUrl?: string;
+}
+
+/**
+ * Options for sending Utility Memo notification
+ */
+export interface UtilityMemoEmailOptions {
+  to: string;
+  judgeName: string;
+  ref: string;
+  utilityType: string;
+  amount: number;
+  period: string;
+  status: string;
+  submittedBy: string;
+  submittedAt: Date;
+}
+
+/**
+ * Options for sending DSA Memo notification
+ */
+export interface DSAMemoEmailOptions {
+  to: string;
+  judgeName: string;
+  ref: string;
+  moduleType: 'Circuit' | 'Bench' | 'Part-Heard' | 'Service Week' | 'Other Payment';
+  activityName: string;
+  startDate: string;
+  endDate: string;
+  totalDSA: number;
+  memberCount: number;
+  status: string;
+  submittedBy: string;
+  submittedAt: Date;
+  memoUrl?: string;
+}
+
+/**
+ * Options for sending Medical Claim notification
+ */
+export interface MedicalClaimEmailOptions {
+  to: string;
+  officerName: string;
+  ref: string;
+  claimAmount: number;
+  dateForwarded: string;
+  status: string;
+  remarks?: string;
+  submittedBy: string;
+  submittedAt: Date;
+}
+
+/**
+ * Options for sending Visa Request notification
+ */
+export interface VisaRequestEmailOptions {
+  to: string;
+  judgeName: string;
+  ref: string;
+  destinationCountry: string;
+  dateOfTravel: string;
+  dateOfReturn: string;
+  visaType: string;
+  purposeOfTravel?: string;
+  status: string;
+  remarks?: string;
+  submittedBy: string;
+  submittedAt: Date;
+}
+
+/**
+ * Options for sending Protocol Event notification
+ */
+export interface ProtocolEventEmailOptions {
+  to: string;
+  activity: string;
+  ref: string;
+  venue?: string;
+  periodFrom: string;
+  periodTo: string;
+  officersAssigned?: string;
+  dsaRequired: boolean;
+  totalDSA: number;
+  memberCount: number;
+  status: string;
+  remarks?: string;
+  submittedBy: string;
+  submittedAt: Date;
+}
+
+/**
+ * Options for sending Club Membership notification
+ */
+export interface ClubMembershipEmailOptions {
+  to: string;
+  judgeName: string;
+  ref: string;
+  clubName: string;
+  entryFee: number;
+  annualFee: number;
+  court?: string;
+  status: string;
+  remarks?: string;
+  submittedBy: string;
+  submittedAt: Date;
+}
+
+// ============================================================
+// Document Notification Types (for emailTemplates)
+// ============================================================
+
+export interface DocumentNotificationData {
+  documentTitle: string;
+  documentId: string;
+  referenceNo?: string | null;
+  markedBy: string;
+  markedByDepartment: string;
+  assignedTo: string;
+  instructions?: string | null;
+  priority?: 'low' | 'normal' | 'urgent';
+  actionType: 'marked_to_department' | 'assigned_to_user' | 'sent_to_super_admin';
+  createdAt: Date;
+  documentType: string;
+  departmentName: string;
+  superAdminName?: string;
 }
 
 // ============================================================

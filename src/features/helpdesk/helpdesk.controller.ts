@@ -1,5 +1,5 @@
 // ============================================================
-// helpdesk.controller.ts - FIXED
+// helpdesk.controller.ts - Updated with Email Support
 // ============================================================
 
 import { Request, Response } from 'express';
@@ -472,7 +472,13 @@ export const helpDeskController = {
         if (!result.success) {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
-        const utility = await HelpDeskService.createUtility(result.data.body, req.user!.id);
+        const { email, send_email } = req.body;
+        const utility = await HelpDeskService.createUtility(
+            result.data.body,
+            req.user!.id,
+            email,
+            send_email || false
+        );
         safeRealtimeBroadcast(req, 'utility_created', utility);
         return sendSuccess(res, utility, 'Judge utility record created', 201);
     }),
@@ -487,7 +493,12 @@ export const helpDeskController = {
         if (!result.success) {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
-        const utility = await HelpDeskService.addUtilityItem(result.data.body);
+        const { email, send_email } = req.body;
+        const utility = await HelpDeskService.addUtilityItem(
+            result.data.body,
+            email,
+            send_email || false
+        );
         safeRealtimeBroadcast(req, 'utility_item_added', utility);
         return sendSuccess(res, utility, 'Utility item added', 201);
     }),
@@ -505,10 +516,13 @@ export const helpDeskController = {
         if (!bodyResult.success) {
             throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
         }
+        const { email, send_email } = req.body;
         const utility = await HelpDeskService.updateUtilityItem(
             paramsResult.data.params.id,
             paramsResult.data.params.itemId,
-            bodyResult.data.body
+            bodyResult.data.body,
+            email,
+            send_email || false
         );
         safeRealtimeBroadcast(req, 'utility_item_updated', utility);
         return sendSuccess(res, utility, 'Utility item updated');
@@ -540,31 +554,25 @@ export const helpDeskController = {
      * DELETE /api/helpdesk/utilities/:id/items/:itemId
      * Delete a specific utility item
      */
-   /**
- * DELETE /api/helpdesk/utilities/:id/items/:itemId
- * Delete a specific utility item
- */
-deleteUtilityItem: asyncHandler(async (req: Request, res: Response) => {
-    // Use deleteUtilityItemSchema which expects only itemId
-    const result = deleteUtilityItemSchema.safeParse({ params: req.params });
-    if (!result.success) {
-        throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
-    }
-    // You need the utility ID from the route params directly
-    const utilityId = extractStringParam(req.params.id);
-    if (!utilityId) {
-        throw new AppError(400, 'Utility ID is required');
-    }
-    await HelpDeskService.deleteUtilityItem(
-        utilityId,
-        result.data.params.itemId
-    );
-    safeRealtimeBroadcast(req, 'utility_item_deleted', {
-        utilityId: utilityId,
-        itemId: result.data.params.itemId
-    });
-    return sendSuccess(res, null, 'Utility item deleted');
-}),
+    deleteUtilityItem: asyncHandler(async (req: Request, res: Response) => {
+        const result = deleteUtilityItemSchema.safeParse({ params: req.params });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        const utilityId = extractStringParam(req.params.id);
+        if (!utilityId) {
+            throw new AppError(400, 'Utility ID is required');
+        }
+        await HelpDeskService.deleteUtilityItem(
+            utilityId,
+            result.data.params.itemId
+        );
+        safeRealtimeBroadcast(req, 'utility_item_deleted', {
+            utilityId: utilityId,
+            itemId: result.data.params.itemId
+        });
+        return sendSuccess(res, null, 'Utility item deleted');
+    }),
 
     /**
      * DELETE /api/helpdesk/utilities/:id
@@ -608,7 +616,13 @@ deleteUtilityItem: asyncHandler(async (req: Request, res: Response) => {
         if (!result.success) {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
-        const membership = await HelpDeskService.createClubMembership(result.data.body, req.user!.id);
+        const { email, send_email } = req.body;
+        const membership = await HelpDeskService.createClubMembership(
+            result.data.body,
+            req.user!.id,
+            email,
+            send_email || false
+        );
         safeRealtimeBroadcast(req, 'club_membership_created', membership);
         return sendSuccess(res, membership, 'Club membership created', 201);
     }),
@@ -618,13 +632,13 @@ deleteUtilityItem: asyncHandler(async (req: Request, res: Response) => {
         if (!paramsResult.success) {
             throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
         }
-        const { status } = req.body;
+        const { status, email, remarks, resolvedBy, rejectedBy } = req.body;
         if (!status) {
             throw new AppError(400, 'Status is required');
         }
         const membership = await HelpDeskService.updateClubMembershipStatus(
             paramsResult.data.params.id,
-            { status }
+            { status, email, remarks, resolvedBy, rejectedBy }
         );
         safeRealtimeBroadcast(req, 'club_membership_updated', membership);
         return sendSuccess(res, membership, 'Club membership status updated');
@@ -668,7 +682,13 @@ deleteUtilityItem: asyncHandler(async (req: Request, res: Response) => {
         if (!result.success) {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
-        const circuit = await HelpDeskService.createCircuit(result.data.body, req.user!.id);
+        const { email, send_email } = req.body;
+        const circuit = await HelpDeskService.createCircuit(
+            result.data.body,
+            req.user!.id,
+            email,
+            send_email || false
+        );
         safeRealtimeBroadcast(req, 'circuit_created', circuit);
         return sendSuccess(res, circuit, 'Circuit created', 201);
     }),
@@ -678,13 +698,13 @@ deleteUtilityItem: asyncHandler(async (req: Request, res: Response) => {
         if (!paramsResult.success) {
             throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
         }
-        const { status } = req.body;
+        const { status, email, remarks, resolvedBy, rejectedBy } = req.body;
         if (!status) {
             throw new AppError(400, 'Status is required');
         }
         const circuit = await HelpDeskService.updateCircuitStatus(
             paramsResult.data.params.id,
-            { status }
+            { status, email, remarks, resolvedBy, rejectedBy }
         );
         safeRealtimeBroadcast(req, 'circuit_updated', circuit);
         return sendSuccess(res, circuit, 'Circuit status updated');
@@ -762,7 +782,13 @@ deleteUtilityItem: asyncHandler(async (req: Request, res: Response) => {
         if (!result.success) {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
-        const bench = await HelpDeskService.createSpecialBench(result.data.body, req.user!.id);
+        const { email, send_email } = req.body;
+        const bench = await HelpDeskService.createSpecialBench(
+            result.data.body,
+            req.user!.id,
+            email,
+            send_email || false
+        );
         safeRealtimeBroadcast(req, 'bench_created', bench);
         return sendSuccess(res, bench, 'Special bench created', 201);
     }),
@@ -789,13 +815,13 @@ deleteUtilityItem: asyncHandler(async (req: Request, res: Response) => {
         if (!paramsResult.success) {
             throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
         }
-        const { status } = req.body;
+        const { status, email, remarks, resolvedBy, rejectedBy } = req.body;
         if (!status) {
             throw new AppError(400, 'Status is required');
         }
         const bench = await HelpDeskService.updateBenchStatus(
             paramsResult.data.params.id,
-            { status }
+            { status, email, remarks, resolvedBy, rejectedBy }
         );
         safeRealtimeBroadcast(req, 'bench_status_updated', bench);
         return sendSuccess(res, bench, 'Bench status updated');
@@ -839,7 +865,13 @@ deleteUtilityItem: asyncHandler(async (req: Request, res: Response) => {
         if (!result.success) {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
-        const partHeard = await HelpDeskService.createPartHeard(result.data.body, req.user!.id);
+        const { email, send_email } = req.body;
+        const partHeard = await HelpDeskService.createPartHeard(
+            result.data.body,
+            req.user!.id,
+            email,
+            send_email || false
+        );
         safeRealtimeBroadcast(req, 'part_heard_created', partHeard);
         return sendSuccess(res, partHeard, 'Part-heard created', 201);
     }),
@@ -866,13 +898,13 @@ deleteUtilityItem: asyncHandler(async (req: Request, res: Response) => {
         if (!paramsResult.success) {
             throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
         }
-        const { status } = req.body;
+        const { status, email, remarks, resolvedBy, rejectedBy } = req.body;
         if (!status) {
             throw new AppError(400, 'Status is required');
         }
         const partHeard = await HelpDeskService.updatePartHeardStatus(
             paramsResult.data.params.id,
-            { status }
+            { status, email, remarks, resolvedBy, rejectedBy }
         );
         safeRealtimeBroadcast(req, 'part_heard_status_updated', partHeard);
         return sendSuccess(res, partHeard, 'Part-heard status updated');
@@ -916,7 +948,13 @@ deleteUtilityItem: asyncHandler(async (req: Request, res: Response) => {
         if (!result.success) {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
-        const week = await HelpDeskService.createServiceWeek(result.data.body, req.user!.id);
+        const { email, send_email } = req.body;
+        const week = await HelpDeskService.createServiceWeek(
+            result.data.body,
+            req.user!.id,
+            email,
+            send_email || false
+        );
         safeRealtimeBroadcast(req, 'service_week_created', week);
         return sendSuccess(res, week, 'Service week created', 201);
     }),
@@ -926,13 +964,13 @@ deleteUtilityItem: asyncHandler(async (req: Request, res: Response) => {
         if (!paramsResult.success) {
             throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
         }
-        const { status } = req.body;
+        const { status, email, remarks, resolvedBy, rejectedBy } = req.body;
         if (!status) {
             throw new AppError(400, 'Status is required');
         }
         const week = await HelpDeskService.updateServiceWeekStatus(
             paramsResult.data.params.id,
-            { status }
+            { status, email, remarks, resolvedBy, rejectedBy }
         );
         safeRealtimeBroadcast(req, 'service_week_updated', week);
         return sendSuccess(res, week, 'Service week status updated');
@@ -993,7 +1031,13 @@ deleteUtilityItem: asyncHandler(async (req: Request, res: Response) => {
         if (!result.success) {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
-        const claim = await HelpDeskService.createMedicalClaim(result.data.body, req.user!.id);
+        const { email, send_email } = req.body;
+        const claim = await HelpDeskService.createMedicalClaim(
+            result.data.body,
+            req.user!.id,
+            email,
+            send_email || false
+        );
         safeRealtimeBroadcast(req, 'medical_claim_created', claim);
         return sendSuccess(res, claim, 'Medical claim created', 201);
     }),
@@ -1003,13 +1047,13 @@ deleteUtilityItem: asyncHandler(async (req: Request, res: Response) => {
         if (!paramsResult.success) {
             throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
         }
-        const { status, remarks } = req.body;
+        const { status, remarks, email } = req.body;
         if (!status) {
             throw new AppError(400, 'Status is required');
         }
         const claim = await HelpDeskService.updateMedicalClaimStatus(
             paramsResult.data.params.id,
-            { status, remarks }
+            { status, remarks, email }
         );
         safeRealtimeBroadcast(req, 'medical_claim_updated', claim);
         return sendSuccess(res, claim, 'Medical claim status updated');
@@ -1053,7 +1097,13 @@ deleteUtilityItem: asyncHandler(async (req: Request, res: Response) => {
         if (!result.success) {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
-        const visa = await HelpDeskService.createVisaRequest(result.data.body, req.user!.id);
+        const { email, send_email } = req.body;
+        const visa = await HelpDeskService.createVisaRequest(
+            result.data.body,
+            req.user!.id,
+            email,
+            send_email || false
+        );
         safeRealtimeBroadcast(req, 'visa_request_created', visa);
         return sendSuccess(res, visa, 'Visa request created', 201);
     }),
@@ -1063,13 +1113,13 @@ deleteUtilityItem: asyncHandler(async (req: Request, res: Response) => {
         if (!paramsResult.success) {
             throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
         }
-        const { status, notes } = req.body;
+        const { status, notes, email, remarks, resolvedBy, rejectedBy } = req.body;
         if (!status) {
             throw new AppError(400, 'Status is required');
         }
         const visa = await HelpDeskService.updateVisaStatus(
             paramsResult.data.params.id,
-            { status, notes }
+            { status, notes, email, remarks, resolvedBy, rejectedBy }
         );
         safeRealtimeBroadcast(req, 'visa_request_updated', visa);
         return sendSuccess(res, visa, 'Visa status updated');
@@ -1156,11 +1206,14 @@ deleteUtilityItem: asyncHandler(async (req: Request, res: Response) => {
         }
 
         const superAdminEmails = env.SUPER_ADMIN_EMAILS?.split(',').map(e => e.trim()) || [];
+        const { email, send_email } = req.body;
 
         const event = await HelpDeskService.createProtocolEvent(
             result.data.body,
             req.user!.id,
-            superAdminEmails
+            superAdminEmails,
+            email,
+            send_email || false
         );
 
         safeRealtimeBroadcast(req, 'protocol_event_created', event);
@@ -1172,13 +1225,13 @@ deleteUtilityItem: asyncHandler(async (req: Request, res: Response) => {
         if (!paramsResult.success) {
             throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
         }
-        const { status, notes } = req.body;
+        const { status, notes, email, remarks, resolvedBy, rejectedBy } = req.body;
         if (!status) {
             throw new AppError(400, 'Status is required');
         }
         const event = await HelpDeskService.updateProtocolStatus(
             paramsResult.data.params.id,
-            { status, notes }
+            { status, notes, email, remarks, resolvedBy, rejectedBy }
         );
         safeRealtimeBroadcast(req, 'protocol_event_updated', event);
         return sendSuccess(res, event, 'Protocol status updated');
@@ -1222,7 +1275,13 @@ deleteUtilityItem: asyncHandler(async (req: Request, res: Response) => {
         if (!result.success) {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
         }
-        const payment = await HelpDeskService.createOtherPayment(result.data.body, req.user!.id);
+        const { email, send_email } = req.body;
+        const payment = await HelpDeskService.createOtherPayment(
+            result.data.body,
+            req.user!.id,
+            email,
+            send_email || false
+        );
         safeRealtimeBroadcast(req, 'other_payment_created', payment);
         return sendSuccess(res, payment, 'Other payment created', 201);
     }),
@@ -1232,13 +1291,13 @@ deleteUtilityItem: asyncHandler(async (req: Request, res: Response) => {
         if (!paramsResult.success) {
             throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
         }
-        const { status } = req.body;
+        const { status, email, remarks, resolvedBy, rejectedBy } = req.body;
         if (!status) {
             throw new AppError(400, 'Status is required');
         }
         const payment = await HelpDeskService.updateOtherPaymentStatus(
             paramsResult.data.params.id,
-            { status }
+            { status, email, remarks, resolvedBy, rejectedBy }
         );
         safeRealtimeBroadcast(req, 'other_payment_updated', payment);
         return sendSuccess(res, payment, 'Other payment status updated');

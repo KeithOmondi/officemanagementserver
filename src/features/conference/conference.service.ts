@@ -351,6 +351,37 @@ export class ConferenceService {
     return result;
   }
 
+  // ─── Conference Submit ────────────────────────────────────────────────────
+
+  /**
+   * Submit a conference request for approval
+   * Transitions status from 'draft' to 'pending'
+   */
+  static async submitConferenceRequest(id: string): Promise<ConferenceRequest> {
+    console.log(`[ConferenceService] Submitting conference request ${id}`);
+
+    const existing = await this.findConferenceByIdOrThrow(id);
+
+    if (existing.status !== 'draft') {
+      throw new ConferenceRequestInvalidStatusError(existing.status, 'pending');
+    }
+
+    await pool.query(
+      `UPDATE conference_requests 
+       SET status = 'pending', 
+           updated_at = NOW() 
+       WHERE id = $1`,
+      [id]
+    );
+
+    console.log(`[ConferenceService] Conference request ${id} submitted for approval`);
+    const result = await this.findConferenceById(id);
+    if (!result) {
+      throw new AppError(500, 'Failed to retrieve submitted conference request');
+    }
+    return result;
+  }
+
   // ─── Conference Complete ──────────────────────────────────────────────────
 
   /**
@@ -416,37 +447,6 @@ export class ConferenceService {
     const result = await this.findConferenceById(id);
     if (!result) {
       throw new AppError(500, 'Failed to retrieve cancelled conference request');
-    }
-    return result;
-  }
-
-  // ─── Conference Submit ────────────────────────────────────────────────────
-
-  /**
-   * Submit a conference request for approval
-   * Transitions status from 'draft' to 'pending'
-   */
-  static async submitConferenceRequest(id: string): Promise<ConferenceRequest> {
-    console.log(`[ConferenceService] Submitting conference request ${id}`);
-
-    const existing = await this.findConferenceByIdOrThrow(id);
-
-    if (existing.status !== 'draft') {
-      throw new ConferenceRequestInvalidStatusError(existing.status, 'pending');
-    }
-
-    await pool.query(
-      `UPDATE conference_requests 
-       SET status = 'pending', 
-           updated_at = NOW() 
-       WHERE id = $1`,
-      [id]
-    );
-
-    console.log(`[ConferenceService] Conference request ${id} submitted for approval`);
-    const result = await this.findConferenceById(id);
-    if (!result) {
-      throw new AppError(500, 'Failed to retrieve submitted conference request');
     }
     return result;
   }

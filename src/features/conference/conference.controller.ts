@@ -15,6 +15,7 @@ import {
   returnConferenceRequestSchema,
   completeConferenceSchema,
   cancelConferenceSchema,
+  submitConferenceRequestSchema, // ← ADD THIS
 } from './conference.validator';
 import type {
   ConferenceRequestFilters,
@@ -166,7 +167,7 @@ export const conferenceController = {
    */
   submitConferenceRequest: asyncHandler(async (req: Request, res: Response) => {
     const validated = validateRequest<{ params: any }>(
-      getConferenceRequestSchema,
+      submitConferenceRequestSchema, // ← USE THE IMPORTED SCHEMA
       { params: req.params },
       'Invalid ID'
     );

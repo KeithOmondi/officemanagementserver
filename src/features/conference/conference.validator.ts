@@ -232,6 +232,14 @@ export const getConferenceStatsSchema = z.object({
 });
 
 /**
+ * Submit Conference Request for Approval
+ * PUT /api/v1/conference/:id/submit
+ */
+export const submitConferenceRequestSchema = z.object({
+  params: idParamSchema,
+});
+
+/**
  * Mark Conference as Completed
  * PUT /api/v1/conference/:id/complete
  */
@@ -269,6 +277,7 @@ export type GetConferenceRequestSchema = z.infer<typeof getConferenceRequestSche
 export type ListConferenceRequestsSchema = z.infer<typeof listConferenceRequestsSchema>;
 export type DeleteConferenceRequestSchema = z.infer<typeof deleteConferenceRequestSchema>;
 export type GetConferenceStatsSchema = z.infer<typeof getConferenceStatsSchema>;
+export type SubmitConferenceRequestSchema = z.infer<typeof submitConferenceRequestSchema>;
 export type CompleteConferenceSchema = z.infer<typeof completeConferenceSchema>;
 export type CancelConferenceSchema = z.infer<typeof cancelConferenceSchema>;
 

@@ -14,6 +14,7 @@ import {
   returnConferenceRequestSchema,
   completeConferenceSchema,
   cancelConferenceSchema,
+  submitConferenceRequestSchema, // ← ADD THIS
 } from './conference.validator';
 import { validate } from '../../middleware/validate.middleware';
 
@@ -100,7 +101,7 @@ router.put(
 router.put(
   '/:id/submit',
   requireRole('super_admin', 'dept_head', 'staff'),
-  validate(getConferenceRequestSchema),
+  validate(submitConferenceRequestSchema), // ← USE THE IMPORTED SCHEMA
   conferenceController.submitConferenceRequest
 );
 

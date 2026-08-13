@@ -29,8 +29,8 @@ import type {
 } from './helpdesk.documents.types';
 import { EStampService } from '../e-stamp/e-stamp.service';
 import { embedSignatureBlockIntoPDF } from '../../utils/signatureBlock';
-import { sendHelpdeskChangesRequested } from '../../utils/helpdeskTemplates';
-import { sendHelpdeskApproved, sendHelpdeskRejected } from '../../utils/sendMail';
+import { sendHelpdeskChangesRequested, sendHelpdeskRejected } from '../../utils/helpdeskTemplates';
+import { sendHelpdeskApproved} from '../../utils/sendMail';
 
 const FOLDER = 'orhc/helpdesk-documents';
 

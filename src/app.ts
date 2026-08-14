@@ -35,6 +35,8 @@ import projectsRoutes from './features/projects/projects.routes';
 import standaloneRoutes from "./features/standalone/standalone.routes"
 import conferenceRoutes from "./features/conference/conference.routes"
 import utiltiesRoutes from "./features/utilities/utlities.routes"
+import successioncourtsRoutes from "./features/successioncourts/succession-courts.routes"
+import stationEngagementRoutes from './features/station-engagement/station-engagement.routes'
 
 // ── Middleware ────────────────────────────────────────────────────────────
 import { errorMiddleware } from './middleware/error.middleware';
@@ -101,6 +103,8 @@ app.use('/api/v1/projects', projectsRoutes);
 app.use('/api/v1/standalone', standaloneRoutes);
 app.use('/api/v1/conference', conferenceRoutes);
 app.use('/api/v1/utilities', utiltiesRoutes);
+app.use('/api/v1/succession-courts', successioncourtsRoutes);
+app.use('/api/v1/station-engagement', stationEngagementRoutes);
 // aidesRoutes defines its own '/aide/*' and '/sentry/*' sub-paths internally,
 // so it must be mounted at the '/api/v1' root — not '/api/v1/aide' — or
 // requests to /api/v1/aide and /api/v1/sentry will 404.

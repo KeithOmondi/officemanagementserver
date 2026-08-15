@@ -773,7 +773,7 @@ export class StationEngagementService {
       // Update unengaged stations with station names
       report.unengaged_stations = report.unengaged_stations.map(station => ({
         ...station,
-        station_name: stationNameMap.get(station.station_id) || station.station_name || station.station_id,
+      station_name: stationNameMap.get(station.station_id) || station.station_name || station.station_id,
       }));
     }
 

@@ -12,7 +12,10 @@ router.use(protect);
 // Specific routes before the generic /:id catch-all
 router.get('/active',                       stationController.getActiveStations);
 router.get('/courts',                       stationController.getCourtStations);
+router.get('/types',                        stationController.getStationTypes); // NEW: Get all types (predefined + custom)
 router.get('/type/:type',                   stationController.getByType);
+router.get('/custom-type/:customType',      stationController.getByCustomType); // NEW: Get by custom type
+router.get('/check-type/:type',             stationController.checkType); // NEW: Check if type is custom
 router.get('/ref/:refNo',                   stationController.getByRefNo);
 router.get('/',                             stationController.getAll);
 router.get('/:id',                          stationController.getById);

@@ -1,13 +1,29 @@
 // src/features/stations/stations.validator.ts
 import { z } from 'zod';
+import { PREDEFINED_STATION_TYPES, isPredefinedStationType } from './stations.types';
 
-export const stationTypeEnum = z.enum([
-  'high_court',
-  'magistrate_court',
-  'environment_court',
-  'kadhis_court',
-  'sub_registry',
-]);
+// ── Station Type Validation ──────────────────────────────────────────────────
+// We allow any string for station type (custom types)
+
+export const stationTypeSchema = z.string()
+  .min(1, 'Station type is required')
+  .max(100, 'Station type is too long');
+
+// ── Optional: Validate against predefined types with a warning ──────────────
+// This is optional - we can just accept any string
+
+export const stationTypeWithPredefinedCheck = z.string()
+  .min(1, 'Station type is required')
+  .max(100, 'Station type is too long')
+  .refine(
+    (val) => {
+      // This is just a warning, not a strict validation
+      return true;
+    },
+    {
+      message: 'Custom station type will be saved',
+    }
+  );
 
 // ── Court Reference Number Validation ──────────────────────────────────────
 
@@ -28,18 +44,25 @@ export const createStationSchema = z.object({
   body: z.object({
     ref_no:    z.string().optional().nullable(),
     name:      z.string().min(1, 'Name is required').max(255).trim(),
-    type:      stationTypeEnum,
+    type:      stationTypeSchema, // Changed from stationTypeEnum to allow any string
     location:  z.string().max(500).trim().optional(),
   }).strict(),
 }).superRefine((data, ctx) => {
-  // If type is not sub_registry, ref_no is required
-  if (data.body.type !== 'sub_registry' && !data.body.ref_no) {
+  // If type is not sub_registry and ref_no is not provided, warn but don't block
+  // This allows custom types to not require ref_no
+  const type = data.body.type;
+  const isSubRegistry = type === 'sub_registry';
+  
+  if (!isSubRegistry && !data.body.ref_no) {
+    // Add a warning but don't block - allow custom types without ref_no
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: 'Reference number is required for courts',
+      message: 'Reference number is recommended for courts',
       path: ['body', 'ref_no'],
+      fatal: false, // This makes it a warning, not an error
     });
   }
+  
   // If ref_no is provided, validate its format
   if (data.body.ref_no) {
     const isValid = /^RHC\/[A-Z]{2,4}\/\d{1,3}$/.test(data.body.ref_no);
@@ -59,7 +82,7 @@ export const updateStationSchema = z.object({
   body: z.object({
     ref_no:    z.string().optional().nullable(),
     name:      z.string().min(1).max(255).trim().optional(),
-    type:      stationTypeEnum.optional(),
+    type:      stationTypeSchema.optional(), // Changed from stationTypeEnum to allow any string
     location:  z.string().max(500).trim().optional(),
     is_active: z.boolean().optional(),
   })
@@ -86,7 +109,7 @@ export const updateStationSchema = z.object({
 export const stationFiltersSchema = z.object({
   query: z.object({
     search:    z.string().trim().max(100).optional(),
-    type:      stationTypeEnum.optional(),
+    type:      stationTypeSchema.optional(), // Changed to allow any string for filtering
     is_active: z.enum(['true', 'false']).transform(v => v === 'true').optional(),
     has_ref:   z.enum(['true', 'false']).transform(v => v === 'true').optional(),
     page:      z.string().regex(/^\d+$/).transform(Number).pipe(z.number().int().min(1)).optional(),

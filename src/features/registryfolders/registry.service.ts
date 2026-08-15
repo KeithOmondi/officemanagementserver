@@ -9,6 +9,8 @@ import type {
     UpdateRegistryFolderInput,
     RegistryFolderFilters,
     RegistryCategory,
+    FolderDocument,
+    MoveDocumentResult,
 } from './registry.types';
 import { REGISTRY_CATEGORIES } from './registry.types';
 
@@ -336,7 +338,8 @@ export class RegistryService {
 
     // ── Get Folder Documents ──────────────────────────────────────────────
 
-    static async getFolderDocuments(
+
+static async getFolderDocuments(
     folderId: string,
     limit?: number,
     offset?: number
@@ -377,5 +380,91 @@ export class RegistryService {
             [`%${query}%`]
         );
         return rows;
+    }
+
+    // ── Move Document to Another Folder ────────────────────────────────────
+
+    static async moveDocumentToFolder(
+        sourceFolderId: string,
+        documentId: string,
+        targetFolderId: string,
+        userId: string
+    ): Promise<MoveDocumentResult> {
+        // Verify source folder exists
+        const sourceFolder = await this.findById(sourceFolderId);
+        if (!sourceFolder) {
+            throw new AppError(404, 'Source folder not found');
+        }
+
+        // Verify target folder exists
+        const targetFolder = await this.findById(targetFolderId);
+        if (!targetFolder) {
+            throw new AppError(404, 'Target folder not found');
+        }
+
+        // Verify document exists in source folder
+        const { rows: docCheck } = await pool.query(
+            `SELECT d.id, d.title, d.reference_no, d.file_url, d.mime_type, d.created_at
+             FROM documents d
+             WHERE d.id = $1 AND d.folder_id = $2 AND d.is_active = true`,
+            [documentId, sourceFolderId]
+        );
+
+        if (!docCheck.length) {
+            throw new AppError(404, 'Document not found in source folder');
+        }
+
+        // Check if document already exists in target folder
+        const { rows: existing } = await pool.query(
+            `SELECT id FROM documents 
+             WHERE id = $1 AND folder_id = $2 AND is_active = true`,
+            [documentId, targetFolderId]
+        );
+
+        if (existing.length) {
+            throw new AppError(409, 'Document already exists in target folder');
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            // Update document's folder
+            await client.query(
+                `UPDATE documents
+                 SET folder_id = $1, updated_by = $2, updated_at = NOW()
+                 WHERE id = $3`,
+                [targetFolderId, userId, documentId]
+            );
+
+            await client.query('COMMIT');
+
+            // Fetch the updated document info
+            const document = docCheck[0];
+            
+            // Refresh folder counts (optional, but good for consistency)
+            const updatedSource = await this.findById(sourceFolderId);
+            const updatedTarget = await this.findById(targetFolderId);
+
+            return {
+                sourceFolder: updatedSource!,
+                targetFolder: updatedTarget!,
+                document: {
+                    id: document.id,
+                    title: document.title,
+                    ref: document.reference_no,
+                    format: document.mime_type || 'unknown',
+                    file_url: document.file_url,
+                    file_public_id: null,
+                    created_at: document.created_at,
+                    added_at: new Date().toISOString(),
+                }
+            };
+        } catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+        } finally {
+            client.release();
+        }
     }
 }

@@ -11,6 +11,7 @@ import {
     getRegistryCategoriesSchema,
     getFolderDocumentsSchema,
     deleteRegistryFolderSchema,
+    moveDocumentToFolderSchema,
 } from './registry.schema';
 import { protect, requireRole } from '../../middleware/auth.middleware';
 import { validate } from '../../middleware/validate.middleware';
@@ -90,6 +91,14 @@ router.delete(
     requireRole('super_admin', "dept_head"),
     validate(deleteRegistryFolderSchema),
     RegistryController.deleteFolder
+);
+
+// ── POST /api/registry/folders/:id/documents/:documentId/move ──────────────
+router.post(
+    '/folders/:id/documents/:documentId/move',
+    requireRole('super_admin', 'dept_head'),
+    validate(moveDocumentToFolderSchema),
+    RegistryController.moveDocumentToFolder
 );
 
 export default router;

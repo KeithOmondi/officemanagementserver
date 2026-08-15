@@ -11,6 +11,8 @@ import type {
   FolderHierarchy,
   FolderCategoryCount,
   BulkAddDocumentsResult,
+  FolderRegistryEntry,
+  FolderRegistryPaginationResponse,
 } from './registry.types';
 import type {
   RouteFileInput,
@@ -21,6 +23,7 @@ import type {
   MoveFolderInput,
   AddDocumentToFolderInput,
   BulkAddDocumentsInput,
+  GetStationFolderDocumentsQuery,
 } from './registry.validator';
 
 // ── SELECT fragments ──────────────────────────────────────────────────────────
@@ -234,23 +237,137 @@ export class RegistryService {
 
   // ── Station file counts (for the registry dashboard grid) ────────────────────
 
-  // src/features/registry/registry.service.ts
+  static async getStationFileCounts(): Promise<StationWithFileCount[]> {
+    const { rows } = await pool.query(
+      `SELECT s.id, s.ref_no, s.name, s.type, s.location, s.is_active,
+              COUNT(reg.id) FILTER (WHERE reg.is_active = true) AS file_count
+       FROM stations s
+       LEFT JOIN document_registry reg ON reg.station_id = s.id
+       GROUP BY s.id, s.ref_no, s.name, s.type, s.location, s.is_active
+       ORDER BY s.ref_no ASC NULLS LAST, s.name ASC`
+    );
+    return rows.map((r) => ({ 
+      ...r, 
+      file_count: parseInt(r.file_count, 10),
+      ref_no: r.ref_no || null 
+    }));
+  }
 
-// Find this method and update it:
-static async getStationFileCounts(): Promise<StationWithFileCount[]> {
-  const { rows } = await pool.query(
-    `SELECT s.id, s.ref_no, s.name, s.type, s.location, s.is_active,
-            COUNT(reg.id) FILTER (WHERE reg.is_active = true) AS file_count
-     FROM stations s
-     LEFT JOIN document_registry reg ON reg.station_id = s.id
-     GROUP BY s.id, s.ref_no, s.name, s.type, s.location, s.is_active
-     ORDER BY s.ref_no ASC NULLS LAST, s.name ASC`  // Order by ref_no first
-  );
-  return rows.map((r) => ({ 
-    ...r, 
-    file_count: parseInt(r.file_count, 10),
-    ref_no: r.ref_no || null 
-  }));
+  // ── Get Folder Documents for a Station ─────────────────────────────────────
+
+// ── Get Folder Documents for a Station ─────────────────────────────────────
+
+static async getStationFolderDocuments(
+    stationId: string,
+    filters: { page?: number; limit?: number } = {}
+): Promise<{ data: any[]; total: number; page: number; limit: number; totalPages: number }> {
+    const { page = 1, limit = 20 } = filters;
+    const offset = (page - 1) * limit;
+
+    // First, find the folder that belongs to this station
+    const { rows: station } = await pool.query(
+        `SELECT id, ref_no, name FROM stations WHERE id = $1 AND is_active = true`,
+        [stationId]
+    );
+
+    if (!station.length) {
+        throw new AppError(404, 'Station not found');
+    }
+
+    // Find folder that matches this station (by ref_no or name)
+    const stationRef = station[0].ref_no;
+    const stationName = station[0].name;
+
+    let folderQuery = `
+        SELECT id, ref_no, name FROM rhc_folders 
+        WHERE is_active = true 
+    `;
+    const folderParams: unknown[] = [];
+    let p = 1;
+
+    if (stationRef) {
+        folderQuery += ` AND (ref_no = $${p} OR ref_no ILIKE $${p})`;
+        folderParams.push(stationRef);
+        p++;
+    }
+
+    if (stationName) {
+        if (stationRef) {
+            folderQuery += ` OR name ILIKE $${p}`;
+        } else {
+            folderQuery += ` AND name ILIKE $${p}`;
+        }
+        folderParams.push(`%${stationName}%`);
+        p++;
+    }
+
+    folderQuery += ` LIMIT 1`;
+
+    const { rows: folders } = await pool.query(folderQuery, folderParams);
+
+    if (!folders.length) {
+        return {
+            data: [],
+            total: 0,
+            page,
+            limit,
+            totalPages: 0,
+        };
+    }
+
+    const folder = folders[0];
+
+    // Now get documents from this folder
+    const countQuery = `
+        SELECT COUNT(*) as total
+        FROM documents d
+        WHERE d.folder_id = $1 AND d.is_active = true
+    `;
+
+    const countResult = await pool.query(countQuery, [folder.id]);
+    const total = parseInt(countResult.rows[0]?.total ?? '0', 10);
+
+    const dataQuery = `
+        SELECT 
+            d.id AS id,
+            d.id AS document_id,
+            d.title AS document_title,
+            d.reference_no AS document_ref_no,
+            $1::uuid AS station_id,
+            $2::text AS station_name,
+            s.type AS station_type,
+            $3::uuid AS folder_id,
+            $4::text AS folder_ref_no,
+            $5::text AS folder_name,
+            true AS is_folder_document,
+            d.created_at
+        FROM documents d
+        CROSS JOIN stations s
+        WHERE d.folder_id = $1 
+            AND d.is_active = true
+            AND s.id = $6
+        ORDER BY d.created_at DESC
+        LIMIT $7 OFFSET $8
+    `;
+
+    const { rows: documents } = await pool.query(dataQuery, [
+        folder.id,
+        station[0].name,
+        folder.id,
+        folder.ref_no,
+        folder.name,
+        stationId,
+        limit,
+        offset,
+    ]);
+
+    return {
+        data: documents,
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+    };
 }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -665,52 +782,50 @@ static async getStationFileCounts(): Promise<StationWithFileCount[]> {
 
   // ── Move Folder ──────────────────────────────────────────────────────────────
 
- // ── Move Folder ──────────────────────────────────────────────────────────────
-
-static async moveFolder(folderId: string, newParentId: string | null): Promise<RHCFolder> {
-  const folder = await this.getFolderById(folderId);
-  if (!folder) {
-    throw new AppError(404, 'Folder not found');
-  }
-
-  // Check for circular reference
-  if (newParentId) {
-    if (newParentId === folderId) {
-      throw new AppError(409, 'Folder cannot be its own parent');
+  static async moveFolder(folderId: string, newParentId: string | null): Promise<RHCFolder> {
+    const folder = await this.getFolderById(folderId);
+    if (!folder) {
+      throw new AppError(404, 'Folder not found');
     }
 
-    // Check if new parent is a descendant of this folder
-    let currentId: string | null = newParentId;
-    while (currentId) {
-      const parent = await this.getFolderById(currentId);
-      if (!parent) break;
-      if (parent.parent_folder_id === folderId) {
-        throw new AppError(409, 'Cannot move folder into its own descendant');
+    // Check for circular reference
+    if (newParentId) {
+      if (newParentId === folderId) {
+        throw new AppError(409, 'Folder cannot be its own parent');
       }
-      currentId = parent.parent_folder_id; // This is now string | null, matching the type
+
+      // Check if new parent is a descendant of this folder
+      let currentId: string | null = newParentId;
+      while (currentId) {
+        const parent = await this.getFolderById(currentId);
+        if (!parent) break;
+        if (parent.parent_folder_id === folderId) {
+          throw new AppError(409, 'Cannot move folder into its own descendant');
+        }
+        currentId = parent.parent_folder_id;
+      }
+
+      // Verify new parent exists and is active
+      const { rows: parent } = await pool.query(
+        `SELECT id, status FROM folders WHERE id = $1`,
+        [newParentId]
+      );
+      if (!parent.length) {
+        throw new AppError(404, 'Parent folder not found');
+      }
+      if (parent[0].status === 'archived') {
+        throw new AppError(409, 'Cannot move folder into an archived folder');
+      }
     }
 
-    // Verify new parent exists and is active
-    const { rows: parent } = await pool.query(
-      `SELECT id, status FROM folders WHERE id = $1`,
-      [newParentId]
+    const { rows } = await pool.query(
+      `UPDATE folders
+       SET parent_folder_id = $1, updated_at = NOW()
+       WHERE id = $2
+       RETURNING *`,
+      [newParentId, folderId]
     );
-    if (!parent.length) {
-      throw new AppError(404, 'Parent folder not found');
-    }
-    if (parent[0].status === 'archived') {
-      throw new AppError(409, 'Cannot move folder into an archived folder');
-    }
+
+    return rows[0];
   }
-
-  const { rows } = await pool.query(
-    `UPDATE folders
-     SET parent_folder_id = $1, updated_at = NOW()
-     WHERE id = $2
-     RETURNING *`,
-    [newParentId, folderId]
-  );
-
-  return rows[0];
-}
 }

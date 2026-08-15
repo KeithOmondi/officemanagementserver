@@ -173,6 +173,48 @@ export const generatePDFSchema = z.object({
   }),
 });
 
+// ─── NEW: Export Options Schema ──────────────────────────────────────────
+
+/**
+ * Schema for export options when generating reports
+ * Allows specifying which sections to include in the export
+ */
+export const exportOptionsSchema = z.object({
+  query: z.object({
+    include_engagements: z.string().optional().transform(val => val !== 'false'),
+    include_unengaged: z.string().optional().transform(val => val !== 'false'),
+    include_escalations: z.string().optional().transform(val => val !== 'false'),
+    include_patterns: z.string().optional().transform(val => val !== 'false'),
+    format: z.enum(['pdf', 'excel', 'both']).default('both'),
+  }).optional(),
+});
+
+// ─── NEW: Bulk Export Schema ──────────────────────────────────────────────
+
+/**
+ * Schema for bulk export of multiple reports
+ * Supports exporting multiple reports in a single zip file
+ */
+export const bulkExportSchema = z.object({
+  body: z.object({
+    report_ids: z.array(z.string().uuid('Report ID must be a valid UUID')).min(1, 'At least one report ID is required'),
+    format: z.enum(['pdf', 'excel', 'both']).default('pdf'),
+    include_metadata: z.boolean().default(true),
+  }).strict(),
+});
+
+// ─── NEW: Export Status Schema ────────────────────────────────────────────
+
+/**
+ * Schema for checking export job status
+ * Useful for async export operations
+ */
+export const exportStatusSchema = z.object({
+  params: z.object({
+    job_id: z.string().uuid('Job ID must be a valid UUID'),
+  }),
+});
+
 // ─── Types ─────────────────────────────────────────────────────────────────
 
 export type EngagementInput = z.infer<typeof engagementSchema>;
@@ -182,3 +224,6 @@ export type CreateEngagementReportInput = z.infer<typeof createEngagementReportS
 export type UpdateEngagementReportInput = z.infer<typeof updateEngagementReportSchema>['body'];
 export type EngagementReportFilters = z.infer<typeof engagementReportFiltersSchema>['query'];
 export type ReviewReportInput = z.infer<typeof reviewReportSchema>['body'];
+export type ExportOptionsInput = z.infer<typeof exportOptionsSchema>['query'];
+export type BulkExportInput = z.infer<typeof bulkExportSchema>['body'];
+export type ExportStatusParams = z.infer<typeof exportStatusSchema>['params'];

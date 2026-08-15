@@ -120,16 +120,43 @@ router.get('/stats', stationEngagementController.getEngagementStats);
 
 // ─── Health Check / Debug Routes ─────────────────────────────────────────
 
+// ============================================================
+// src/features/station-engagement/routes/station-engagement.routes.ts
+// ============================================================
+
+// Add these new routes after the existing routes
+
 /**
- * GET /api/station-engagement/health
- * Simple health check for the engagement module
+ * GET /api/station-engagement/reports/:id/pdf
+ * Generate a PDF of the engagement report
+ * Requires super_admin role
  */
-router.get('/health', (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: 'Station Engagement module is operational',
-    timestamp: new Date().toISOString(),
-  });
-});
+router.get(
+  '/reports/:id/pdf',
+  requireRole('super_admin'),
+  stationEngagementController.generatePDF
+);
+
+/**
+ * GET /api/station-engagement/reports/:id/excel
+ * Generate an Excel spreadsheet of the engagement report
+ * Requires super_admin role
+ */
+router.get(
+  '/reports/:id/excel',
+  requireRole('super_admin'),
+  stationEngagementController.generateExcel
+);
+
+/**
+ * GET /api/station-engagement/reports/:id/export-all
+ * Generate both PDF and Excel in a zip file
+ * Requires super_admin role
+ */
+router.get(
+  '/reports/:id/export-all',
+  requireRole('super_admin'),
+  stationEngagementController.generateBoth
+);
 
 export default router;

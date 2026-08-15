@@ -8,7 +8,8 @@ import {
     GetFolderChildrenQuery, 
     GetFolderDocumentsQuery, 
     ListRegistryFoldersQuery, 
-    UpdateRegistryFolderBody 
+    UpdateRegistryFolderBody,
+    MoveDocumentToFolderBody,
 } from './registry.schema';
 
 function getParam(req: Request, key: string): string {
@@ -218,6 +219,45 @@ export class RegistryController {
             const folders = await RegistryService.searchFolders(q);
 
             return sendSuccess(res, folders, `Found ${folders.length} folders.`);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    // ── POST /api/rhc/folders/:id/documents/:documentId/move ──────────────
+    static async moveDocumentToFolder(req: Request, res: Response, next: NextFunction) {
+        try {
+            const sourceFolderId = getParam(req, 'id');
+            const documentId = getParam(req, 'documentId');
+            const { target_folder_id } = req.body as MoveDocumentToFolderBody;
+            const userId = (req as any).user?.id as string;
+
+            if (!userId) {
+                return res.status(401).json({
+                    success: false,
+                    message: 'User not authenticated',
+                });
+            }
+
+            if (!target_folder_id) {
+                throw new AppError(400, 'target_folder_id is required');
+            }
+
+            const result = await RegistryService.moveDocumentToFolder(
+                sourceFolderId,
+                documentId,
+                target_folder_id,
+                userId
+            );
+
+            console.log(`📄 Document moved:`, {
+                documentId,
+                sourceFolder: sourceFolderId,
+                targetFolder: target_folder_id,
+                userId,
+            });
+
+            return sendSuccess(res, result, 'Document moved successfully.');
         } catch (err) {
             next(err);
         }

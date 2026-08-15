@@ -54,10 +54,28 @@ export interface RegistryEntry {
   created_at:       Date;
 }
 
+// ─── Folder Document Entry (for showing folder documents in Registry) ───────
+
+export interface FolderRegistryEntry {
+  id:               string;
+  document_id:      string;
+  document_title:   string;
+  document_ref_no:  string | null;
+  station_id:       string;
+  station_name:     string;
+  station_type:     StationType;
+  folder_id:        string;
+  folder_ref_no:    string;
+  folder_name:      string;
+  is_folder_document: boolean;  // Flag to distinguish from routed documents
+  created_at:       Date;
+}
+
 // ── Station file counts (for the registry dashboard grid) ───────────────────
 
 export interface StationWithFileCount {
   id:         string;
+  ref_no:     string | null;
   name:       string;
   type:       StationType;
   location:   string | null;
@@ -69,6 +87,16 @@ export interface StationWithFileCount {
 
 export interface RegistryPaginationResponse {
   data:       RegistryEntry[];
+  total:      number;
+  page:       number;
+  limit:      number;
+  totalPages: number;
+}
+
+// ── Folder Pagination Response ──────────────────────────────────────────────
+
+export interface FolderRegistryPaginationResponse {
+  data:       FolderRegistryEntry[];
   total:      number;
   page:       number;
   limit:      number;
@@ -134,6 +162,13 @@ export interface FolderDocument {
   added_at: Date;
 }
 
+// ── Folder Hierarchy ─────────────────────────────────────────────────────────
+
+export interface FolderHierarchy extends RHCFolder {
+  parent_chain: RHCFolder[];
+  children: RHCFolder[];
+}
+
 // ── Create/Update Folder Request ─────────────────────────────────────────────
 
 export interface CreateRegistryFolderInput {
@@ -162,13 +197,6 @@ export interface FolderStatistics {
     category: FolderCategory;
     count: number;
   }[];
-}
-
-// ── Folder Hierarchy ─────────────────────────────────────────────────────────
-
-export interface FolderHierarchy extends RHCFolder {
-  parent_chain: RHCFolder[];
-  children: RHCFolder[];
 }
 
 // ── Folder Category Count ───────────────────────────────────────────────────

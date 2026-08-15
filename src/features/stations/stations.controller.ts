@@ -44,12 +44,12 @@ export const stationController = {
     return sendSuccess(res, station, 'Station retrieved successfully');
   }),
 
- getByRefNo: asyncHandler(async (req: Request, res: Response) => {
-  const refNo = getParamString(req.params.refNo);
-  const station = await StationService.findByRefNo(refNo);
-  if (!station) throw new AppError(404, 'Station not found');
-  return sendSuccess(res, station, 'Station retrieved successfully');
-}),
+  getByRefNo: asyncHandler(async (req: Request, res: Response) => {
+    const refNo = getParamString(req.params.refNo);
+    const station = await StationService.findByRefNo(refNo);
+    if (!station) throw new AppError(404, 'Station not found');
+    return sendSuccess(res, station, 'Station retrieved successfully');
+  }),
 
   getActiveStations: asyncHandler(async (req: Request, res: Response) => {
     const stations = await StationService.getActiveStationsWithCounts();
@@ -61,13 +61,34 @@ export const stationController = {
     return sendSuccess(res, stations, 'Court stations retrieved successfully');
   }),
 
- getByType: asyncHandler(async (req: Request, res: Response) => {
-  const type = getParamString(req.params.type);
-  const stations = await StationService.findByType(type);
-  return sendSuccess(res, stations, 'Stations retrieved successfully');
-}),
+  getByType: asyncHandler(async (req: Request, res: Response) => {
+    const type = getParamString(req.params.type);
+    const stations = await StationService.findByType(type);
+    return sendSuccess(res, stations, 'Stations retrieved successfully');
+  }),
 
-  
+  // ── New: Get all station types (predefined + custom) ──────────────────────
+
+  getStationTypes: asyncHandler(async (req: Request, res: Response) => {
+    const types = await StationService.getStationTypes();
+    return sendSuccess(res, types, 'Station types retrieved successfully');
+  }),
+
+  // ── New: Get stations by custom type ──────────────────────────────────────
+
+  getByCustomType: asyncHandler(async (req: Request, res: Response) => {
+    const customType = getParamString(req.params.customType);
+    const stations = await StationService.findByCustomType(customType);
+    return sendSuccess(res, stations, 'Stations retrieved successfully');
+  }),
+
+  // ── New: Check if a type is custom ─────────────────────────────────────────
+
+  checkType: asyncHandler(async (req: Request, res: Response) => {
+    const type = getParamString(req.params.type);
+    const isCustom = await StationService.isCustomType(type);
+    return sendSuccess(res, { type, isCustom }, 'Type check completed');
+  }),
 
   // ── Update ────────────────────────────────────────────────────────────────────
 

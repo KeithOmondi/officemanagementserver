@@ -55,6 +55,27 @@ export interface RegistryFolderWithStats extends RegistryFolder {
     sub_folder_count: number;
 }
 
+// ─── Document in Folder ──────────────────────────────────────────────────────
+
+export interface FolderDocument {
+    id: string;
+    title: string;
+    ref: string | null;
+    format: string;
+    file_url: string | null;
+    file_public_id: string | null;
+    created_at: string;
+    added_at: string;
+}
+
+// ─── Move Document Result ───────────────────────────────────────────────────
+
+export interface MoveDocumentResult {
+    sourceFolder: RegistryFolder;
+    targetFolder: RegistryFolder;
+    document: FolderDocument;
+}
+
 // Categories based on the referencing system
 export const REGISTRY_CATEGORIES = {
     COURT: 'court',

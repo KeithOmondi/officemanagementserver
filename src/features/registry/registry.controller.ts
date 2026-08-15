@@ -20,6 +20,7 @@ import {
   bulkAddDocumentsSchema,
   folderFiltersSchema,
   searchQuerySchema,
+  getStationFolderDocumentsSchema,
 } from './registry.validator';
 import type { 
   CreateFolderInput, 
@@ -27,6 +28,7 @@ import type {
   MoveFolderInput,
   AddDocumentToFolderInput,
   BulkAddDocumentsInput,
+  GetStationFolderDocumentsQuery,
 } from './registry.validator';
 
 export const registryController = {
@@ -249,5 +251,27 @@ export const registryController = {
       bodyResult.data.body.document_ids
     );
     return sendSuccess(res, result, 'Documents added to folder');
+  }),
+
+  // ── Get Folder Documents by Station ─────────────────────────────────────────
+
+  getStationFolderDocuments: asyncHandler(async (req: Request, res: Response) => {
+    const result = getStationFolderDocumentsSchema.safeParse({ 
+      params: req.params, 
+      query: req.query 
+    });
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid parameters');
+    }
+
+    const { stationId } = result.data.params;
+    const { page, limit } = result.data.query;
+
+    const documents = await RegistryService.getStationFolderDocuments(stationId, {
+      page,
+      limit,
+    } as GetStationFolderDocumentsQuery);
+
+    return sendSuccess(res, documents, 'Folder documents for station retrieved successfully');
   }),
 };

@@ -102,9 +102,22 @@ export const deleteRegistryFolderSchema = z.object({
     }),
 });
 
+// ── POST /api/registry/folders/:id/documents/:documentId/move ──────────────
+export const moveDocumentToFolderSchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Source folder ID must be a valid UUID'),
+        documentId: z.string().uuid('Document ID must be a valid UUID'),
+    }),
+    body: z.object({
+        target_folder_id: z.string().uuid('Target folder ID must be a valid UUID'),
+    }).strict(),
+});
+
 // ── Type exports ─────────────────────────────────────────────────────────────
 export type CreateRegistryFolderBody = z.infer<typeof createRegistryFolderSchema>['body'];
 export type UpdateRegistryFolderBody = z.infer<typeof updateRegistryFolderSchema>['body'];
 export type ListRegistryFoldersQuery = z.infer<typeof listRegistryFoldersSchema>['query'];
 export type GetFolderChildrenQuery = z.infer<typeof getRegistryFolderChildrenSchema>['query'];
 export type GetFolderDocumentsQuery = z.infer<typeof getFolderDocumentsSchema>['query'];
+export type MoveDocumentToFolderBody = z.infer<typeof moveDocumentToFolderSchema>['body'];
+export type MoveDocumentToFolderParams = z.infer<typeof moveDocumentToFolderSchema>['params'];

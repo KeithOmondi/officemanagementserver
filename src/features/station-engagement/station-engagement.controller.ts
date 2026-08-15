@@ -15,6 +15,7 @@ import {
   generatePDFSchema,
 } from './station-engagement.schema';
 import { StationEngagementService } from './station-engagement.service';
+import { StationEngagementExportService } from './station-engagement.export.service';
 import { SuccessionCourtCategory } from '../successioncourts/succession-courts.types';
 
 export const stationEngagementController = {
@@ -311,6 +312,7 @@ export const stationEngagementController = {
   /**
    * GET /api/station-engagement/reports/:id/pdf
    * Generate a PDF of the engagement report
+   * Requires super_admin role
    */
   generatePDF: asyncHandler(async (req: Request, res: Response) => {
     const result = generatePDFSchema.safeParse({ params: req.params });
@@ -318,20 +320,73 @@ export const stationEngagementController = {
       throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
     }
 
-    const report = await StationEngagementService.findById(result.data.params.id);
-    if (!report) {
-      throw new AppError(404, 'Engagement report not found');
+    const pdfBuffer = await StationEngagementExportService.generatePDF(
+      result.data.params.id,
+      req.user!.id
+    );
+
+    const filename = `engagement-report-${result.data.params.id}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(pdfBuffer);
+  }),
+
+  // ─── Generate Excel ────────────────────────────────────────────────────
+
+  /**
+   * GET /api/station-engagement/reports/:id/excel
+   * Generate an Excel spreadsheet of the engagement report
+   * Requires super_admin role
+   */
+  generateExcel: asyncHandler(async (req: Request, res: Response) => {
+    const result = generatePDFSchema.safeParse({ params: req.params });
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
     }
 
-    // Generate PDF data with all fields
-    const pdfData = {
-      report,
-      generated_at: new Date().toISOString(),
-      generated_by: req.user!.id,
-    };
+    const excelBuffer = await StationEngagementExportService.generateExcel(
+      result.data.params.id,
+      req.user!.id
+    );
 
-    // TODO: Implement actual PDF generation using a library like pdfkit or puppeteer
-    // For now, return the report data with a note
-    return sendSuccess(res, pdfData, 'PDF data prepared (PDF generation to be implemented)');
+    const filename = `engagement-report-${result.data.params.id}.xlsx`;
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(excelBuffer);
+  }),
+
+  // ─── Generate Both PDF and Excel ──────────────────────────────────────
+
+  /**
+   * GET /api/station-engagement/reports/:id/export-all
+   * Generate both PDF and Excel in a zip file
+   * Requires super_admin role
+   */
+  generateBoth: asyncHandler(async (req: Request, res: Response) => {
+    const result = generatePDFSchema.safeParse({ params: req.params });
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+    }
+
+    const { pdf, excel } = await StationEngagementExportService.generateBoth(
+      result.data.params.id,
+      req.user!.id
+    );
+
+    // Create a zip file
+    const AdmZip = require('adm-zip');
+    const zip = new AdmZip();
+    zip.addFile(`engagement-report-${result.data.params.id}.pdf`, pdf);
+    zip.addFile(`engagement-report-${result.data.params.id}.xlsx`, excel);
+
+    const zipBuffer = zip.toBuffer();
+    const filename = `engagement-report-${result.data.params.id}.zip`;
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(zipBuffer);
   }),
 };

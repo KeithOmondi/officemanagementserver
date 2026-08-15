@@ -1,5 +1,3 @@
-
-
 // ─── Enums ──────────────────────────────────────────────────────────────────
 
 import { SuccessionCourtCategory } from "../successioncourts/succession-courts.types";
@@ -359,6 +357,10 @@ export interface StationEngagementState {
   // PDF
   pdfData: PDFReportData | null;
   isGeneratingPDF: boolean;
+
+  // ─── NEW: Excel Export Properties ────────────────────────────────────
+  excelData: Blob | null; // Store the Excel blob data
+  isGeneratingExcel: boolean; // Track Excel generation status
 }
 
 // ─── Form Types ──────────────────────────────────────────────────────────
@@ -426,6 +428,8 @@ export interface ReportCardProps {
   onSubmit: (id: string) => void;
   onReview: (id: string) => void;
   onGeneratePDF: (id: string) => void;
+  onGenerateExcel?: (id: string) => void; // NEW
+  onGenerateBoth?: (id: string) => void; // NEW
   isSubmitting?: boolean;
 }
 
@@ -456,3 +460,21 @@ export interface ReviewModalProps {
   reportName: string;
   isSubmitting?: boolean;
 }
+
+// ─── NEW: Export Related Types ────────────────────────────────────────────
+
+export interface ExportOptions {
+  includeEngagements?: boolean;
+  includeUnengagedStations?: boolean;
+  includeEscalations?: boolean;
+  includePatterns?: boolean;
+}
+
+export interface ExportResult {
+  success: boolean;
+  message: string;
+  data?: Blob;
+  filename?: string;
+}
+
+export type FileType = 'pdf' | 'excel' | 'zip';

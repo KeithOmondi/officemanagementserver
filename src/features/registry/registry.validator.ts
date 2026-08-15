@@ -20,6 +20,14 @@ export const folderStatusEnum = z.enum([
   'active', 'archived',
 ]);
 
+// ── Station Type Validation ──────────────────────────────────────────────────
+// We no longer validate station types against a predefined list
+// since we allow custom types. This is a no-op validator that accepts any string.
+
+export const stationTypeSchema = z.string()
+  .min(1, 'Station type is required')
+  .max(100, 'Station type is too long');
+
 // ── Court Reference Number Validation ──────────────────────────────────────
 
 /**
@@ -180,6 +188,30 @@ export const searchQuerySchema = z.object({
   }),
 });
 
+// ── Get Folder Documents by Station ──────────────────────────────────────────
+
+export const getStationFolderDocumentsSchema = z.object({
+  params: z.object({
+    stationId: z.string().uuid('Station ID must be a valid UUID'),
+  }),
+  query: z.object({
+    page:  z.string().regex(/^\d+$/).transform(Number).pipe(z.number().int().min(1)).optional(),
+    limit: z.string().regex(/^\d+$/).transform(Number).pipe(z.number().int().min(1).max(100)).optional(),
+  }),
+});
+
+// ── Move Document to Folder ──────────────────────────────────────────────────
+
+export const moveDocumentToFolderSchema = z.object({
+  params: z.object({
+    id: z.string().uuid('Source folder ID must be a valid UUID'),
+    documentId: z.string().uuid('Document ID must be a valid UUID'),
+  }),
+  body: z.object({
+    target_folder_id: z.string().uuid('Target folder ID must be a valid UUID'),
+  }).strict(),
+});
+
 // ── Inferred types ────────────────────────────────────────────────────────────
 
 export type RouteFileInput           = z.infer<typeof routeFileSchema>['body'];
@@ -192,3 +224,5 @@ export type AddDocumentToFolderInput = z.infer<typeof addDocumentToFolderSchema>
 export type BulkAddDocumentsInput    = z.infer<typeof bulkAddDocumentsSchema>['body'];
 export type FolderFilters            = z.infer<typeof folderFiltersSchema>['query'];
 export type SearchQuery              = z.infer<typeof searchQuerySchema>['query'];
+export type GetStationFolderDocumentsQuery = z.infer<typeof getStationFolderDocumentsSchema>['query'];
+export type MoveDocumentToFolderBody = z.infer<typeof moveDocumentToFolderSchema>['body'];

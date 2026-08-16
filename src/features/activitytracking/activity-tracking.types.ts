@@ -38,7 +38,14 @@ export interface ActivityLog extends ContactReference {
   updatedAt: string;
 }
 
-export type ReminderStatus = 'pending' | 'completed' | 'snoozed' | 'cancelled';
+// Updated ReminderStatus with more granular statuses
+export type ReminderStatus = 
+  | 'pending'      // Created but not yet actioned
+  | 'in_progress'  // Currently being worked on
+  | 'upcoming'     // Scheduled for future (not yet due)
+  | 'overdue'      // Past due date
+  | 'completed'    // Successfully finished
+  | 'cancelled';   // No longer needed
 
 export interface ActivityReminder extends ContactReference {
   id: string;
@@ -86,29 +93,55 @@ export const CHANNEL_LABELS: Record<ActivityChannel, string> = {
   other: 'Other',
 };
 
+// Updated REMINDER_STATUS_LABELS with new statuses
 export const REMINDER_STATUS_LABELS: Record<ReminderStatus, string> = {
   pending: 'Pending',
+  in_progress: 'In Progress',
+  upcoming: 'Upcoming',
+  overdue: 'Overdue',
   completed: 'Completed',
-  snoozed: 'Snoozed',
   cancelled: 'Cancelled',
 };
 
+// Updated helper functions to work with new statuses
 export function isReminderOverdue(reminder: ActivityReminder): boolean {
-  if (reminder.status !== 'pending') return false;
+  // Only check due date for pending, in_progress, and upcoming statuses
+  if (!['pending', 'in_progress', 'upcoming'].includes(reminder.status)) return false;
   const today = new Date().toISOString().split('T')[0];
   return reminder.dueDate < today;
 }
 
 export function isReminderDueToday(reminder: ActivityReminder): boolean {
-  if (reminder.status !== 'pending') return false;
+  if (!['pending', 'in_progress', 'upcoming'].includes(reminder.status)) return false;
   const today = new Date().toISOString().split('T')[0];
   return reminder.dueDate === today;
 }
 
+export function isReminderUpcoming(reminder: ActivityReminder): boolean {
+  if (!['pending', 'in_progress', 'upcoming'].includes(reminder.status)) return false;
+  const today = new Date().toISOString().split('T')[0];
+  return reminder.dueDate > today;
+}
+
 export function canCompleteReminder(reminder: ActivityReminder): boolean {
-  return reminder.status === 'pending' || reminder.status === 'snoozed';
+  // Can complete if status is pending, in_progress, upcoming, or overdue
+  return ['pending', 'in_progress', 'upcoming', 'overdue'].includes(reminder.status);
 }
 
 export function canSnoozeReminder(reminder: ActivityReminder): boolean {
-  return reminder.status === 'pending' || reminder.status === 'snoozed';
+  // Can snooze if status is pending, in_progress, upcoming, or overdue
+  return ['pending', 'in_progress', 'upcoming', 'overdue'].includes(reminder.status);
+}
+
+export function canEditReminder(reminder: ActivityReminder): boolean {
+  // Can edit if not completed or cancelled
+  return !['completed', 'cancelled'].includes(reminder.status);
+}
+
+// Helper to get the appropriate status based on due date
+export function getAutoStatusFromDueDate(dueDate: string): ReminderStatus {
+  const today = new Date().toISOString().split('T')[0];
+  if (dueDate < today) return 'overdue';
+  if (dueDate === today) return 'pending';
+  return 'upcoming';
 }

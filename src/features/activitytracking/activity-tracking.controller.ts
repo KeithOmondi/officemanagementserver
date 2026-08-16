@@ -15,6 +15,7 @@ import {
   reminderFiltersSchema,
   dueRemindersFiltersSchema,
 } from './activity-tracking.validator';
+import { z } from 'zod';
 
 // req.user is already typed globally on Express.Request (see your existing
 // Express type augmentation) — no local interface needed here.
@@ -34,6 +35,14 @@ function scopeToOwnStaffUnlessPrivileged<T extends { staffId?: string }>(
   }
   return filters;
 }
+
+// Schema for status update
+const updateReminderStatusSchema = z.object({
+  params: z.object({ id: z.string().uuid('Invalid reminder id') }),
+  body: z.object({
+    status: z.enum(['pending', 'in_progress', 'upcoming', 'overdue', 'completed', 'cancelled']),
+  }),
+});
 
 export const activityTrackingController = {
 
@@ -62,7 +71,6 @@ export const activityTrackingController = {
     const log = await ActivityLogService.findById(result.data.params.id);
     if (!log) throw new AppError(404, 'Activity log not found');
     
-    // Check permissions: staff can only see their own logs unless privileged
     const isPrivileged = PRIVILEGED_ROLES.includes(req.user?.role as string);
     if (!isPrivileged && log.staffId !== req.user!.id) {
       throw new AppError(403, 'You do not have permission to view this activity log');
@@ -75,7 +83,6 @@ export const activityTrackingController = {
     const result = updateActivityLogSchema.safeParse({ params: req.params, body: req.body });
     if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid update data');
     
-    // Check if the log exists and belongs to the user
     const existingLog = await ActivityLogService.findById(result.data.params.id);
     if (!existingLog) throw new AppError(404, 'Activity log not found');
     
@@ -92,7 +99,6 @@ export const activityTrackingController = {
     const result = activityLogIdParamSchema.safeParse({ params: req.params });
     if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
     
-    // Check if the log exists and belongs to the user
     const existingLog = await ActivityLogService.findById(result.data.params.id);
     if (!existingLog) throw new AppError(404, 'Activity log not found');
     
@@ -125,6 +131,24 @@ export const activityTrackingController = {
     return sendSuccess(res, reminders, 'Reminders retrieved successfully');
   }),
 
+  // Get all active reminders (pending, in_progress, upcoming, overdue)
+  getPendingReminders: asyncHandler(async (req: Request, res: Response) => {
+    const result = dueRemindersFiltersSchema.safeParse({ query: req.query });
+    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid filters');
+    const filters = scopeToOwnStaffUnlessPrivileged(result.data.query, req);
+    const reminders = await ActivityReminderService.findDue(filters);
+    return sendSuccess(res, reminders, 'Active reminders retrieved successfully');
+  }),
+
+  // Get only overdue reminders
+  getOverdueReminders: asyncHandler(async (req: Request, res: Response) => {
+    const result = dueRemindersFiltersSchema.safeParse({ query: req.query });
+    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid filters');
+    const filters = scopeToOwnStaffUnlessPrivileged(result.data.query, req);
+    const reminders = await ActivityReminderService.findOverdue(filters);
+    return sendSuccess(res, reminders, 'Overdue reminders retrieved successfully');
+  }),
+
   // Powers the tracking page's "due today / overdue" section.
   getDueReminders: asyncHandler(async (req: Request, res: Response) => {
     const result = dueRemindersFiltersSchema.safeParse({ query: req.query });
@@ -140,7 +164,6 @@ export const activityTrackingController = {
     const reminder = await ActivityReminderService.findById(result.data.params.id);
     if (!reminder) throw new AppError(404, 'Reminder not found');
     
-    // Check permissions: staff can only see their own reminders unless privileged
     const isPrivileged = PRIVILEGED_ROLES.includes(req.user?.role as string);
     if (!isPrivileged && reminder.staffId !== req.user!.id) {
       throw new AppError(403, 'You do not have permission to view this reminder');
@@ -153,7 +176,6 @@ export const activityTrackingController = {
     const result = updateReminderSchema.safeParse({ params: req.params, body: req.body });
     if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid update data');
     
-    // Check if the reminder exists and belongs to the user
     const existingReminder = await ActivityReminderService.findById(result.data.params.id);
     if (!existingReminder) throw new AppError(404, 'Reminder not found');
     
@@ -166,11 +188,30 @@ export const activityTrackingController = {
     return sendSuccess(res, reminder, 'Reminder updated successfully');
   }),
 
+  // Update only the status of a reminder
+  updateReminderStatus: asyncHandler(async (req: Request, res: Response) => {
+    const result = updateReminderStatusSchema.safeParse({ params: req.params, body: req.body });
+    if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid status data');
+    
+    const existingReminder = await ActivityReminderService.findById(result.data.params.id);
+    if (!existingReminder) throw new AppError(404, 'Reminder not found');
+    
+    const isPrivileged = PRIVILEGED_ROLES.includes(req.user?.role as string);
+    if (!isPrivileged && existingReminder.staffId !== req.user!.id) {
+      throw new AppError(403, 'You do not have permission to update this reminder');
+    }
+    
+    const reminder = await ActivityReminderService.updateStatus(
+      result.data.params.id, 
+      result.data.body.status
+    );
+    return sendSuccess(res, reminder, 'Reminder status updated successfully');
+  }),
+
   completeReminder: asyncHandler(async (req: Request, res: Response) => {
     const result = reminderIdParamSchema.safeParse({ params: req.params });
     if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
     
-    // Check if the reminder exists and belongs to the user
     const existingReminder = await ActivityReminderService.findById(result.data.params.id);
     if (!existingReminder) throw new AppError(404, 'Reminder not found');
     
@@ -187,7 +228,6 @@ export const activityTrackingController = {
     const result = snoozeReminderSchema.safeParse({ params: req.params, body: req.body });
     if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid snooze data');
     
-    // Check if the reminder exists and belongs to the user
     const existingReminder = await ActivityReminderService.findById(result.data.params.id);
     if (!existingReminder) throw new AppError(404, 'Reminder not found');
     
@@ -204,7 +244,6 @@ export const activityTrackingController = {
     const result = reminderIdParamSchema.safeParse({ params: req.params });
     if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
     
-    // Check if the reminder exists and belongs to the user
     const existingReminder = await ActivityReminderService.findById(result.data.params.id);
     if (!existingReminder) throw new AppError(404, 'Reminder not found');
     
@@ -216,5 +255,11 @@ export const activityTrackingController = {
     const deleted = await ActivityReminderService.delete(result.data.params.id);
     if (!deleted) throw new AppError(404, 'Reminder not found');
     return sendSuccess(res, null, 'Reminder deleted successfully');
+  }),
+
+  // Auto-update reminder statuses based on due dates
+  autoUpdateReminderStatuses: asyncHandler(async (req: Request, res: Response) => {
+    await ActivityReminderService.autoUpdateStatuses();
+    return sendSuccess(res, null, 'Reminder statuses auto-updated successfully');
   }),
 };

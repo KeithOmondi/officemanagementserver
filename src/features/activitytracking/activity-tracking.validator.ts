@@ -71,7 +71,6 @@ const activityLogListQuerySchema = z.object({
   dateTo: z.string().refine(isoDate, 'Invalid date').optional(),
   page: z.coerce.number().int().positive().optional(),
   pageSize: z.coerce.number().int().positive().max(100).optional(),
-  // Add search parameter for filtering by staff name or contact name
   search: z.string().optional(),
 });
 
@@ -109,7 +108,8 @@ const updateReminderBodySchema = z.object({
   relatedActivityId: z.string().uuid().nullable().optional(),
   message: z.string().min(1).optional(),
   dueDate: z.string().refine(isoDate, 'Invalid date').optional(),
-  status: z.enum(['pending', 'completed', 'snoozed', 'cancelled']).optional(),
+  // Updated status enum with all new statuses
+  status: z.enum(['pending', 'in_progress', 'upcoming', 'overdue', 'completed', 'cancelled']).optional(),
 });
 
 const snoozeReminderBodySchema = z.object({
@@ -121,7 +121,8 @@ const reminderIdSchema = z.object({ id: z.string().uuid('Invalid reminder id') }
 const reminderListQuerySchema = z.object({
   staffId: z.string().uuid().optional(),
   departmentId: z.string().uuid().optional(),
-  status: z.enum(['pending', 'completed', 'snoozed', 'cancelled']).optional(),
+  // Updated status enum with all new statuses
+  status: z.enum(['pending', 'in_progress', 'upcoming', 'overdue', 'completed', 'cancelled']).optional(),
   dueBefore: z.string().refine(isoDate, 'Invalid date').optional(),
   dueOn: z.string().refine(isoDate, 'Invalid date').optional(),
   page: z.coerce.number().int().positive().optional(),

@@ -58,12 +58,37 @@ router.get(
   activityTrackingController.getAllReminders
 );
 
-// Must come before '/reminders/:id' so 'due' isn't parsed as a UUID param.
+// ── Special reminder endpoints (must come before '/reminders/:id') ─────────
+
+// Get all active reminders (pending, in_progress, upcoming, overdue)
+router.get(
+  '/reminders/active',
+  requireRole('staff', 'dept_head', 'super_admin'),
+  activityTrackingController.getPendingReminders
+);
+
+// Get due reminders (due today or overdue)
 router.get(
   '/reminders/due',
   requireRole('staff', 'dept_head', 'super_admin'),
   activityTrackingController.getDueReminders
 );
+
+// Get only overdue reminders
+router.get(
+  '/reminders/overdue',
+  requireRole('staff', 'dept_head', 'super_admin'),
+  activityTrackingController.getOverdueReminders
+);
+
+// Auto-update reminder statuses (admin only)
+router.post(
+  '/reminders/auto-update',
+  requireRole('dept_head', 'super_admin'),
+  activityTrackingController.autoUpdateReminderStatuses
+);
+
+// ── Reminder by ID ──────────────────────────────────────────────────────────
 
 router.get(
   '/reminders/:id',
@@ -75,6 +100,13 @@ router.patch(
   '/reminders/:id',
   requireRole('staff', 'dept_head', 'super_admin'),
   activityTrackingController.updateReminder
+);
+
+// Update only the status of a reminder
+router.patch(
+  '/reminders/:id/status',
+  requireRole('staff', 'dept_head', 'super_admin'),
+  activityTrackingController.updateReminderStatus
 );
 
 router.post(

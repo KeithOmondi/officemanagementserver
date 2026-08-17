@@ -421,197 +421,221 @@ export class DocumentService {
 
   // ── Find all ─────────────────────────────────────────────────────────────────
 
-  static async findAll(
-    filters: DocumentFilters,
-    requestingUserId: string,
-    requestingUserRole?: string
-  ): Promise<DocumentPaginationResponse> {
-    const {
-      search, type, category, status, assigned_to,
-      department_id, folder_id, for_my_action,
-      has_bring_up_date,
-      bring_up_status,
-      bring_up_date_from,
-      bring_up_date_to,
-      bring_up_due_today,
-      bring_up_due_this_week,
-      assigned_for_bring_up,
-      page = 1, limit = 20,
-      sort_by = 'created_at', sort_order = 'DESC',
-    } = filters;
+static async findAll(
+  filters: DocumentFilters,
+  requestingUserId: string,
+  requestingUserRole?: string
+): Promise<DocumentPaginationResponse> {
+  const {
+    search, type, category, status, assigned_to,
+    department_id, folder_id, for_my_action,
+    has_bring_up_date,
+    bring_up_status,
+    bring_up_date_from,
+    bring_up_date_to,
+    bring_up_due_today,
+    bring_up_due_this_week,
+    assigned_for_bring_up,
+    page = 1, limit = 20,
+    sort_by = 'created_at', sort_order = 'DESC',
+  } = filters;
 
-    const sortCol = ALLOWED_SORT.has(sort_by ?? '') ? `d.${sort_by}` : 'd.created_at';
-    const sortDir = sort_order === 'ASC' ? 'ASC' : 'DESC';
-    const offset = (page - 1) * limit;
+  const sortCol = ALLOWED_SORT.has(sort_by ?? '') ? `d.${sort_by}` : 'd.created_at';
+  const sortDir = sort_order === 'ASC' ? 'ASC' : 'DESC';
+  const offset = (page - 1) * limit;
 
-    const conditions: string[] = ['d.is_active = true'];
-    const values: unknown[] = [];
-    let p = 1;
+  const conditions: string[] = ['d.is_active = true'];
+  const values: unknown[] = [];
+  let p = 1;
 
-    if (requestingUserRole === 'super_admin') {
-      console.log('[FindAll] Super admin - showing all documents');
-    } else {
-      conditions.push(`(d.is_draft = false OR d.created_by = $${p})`);
-      values.push(requestingUserId);
-      p++;
-    }
+  // ─── Department-Based Restriction ────────────────────────────────────────
 
-    if (folder_id) {
-      conditions.push(`d.folder_id = $${p}`);
-      values.push(folder_id);
-      p++;
-    }
+  // First, get the user's department
+  const { rows: userRows } = await pool.query(
+    `SELECT department_id FROM users WHERE id = $1 AND is_active = true`,
+    [requestingUserId]
+  );
+  
+  const userDepartmentId = userRows[0]?.department_id;
 
-    if (search) {
-      conditions.push(`(d.title ILIKE $${p} OR d.reference_no ILIKE $${p} OR d.original_name ILIKE $${p})`);
-      values.push(`%${search}%`); p++;
-    }
-    if (type) { conditions.push(`d.type = $${p}`); values.push(type); p++; }
-    if (category) { conditions.push(`d.category = $${p}`); values.push(category); p++; }
-    if (status) { conditions.push(`d.status = $${p}`); values.push(status); p++; }
-    if (assigned_to) { conditions.push(`d.assigned_to = $${p}`); values.push(assigned_to); p++; }
-
-    if (for_my_action && department_id) {
-      conditions.push(`(d.department_id = $${p} OR d.assigned_to = $${p + 1})`);
-      values.push(department_id, requestingUserId);
-      p += 2;
-    } else if (for_my_action) {
-      conditions.push(`d.assigned_to = $${p}`);
-      values.push(requestingUserId);
-      p++;
-    } else if (department_id) {
+  if (requestingUserRole === 'super_admin') {
+    // Super Admins see ALL documents
+    console.log('[FindAll] Super admin - showing all documents');
+  } else if (requestingUserRole === 'dept_head' || requestingUserRole === 'staff') {
+    // Dept Heads and Staff only see documents from their department
+    if (userDepartmentId) {
       conditions.push(`d.department_id = $${p}`);
-      values.push(department_id);
+      values.push(userDepartmentId);
       p++;
+    } else {
+      // User has no department - they see no documents (or you could show all)
+      // Option: Show all non-draft documents
+      conditions.push(`d.is_draft = false`);
     }
-
-    // ─── Bring Up Filters ─────────────────────────────────────────────────────
-
-    if (has_bring_up_date) {
-      conditions.push(`d.bring_up_date IS NOT NULL`);
-    }
-
-    if (bring_up_status && bring_up_status !== 'all') {
-      const now = new Date().toISOString();
-      if (bring_up_status === 'pending') {
-        conditions.push(`d.bring_up_date IS NOT NULL AND d.bring_up_completed_at IS NULL AND d.bring_up_date >= $${p}`);
-        values.push(now);
-        p++;
-      } else if (bring_up_status === 'overdue') {
-        conditions.push(`d.bring_up_date IS NOT NULL AND d.bring_up_completed_at IS NULL AND d.bring_up_date < $${p}`);
-        values.push(now);
-        p++;
-      } else if (bring_up_status === 'completed') {
-        conditions.push(`d.bring_up_completed_at IS NOT NULL`);
-      }
-    }
-
-    if (bring_up_date_from) {
-      conditions.push(`d.bring_up_date >= $${p}`);
-      values.push(bring_up_date_from);
-      p++;
-    }
-
-    if (bring_up_date_to) {
-      conditions.push(`d.bring_up_date <= $${p}`);
-      values.push(bring_up_date_to);
-      p++;
-    }
-
-    if (bring_up_due_today) {
-      const today = new Date().toISOString().split('T')[0];
-      conditions.push(`DATE(d.bring_up_date) = $${p}`);
-      values.push(today);
-      p++;
-    }
-
-    if (bring_up_due_this_week) {
-      const now = new Date();
-      const startOfWeek = new Date(now);
-      startOfWeek.setDate(now.getDate() - now.getDay());
-      const endOfWeek = new Date(now);
-      endOfWeek.setDate(now.getDate() + (6 - now.getDay()));
-      conditions.push(`DATE(d.bring_up_date) BETWEEN $${p} AND $${p + 1}`);
-      values.push(startOfWeek.toISOString().split('T')[0], endOfWeek.toISOString().split('T')[0]);
-      p += 2;
-    }
-
-    if (assigned_for_bring_up) {
-      conditions.push(`d.assigned_to = $${p}`);
-      values.push(assigned_for_bring_up);
-      p++;
-    }
-
-    const where = `WHERE ${conditions.join(' AND ')}`;
-
-    const [countResult, dataResult] = await Promise.all([
-      pool.query(`SELECT COUNT(*) AS total ${DOC_JOIN} ${where}`, values),
-      pool.query(
-        `SELECT 
-          ${DOC_SELECT},
-          ${MARK_SELECT}
-         ${DOC_JOIN}
-         ${MARK_JOIN}
-         ${where}
-         ORDER BY ${sortCol} ${sortDir}
-         LIMIT $${p} OFFSET $${p + 1}`,
-        [...values, limit, offset]
-      ),
-    ]);
-
-    const documentIds = dataResult.rows.map(row => row.id);
-    let followUpsMap: Record<string, FollowUp[]> = {};
-
-    if (documentIds.length > 0) {
-      const { rows: followUpRows } = await pool.query(
-        `SELECT ${FOLLOW_UP_SELECT} ${FOLLOW_UP_JOIN}
-         WHERE fu.document_id = ANY($1) AND fu.is_active = true
-         ORDER BY fu.created_at DESC`,
-        [documentIds]
-      );
-      
-      followUpsMap = followUpRows.reduce((acc, row) => {
-        const docId = row.document_id;
-        if (!acc[docId]) acc[docId] = [];
-        acc[docId].push(row);
-        return acc;
-      }, {} as Record<string, FollowUp[]>);
-    }
-
-    let bringUpHistoryMap: Record<string, BringUpHistoryEntry[]> = {};
-
-    if (documentIds.length > 0) {
-      const { rows: historyRows } = await pool.query(
-        `SELECT ${BRING_UP_HISTORY_SELECT} ${BRING_UP_HISTORY_JOIN}
-         WHERE bh.document_id = ANY($1)
-         ORDER BY bh.set_at DESC`,
-        [documentIds]
-      );
-      
-      bringUpHistoryMap = historyRows.reduce((acc, row) => {
-        const docId = row.document_id;
-        if (!acc[docId]) acc[docId] = [];
-        acc[docId].push(row);
-        return acc;
-      }, {} as Record<string, BringUpHistoryEntry[]>);
-    }
-
-    const documents = dataResult.rows.map(row => {
-      const doc = mapRowToDocument(row);
-      doc.follow_ups = followUpsMap[doc.id] || [];
-      doc.bring_up_history = bringUpHistoryMap[doc.id] || null;
-      return doc;
-    });
-
-    const total = parseInt(countResult.rows[0]?.total ?? '0', 10);
-    return {
-      data: documents,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
+  } else {
+    // Fallback for other roles - show all non-draft documents
+    conditions.push(`d.is_draft = false`);
   }
+
+  // ─── Continue with existing filters ──────────────────────────────────────
+
+  if (folder_id) {
+    conditions.push(`d.folder_id = $${p}`);
+    values.push(folder_id);
+    p++;
+  }
+
+  if (search) {
+    conditions.push(`(d.title ILIKE $${p} OR d.reference_no ILIKE $${p} OR d.original_name ILIKE $${p})`);
+    values.push(`%${search}%`); p++;
+  }
+  if (type) { conditions.push(`d.type = $${p}`); values.push(type); p++; }
+  if (category) { conditions.push(`d.category = $${p}`); values.push(category); p++; }
+  if (status) { conditions.push(`d.status = $${p}`); values.push(status); p++; }
+  if (assigned_to) { conditions.push(`d.assigned_to = $${p}`); values.push(assigned_to); p++; }
+
+  if (for_my_action && department_id) {
+    conditions.push(`(d.department_id = $${p} OR d.assigned_to = $${p + 1})`);
+    values.push(department_id, requestingUserId);
+    p += 2;
+  } else if (for_my_action) {
+    conditions.push(`d.assigned_to = $${p}`);
+    values.push(requestingUserId);
+    p++;
+  } else if (department_id) {
+    conditions.push(`d.department_id = $${p}`);
+    values.push(department_id);
+    p++;
+  }
+
+  // ─── Bring Up Filters ─────────────────────────────────────────────────────
+
+  if (has_bring_up_date) {
+    conditions.push(`d.bring_up_date IS NOT NULL`);
+  }
+
+  if (bring_up_status && bring_up_status !== 'all') {
+    const now = new Date().toISOString();
+    if (bring_up_status === 'pending') {
+      conditions.push(`d.bring_up_date IS NOT NULL AND d.bring_up_completed_at IS NULL AND d.bring_up_date >= $${p}`);
+      values.push(now);
+      p++;
+    } else if (bring_up_status === 'overdue') {
+      conditions.push(`d.bring_up_date IS NOT NULL AND d.bring_up_completed_at IS NULL AND d.bring_up_date < $${p}`);
+      values.push(now);
+      p++;
+    } else if (bring_up_status === 'completed') {
+      conditions.push(`d.bring_up_completed_at IS NOT NULL`);
+    }
+  }
+
+  if (bring_up_date_from) {
+    conditions.push(`d.bring_up_date >= $${p}`);
+    values.push(bring_up_date_from);
+    p++;
+  }
+
+  if (bring_up_date_to) {
+    conditions.push(`d.bring_up_date <= $${p}`);
+    values.push(bring_up_date_to);
+    p++;
+  }
+
+  if (bring_up_due_today) {
+    const today = new Date().toISOString().split('T')[0];
+    conditions.push(`DATE(d.bring_up_date) = $${p}`);
+    values.push(today);
+    p++;
+  }
+
+  if (bring_up_due_this_week) {
+    const now = new Date();
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() - now.getDay());
+    const endOfWeek = new Date(now);
+    endOfWeek.setDate(now.getDate() + (6 - now.getDay()));
+    conditions.push(`DATE(d.bring_up_date) BETWEEN $${p} AND $${p + 1}`);
+    values.push(startOfWeek.toISOString().split('T')[0], endOfWeek.toISOString().split('T')[0]);
+    p += 2;
+  }
+
+  if (assigned_for_bring_up) {
+    conditions.push(`d.assigned_to = $${p}`);
+    values.push(assigned_for_bring_up);
+    p++;
+  }
+
+  const where = `WHERE ${conditions.join(' AND ')}`;
+
+  const [countResult, dataResult] = await Promise.all([
+    pool.query(`SELECT COUNT(*) AS total ${DOC_JOIN} ${where}`, values),
+    pool.query(
+      `SELECT 
+        ${DOC_SELECT},
+        ${MARK_SELECT}
+       ${DOC_JOIN}
+       ${MARK_JOIN}
+       ${where}
+       ORDER BY ${sortCol} ${sortDir}
+       LIMIT $${p} OFFSET $${p + 1}`,
+      [...values, limit, offset]
+    ),
+  ]);
+
+  const documentIds = dataResult.rows.map(row => row.id);
+  let followUpsMap: Record<string, FollowUp[]> = {};
+
+  if (documentIds.length > 0) {
+    const { rows: followUpRows } = await pool.query(
+      `SELECT ${FOLLOW_UP_SELECT} ${FOLLOW_UP_JOIN}
+       WHERE fu.document_id = ANY($1) AND fu.is_active = true
+       ORDER BY fu.created_at DESC`,
+      [documentIds]
+    );
+    
+    followUpsMap = followUpRows.reduce((acc, row) => {
+      const docId = row.document_id;
+      if (!acc[docId]) acc[docId] = [];
+      acc[docId].push(row);
+      return acc;
+    }, {} as Record<string, FollowUp[]>);
+  }
+
+  let bringUpHistoryMap: Record<string, BringUpHistoryEntry[]> = {};
+
+  if (documentIds.length > 0) {
+    const { rows: historyRows } = await pool.query(
+      `SELECT ${BRING_UP_HISTORY_SELECT} ${BRING_UP_HISTORY_JOIN}
+       WHERE bh.document_id = ANY($1)
+       ORDER BY bh.set_at DESC`,
+      [documentIds]
+    );
+    
+    bringUpHistoryMap = historyRows.reduce((acc, row) => {
+      const docId = row.document_id;
+      if (!acc[docId]) acc[docId] = [];
+      acc[docId].push(row);
+      return acc;
+    }, {} as Record<string, BringUpHistoryEntry[]>);
+  }
+
+  const documents = dataResult.rows.map(row => {
+    const doc = mapRowToDocument(row);
+    doc.follow_ups = followUpsMap[doc.id] || [];
+    doc.bring_up_history = bringUpHistoryMap[doc.id] || null;
+    return doc;
+  });
+
+  const total = parseInt(countResult.rows[0]?.total ?? '0', 10);
+  
+  return {
+    data: documents,
+    total,
+    page,
+    limit,
+    totalPages: Math.ceil(total / limit),
+  };
+}
 
   // ── Find single ─────────────────────────────────────────────────────────────
 

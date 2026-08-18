@@ -39,16 +39,26 @@ import successioncourtsRoutes from "./features/successioncourts/succession-court
 import stationEngagementRoutes from './features/station-engagement/station-engagement.routes'
 import principalregistryreportsRoutes from "./features/principleregistry/principal-registry-report.routes"
 import activityRoutes from "./features/activitytracking/activity-tracking.routes"
+import serviceweekRoutes from "./features/serviceweek/service-week.routes"
 
 // ── Middleware ────────────────────────────────────────────────────────────
 import { errorMiddleware } from './middleware/error.middleware';
 
 const app: Express = express();
 
-// ── Global Middlewares ────────────────────────────────────────────────────
+// src/config/env.ts already exports these — derive an allowlist near the CORS setup
+const allowedOrigins = [env.CLIENT_URL, env.SERVICEWEEK_CLIENT_URL];
+
 app.use(
   cors({
-    origin: env.CLIENT_URL,
+    origin: (origin, callback) => {
+      // allow requests with no origin (server-to-server, curl, Postman)
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error(`Not allowed by CORS: ${origin}`));
+      }
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: [
@@ -109,6 +119,7 @@ app.use('/api/v1/succession-courts', successioncourtsRoutes);
 app.use('/api/v1/station-engagement', stationEngagementRoutes);
 app.use('/api/v1/principal-registry-reports', principalregistryreportsRoutes);
 app.use('/api/v1/activity-log', activityRoutes);
+app.use('/api/v1/service-week', serviceweekRoutes);
 // aidesRoutes defines its own '/aide/*' and '/sentry/*' sub-paths internally,
 // so it must be mounted at the '/api/v1' root — not '/api/v1/aide' — or
 // requests to /api/v1/aide and /api/v1/sentry will 404.

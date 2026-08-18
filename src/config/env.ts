@@ -12,8 +12,9 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
 
   // URLs
-  API_URL:    z.string().min(1, { message: 'API_URL is required (e.g. http://localhost:8000)' }),
-  CLIENT_URL: z.string().min(1, { message: 'CLIENT_URL is required (e.g. http://localhost:5173)' }),
+  API_URL:              z.string().min(1, { message: 'API_URL is required (e.g. http://localhost:8000)' }),
+  CLIENT_URL:            z.string().min(1, { message: 'CLIENT_URL is required (e.g. http://localhost:5173)' }),
+  SERVICEWEEK_CLIENT_URL: z.string().min(1, { message: 'SERVICEWEEK_CLIENT_URL is required (e.g. http://localhost:5174)' }),
 
   // Database
   DATABASE_URL: z.string().url({ message: 'DATABASE_URL must be a valid connection string' }),

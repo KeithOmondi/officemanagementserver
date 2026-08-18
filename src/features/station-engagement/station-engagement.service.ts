@@ -1,10 +1,9 @@
-// ============================================================
 // src/features/station-engagement/station-engagement.service.ts
-// ============================================================
 
 import { pool } from '../../config/db';
 import { AppError } from '../../utils/response';
 import { SuccessionCourtCategory } from '../successioncourts/succession-courts.types';
+import { uploadToCloudinary, deleteFromCloudinary } from '../../config/cloudinary';
 import type {
   EngagementReportFilters,
   StationEngagementReport,
@@ -14,16 +13,32 @@ import type {
   ReportSummary,
   EngagementStats,
   Urgency,
+  SubmitReportToAdminPayload,
+  DownloadReportPayload,
+  PDFGenerationOptions,
+  PDFGenerationResult,
 } from './station-engagement.types';
-import { isReportEditable } from './station-engagement.types';
+import { 
+  isReportEditable, 
+  isReportVisibleToSuperAdmin,
+  canSendToAdmin,
+  EDITABLE_REPORT_STATUSES,
+  VISIBLE_TO_SUPER_ADMIN_STATUSES,
+  SUBMITTABLE_STATUSES, // ✅ Add this import
+} from './station-engagement.types';
+import { StationEngagementExportService } from './station-engagement.export.service';
 
 const ENGAGEMENT_REPORT_SELECT = `
   id, week_start, week_end, 
   categories, support_person_id, total_stations_assigned,
   executive_summary, engagements, unengaged_stations, escalations,
   additional_issues, recurring_patterns, priorities,
+  pdf_public_id, pdf_secure_url, pdf_file_name, pdf_generated_at,
+  pdf_preview_data, pdf_preview_url,
   submitted_by, submitted_at, reviewed_by, reviewed_at,
   approved_by, approved_at, status, feedback,
+  sent_to_admin_at, sent_to_admin_by,
+  download_count, last_downloaded_at,
   created_at, updated_at
 `;
 
@@ -33,12 +48,17 @@ const ENGAGEMENT_REPORT_SELECT_WITH_DISPLAY = `
   r.categories, r.support_person_id, r.total_stations_assigned,
   r.executive_summary, r.engagements, r.unengaged_stations, r.escalations,
   r.additional_issues, r.recurring_patterns, r.priorities,
+  r.pdf_public_id, r.pdf_secure_url, r.pdf_file_name, r.pdf_generated_at,
+  r.pdf_preview_data, r.pdf_preview_url,
   r.submitted_by, r.submitted_at, r.reviewed_by, r.reviewed_at,
   r.approved_by, r.approved_at, r.status, r.feedback,
+  r.sent_to_admin_at, r.sent_to_admin_by,
+  r.download_count, r.last_downloaded_at,
   r.created_at, r.updated_at,
   submitter.full_name as submitted_by_display,
   reviewer.full_name as reviewed_by_display,
-  approver.full_name as approved_by_display
+  approver.full_name as approved_by_display,
+  sender.full_name as sent_to_admin_by_display
 `;
 
 export class StationEngagementService {
@@ -52,13 +72,17 @@ export class StationEngagementService {
     this.validateEngagements(input.engagements);
     this.validateEscalations(input.escalations);
 
+    // Determine status based on save_as_draft flag
+    const status = input.saveAsDraft ? 'draft' : 'submitted';
+
     const { rows } = await pool.query(
       `INSERT INTO station_engagement_reports (
         week_start, week_end, categories, support_person_id, total_stations_assigned,
         executive_summary, engagements, unengaged_stations, escalations,
         additional_issues, recurring_patterns, priorities,
+        pdf_preview_data,
         submitted_by, status
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
       RETURNING ${ENGAGEMENT_REPORT_SELECT}`,
       [
         input.week_start,
@@ -73,8 +97,9 @@ export class StationEngagementService {
         input.additional_issues || '',
         input.recurring_patterns || '',
         input.priorities || '',
+        input.pdfPreviewData || null,
         userId,
-        'draft',
+        status,
       ]
     );
 
@@ -92,10 +117,31 @@ export class StationEngagementService {
       LEFT JOIN users submitter ON submitter.id = r.submitted_by
       LEFT JOIN users reviewer ON reviewer.id = r.reviewed_by
       LEFT JOIN users approver ON approver.id = r.approved_by
+      LEFT JOIN users sender ON sender.id = r.sent_to_admin_by
       WHERE 1=1
     `;
     const params: unknown[] = [];
     let paramCount = 1;
+
+    // Filter by visibility to admin (super admin should not see drafts)
+    if (filters.visibleToAdmin !== undefined) {
+      if (filters.visibleToAdmin === true) {
+        query += ` AND r.status = ANY($${paramCount}::text[])`;
+        params.push(VISIBLE_TO_SUPER_ADMIN_STATUSES);
+        paramCount++;
+      } else if (filters.visibleToAdmin === false) {
+        query += ` AND r.status = $${paramCount}`;
+        params.push('draft');
+        paramCount++;
+      }
+    }
+
+    // Filter by draft only
+    if (filters.isDraft !== undefined && filters.isDraft === true) {
+      query += ` AND r.status = $${paramCount}`;
+      params.push('draft');
+      paramCount++;
+    }
 
     if (filters.category) {
       query += ` AND r.categories @> $${paramCount}::jsonb`;
@@ -152,6 +198,25 @@ export class StationEngagementService {
     let countWhere = '';
     const countParams: unknown[] = [];
     let countParamCount = 1;
+
+    // Add same filters to count query
+    if (filters.visibleToAdmin !== undefined) {
+      if (filters.visibleToAdmin === true) {
+        countWhere += ` AND r.status = ANY($${countParamCount}::text[])`;
+        countParams.push(VISIBLE_TO_SUPER_ADMIN_STATUSES);
+        countParamCount++;
+      } else if (filters.visibleToAdmin === false) {
+        countWhere += ` AND r.status = $${countParamCount}`;
+        countParams.push('draft');
+        countParamCount++;
+      }
+    }
+
+    if (filters.isDraft !== undefined && filters.isDraft === true) {
+      countWhere += ` AND r.status = $${countParamCount}`;
+      countParams.push('draft');
+      countParamCount++;
+    }
 
     if (filters.category) {
       countWhere += ` AND r.categories @> $${countParamCount}::jsonb`;
@@ -233,6 +298,7 @@ export class StationEngagementService {
        LEFT JOIN users submitter ON submitter.id = r.submitted_by
        LEFT JOIN users reviewer ON reviewer.id = r.reviewed_by
        LEFT JOIN users approver ON approver.id = r.approved_by
+       LEFT JOIN users sender ON sender.id = r.sent_to_admin_by
        WHERE r.id = $1`,
       [id]
     );
@@ -251,6 +317,7 @@ export class StationEngagementService {
       throw new AppError(404, 'Engagement report not found');
     }
 
+    // ✅ Updated: Allow editing if status is draft OR rejected
     if (!isReportEditable(existing.status)) {
       throw new AppError(400, `Cannot update a report with status '${existing.status}'. Only draft or rejected reports can be edited.`);
     }
@@ -282,13 +349,46 @@ export class StationEngagementService {
     setField('additional_issues', input.additional_issues);
     setField('recurring_patterns', input.recurring_patterns);
     setField('priorities', input.priorities);
+    
+    // PDF preview data
+    setField('pdf_preview_data', input.pdfPreviewData);
+    
+    // ✅ PDF fields can be attached regardless of status
+    setField('pdf_public_id', input.pdfPublicId);
+    setField('pdf_secure_url', input.pdfSecureUrl);
+    setField('pdf_file_name', input.pdfFileName);
+    setField('pdf_generated_at', input.pdfGeneratedAt);
 
+    // ✅ Status changes - only allow specific transitions
     if (input.status && input.status !== existing.status) {
+      // Allow draft <-> rejected transitions (editable states)
       if (input.status === 'draft' && existing.status === 'rejected') {
         setField('status', 'draft');
         setField('feedback', null);
+      } else if (input.status === 'rejected' && existing.status === 'draft') {
+        // Rejected status can only be set by admin via review
+        throw new AppError(400, 'Rejected status can only be set by a reviewer');
       } else if (existing.status === 'draft' || existing.status === 'rejected') {
-        setField('status', input.status);
+        // Allow moving from draft/rejected to submitted (via send to admin)
+        if (input.status === 'submitted') {
+          // Validate PDF is attached before submitting
+          if (!existing.pdfSecureUrl && !input.pdfSecureUrl) {
+            throw new AppError(400, 'Cannot submit report without an attached PDF. Please generate and upload a PDF first.');
+          }
+          // Validate report has content
+          const engagements = input.engagements || existing.engagements || [];
+          const unengagedStations = input.unengaged_stations || existing.unengaged_stations || [];
+          if (engagements.length === 0 && unengagedStations.length === 0) {
+            throw new AppError(400, 'Cannot submit empty report. Add at least one engagement or unengaged station.');
+          }
+          setField('status', 'submitted');
+          setField('submitted_at', new Date().toISOString());
+          setField('submitted_by', userId);
+          setField('sent_to_admin_at', new Date().toISOString());
+          setField('sent_to_admin_by', userId);
+        } else {
+          setField('status', input.status);
+        }
       } else {
         throw new AppError(400, `Cannot change status from '${existing.status}' to '${input.status}'`);
       }
@@ -313,7 +413,95 @@ export class StationEngagementService {
     return updated;
   }
 
-  // ─── Submit Report ─────────────────────────────────────────────────────
+  // ─── Save as Draft ────────────────────────────────────────────────────
+
+  /**
+   * Save report as draft (not visible to super admin)
+   */
+  static async saveAsDraft(
+    id: string,
+    userId: string
+  ): Promise<StationEngagementReport> {
+    const existing = await this.findById(id);
+    if (!existing) {
+      throw new AppError(404, 'Engagement report not found');
+    }
+
+    if (existing.status !== 'draft' && existing.status !== 'rejected') {
+      throw new AppError(400, `Cannot save report with status '${existing.status}' as draft`);
+    }
+
+    const { rows } = await pool.query(
+      `UPDATE station_engagement_reports
+       SET status = 'draft',
+           updated_at = now()
+       WHERE id = $1
+       RETURNING ${ENGAGEMENT_REPORT_SELECT}`,
+      [id]
+    );
+
+    return await this.parseReportWithStationNames(rows[0]);
+  }
+
+  // ─── Submit to Super Admin ─────────────────────────────────────────────
+
+  /**
+   * Send report to super admin for review
+   * This changes the status from draft/rejected to submitted
+   * Requires that a PDF is attached
+   */
+  static async sendToAdmin(
+    id: string,
+    userId: string,
+    payload?: SubmitReportToAdminPayload
+  ): Promise<StationEngagementReport> {
+    const existing = await this.findById(id);
+    if (!existing) {
+      throw new AppError(404, 'Engagement report not found');
+    }
+
+    // ✅ Check if report can be sent to admin
+    if (!SUBMITTABLE_STATUSES.includes(existing.status as any)) {
+      throw new AppError(400, `Cannot send report with status '${existing.status}' to admin. Only draft or rejected reports can be submitted.`);
+    }
+
+    // ✅ Validate that PDF is attached
+    if (!existing.pdfSecureUrl) {
+      throw new AppError(400, 'Cannot submit report without an attached PDF. Please generate and upload a PDF first.');
+    }
+
+    // ✅ Validate that report has content
+    const engagements = existing.engagements || [];
+    const unengagedStations = existing.unengaged_stations || [];
+    if (engagements.length === 0 && unengagedStations.length === 0) {
+      throw new AppError(400, 'Cannot submit empty report. Add at least one engagement or unengaged station.');
+    }
+
+    // ✅ Send to admin - status becomes 'submitted' (visible to admin)
+    const { rows } = await pool.query(
+      `UPDATE station_engagement_reports
+       SET status = 'submitted',
+           submitted_by = $1,
+           submitted_at = now(),
+           sent_to_admin_at = now(),
+           sent_to_admin_by = $1,
+           updated_at = now()
+       WHERE id = $2
+       RETURNING ${ENGAGEMENT_REPORT_SELECT}`,
+      [userId, id]
+    );
+
+    const updated = await this.parseReportWithStationNames(rows[0]);
+
+    // TODO: Send notification to super admin if requested
+    if (payload?.sendNotification) {
+      // await this.sendAdminNotification(updated, payload.notes);
+    }
+
+    return updated;
+  }
+
+  // ─── Submit Report (Legacy) ────────────────────────────────────────────
 
   static async submitReport(id: string, userId: string): Promise<StationEngagementReport> {
     const existing = await this.findById(id);
@@ -339,6 +527,8 @@ export class StationEngagementService {
        SET status = 'submitted',
            submitted_by = $1,
            submitted_at = now(),
+           sent_to_admin_at = now(),
+           sent_to_admin_by = $1,
            updated_at = now()
        WHERE id = $2
        RETURNING ${ENGAGEMENT_REPORT_SELECT}`,
@@ -405,10 +595,228 @@ export class StationEngagementService {
       throw new AppError(400, `Cannot delete a report with status '${existing.status}'. Only draft or rejected reports can be deleted.`);
     }
 
+    // Delete PDF from Cloudinary if exists
+    if (existing.pdfPublicId) {
+      try {
+        await deleteFromCloudinary(existing.pdfPublicId, 'image');
+      } catch (error) {
+        console.error('Failed to delete PDF from Cloudinary:', error);
+        // Continue with deletion even if Cloudinary fails
+      }
+    }
+
     await pool.query(
       `DELETE FROM station_engagement_reports WHERE id = $1`,
       [id]
     );
+  }
+
+  // ─── Download Report ───────────────────────────────────────────────────
+
+  /**
+   * Track report download and return download info
+   */
+  static async downloadReport(
+    id: string,
+    userId: string,
+    format: 'pdf' | 'excel' = 'pdf'
+  ): Promise<{ downloadUrl: string; fileName: string; publicId?: string }> {
+    const existing = await this.findById(id);
+    if (!existing) {
+      throw new AppError(404, 'Engagement report not found');
+    }
+
+    // Increment download counter
+    await pool.query(
+      `UPDATE station_engagement_reports
+       SET download_count = COALESCE(download_count, 0) + 1,
+           last_downloaded_at = now()
+       WHERE id = $1`,
+      [id]
+    );
+
+    // Log download activity
+    await pool.query(
+      `INSERT INTO report_downloads (
+        report_id, user_id, format, downloaded_at, ip_address, user_agent
+      ) VALUES ($1, $2, $3, now(), $4, $5)`,
+      [
+        id,
+        userId,
+        format,
+        null, // ip_address (would come from request context)
+        null, // user_agent (would come from request context)
+      ]
+    );
+
+    const fileName = `engagement-report-${existing.week_start}-${existing.week_end}.${format === 'pdf' ? 'pdf' : 'xlsx'}`;
+
+    return {
+      downloadUrl: existing.pdfSecureUrl || '',
+      fileName,
+      publicId: existing.pdfPublicId || undefined,
+    };
+  }
+
+  // ─── Generate and Upload PDF ──────────────────────────────────────────
+
+  /**
+   * Generate PDF, upload to Cloudinary, and attach to report
+   * ✅ This can be called regardless of report status
+   */
+  static async generateAndUploadPDF(
+    id: string,
+    userId: string,
+    options?: PDFGenerationOptions & { previewOnly?: boolean }
+  ): Promise<PDFGenerationResult> {
+    const existing = await this.findById(id);
+    if (!existing) {
+      throw new AppError(404, 'Engagement report not found');
+    }
+
+    // ✅ Allow PDF generation for any status except maybe approved
+    // (But we'll allow it for approved too in case they want to regenerate)
+    // Just prevent generating for non-existent reports
+
+    // 1. Generate the PDF buffer
+    const pdfResult = await StationEngagementExportService.generatePDF(
+      id,
+      userId,
+      { ...options, previewOnly: options?.previewOnly || false }
+    );
+
+    // If preview only, return the preview data without uploading
+    if (options?.previewOnly) {
+      return pdfResult as PDFGenerationResult;
+    }
+
+    // 2. Upload to Cloudinary
+    const buffer = pdfResult as Buffer;
+    const fileName = `engagement-report-${existing.week_start}-${existing.week_end}.pdf`;
+    const folder = `reports/engagement/${existing.week_start}`;
+
+    // Create a file object for upload
+    const file = {
+      buffer: buffer,
+      mimetype: 'application/pdf',
+      originalname: fileName,
+      size: buffer.length,
+    } as Express.Multer.File;
+
+    try {
+      const uploadResult = await uploadToCloudinary(file, folder);
+
+      // 3. Update report with Cloudinary URLs
+      const report = await this.attachPDF(id, {
+        publicId: uploadResult.public_id,
+        secureUrl: uploadResult.secure_url,
+        fileName: fileName,
+        generatedAt: new Date().toISOString(),
+      });
+
+      return {
+        success: true,
+        pdfUrl: uploadResult.secure_url,
+        downloadUrl: uploadResult.secure_url,
+        fileName: fileName,
+        fileSize: buffer.length,
+        publicId: uploadResult.public_id,
+        secureUrl: uploadResult.secure_url,
+      };
+    } catch (error) {
+      console.error('Failed to upload PDF to Cloudinary:', error);
+      throw new AppError(500, 'Failed to upload PDF. Please try again.');
+    }
+  }
+
+  // ─── Generate PDF Preview ─────────────────────────────────────────────
+
+/**
+ * Generate a PDF preview (doesn't upload to Cloudinary, just returns preview data)
+ */
+static async generatePDFPreview(
+  id: string,
+  userId: string,
+  options?: PDFGenerationOptions
+): Promise<{ previewUrl: string; previewData: string }> {
+  console.log('🔍 [SERVICE] generatePDFPreview called with id:', id);
+  console.log('🔍 [SERVICE] Options:', options);
+  
+  const existing = await this.findById(id);
+  if (!existing) {
+    console.error('❌ [SERVICE] Report not found:', id);
+    throw new AppError(404, 'Engagement report not found');
+  }
+  console.log('✅ [SERVICE] Report found:', existing.id, 'status:', existing.status);
+
+  // Generate preview using the export service
+  console.log('🔍 [SERVICE] Calling export service generatePreview...');
+  const result = await StationEngagementExportService.generatePreview(
+    id,
+    userId,
+    options
+  );
+  console.log('✅ [SERVICE] Export service result:', result);
+
+  // Store preview data temporarily
+  const previewUrl = `/api/station-engagement/reports/${id}/pdf/preview`;
+  console.log('🔍 [SERVICE] Preview URL:', previewUrl);
+
+  // Update report with preview data
+  await pool.query(
+    `UPDATE station_engagement_reports
+     SET pdf_preview_data = $1,
+         pdf_preview_url = $2
+     WHERE id = $3`,
+    [result.previewData, previewUrl, id]
+  );
+  console.log('✅ [SERVICE] Preview data saved to database');
+
+  return {
+    previewUrl,
+    previewData: result.previewData || '',
+  };
+}
+
+  // ─── Attach PDF to Report ─────────────────────────────────────────────
+
+  /**
+   * Attach a generated PDF to the report after preview confirmation
+   * ✅ This can be called regardless of report status
+   */
+  static async attachPDF(
+    id: string,
+    pdfData: {
+      publicId: string;
+      secureUrl: string;
+      fileName: string;
+      generatedAt: string;
+    }
+  ): Promise<StationEngagementReport> {
+    const existing = await this.findById(id);
+    if (!existing) {
+      throw new AppError(404, 'Engagement report not found');
+    }
+
+    const { rows } = await pool.query(
+      `UPDATE station_engagement_reports
+       SET pdf_public_id = $1,
+           pdf_secure_url = $2,
+           pdf_file_name = $3,
+           pdf_generated_at = $4,
+           updated_at = now()
+       WHERE id = $5
+       RETURNING ${ENGAGEMENT_REPORT_SELECT}`,
+      [
+        pdfData.publicId,
+        pdfData.secureUrl,
+        pdfData.fileName,
+        pdfData.generatedAt,
+        id,
+      ]
+    );
+
+    return await this.parseReportWithStationNames(rows[0]);
   }
 
   // ─── Get Report Summary ─────────────────────────────────────────────────
@@ -426,7 +834,12 @@ export class StationEngagementService {
         COALESCE(jsonb_array_length(r.escalations::jsonb), 0) as escalated_count,
         r.status,
         r.submitted_by,
-        r.submitted_at
+        r.submitted_at,
+        r.pdf_secure_url as has_pdf,
+        CASE 
+          WHEN r.status = 'draft' THEN false 
+          ELSE true 
+        END as is_visible_to_admin
        FROM station_engagement_reports r
        WHERE r.id = $1`,
       [id]
@@ -447,6 +860,8 @@ export class StationEngagementService {
       status: row.status,
       submitted_by: row.submitted_by,
       submitted_at: row.submitted_at,
+      isVisibleToAdmin: row.is_visible_to_admin,
+      hasPdf: !!row.has_pdf,
     };
   }
 
@@ -491,7 +906,10 @@ export class StationEngagementService {
           WHERE esc->>'urgency' = 'low'
         ) THEN 1 END) as urgency_low,
         AVG(COALESCE(jsonb_array_length(engagements::jsonb), 0)) as avg_engagements,
-        AVG(COALESCE(jsonb_array_length(escalations::jsonb), 0)) as avg_escalations
+        AVG(COALESCE(jsonb_array_length(escalations::jsonb), 0)) as avg_escalations,
+        COUNT(CASE WHEN status = 'draft' THEN 1 END) as draft_count,
+        COUNT(CASE WHEN status != 'draft' THEN 1 END) as submitted_count,
+        AVG(EXTRACT(EPOCH FROM (submitted_at - created_at)) / 86400) as avg_time_to_submit_days
       FROM station_engagement_reports
       WHERE 1=1
     `;
@@ -542,6 +960,9 @@ export class StationEngagementService {
       },
       engagement_rate: parseFloat(stats.avg_engagements) || 0,
       escalation_rate: parseFloat(stats.avg_escalations) || 0,
+      draft_count: parseInt(stats.draft_count, 10) || 0,
+      submitted_count: parseInt(stats.submitted_count, 10) || 0,
+      avg_time_to_submit_days: parseFloat(stats.avg_time_to_submit_days) || 0,
     };
   }
 
@@ -557,10 +978,23 @@ export class StationEngagementService {
       LEFT JOIN users submitter ON submitter.id = r.submitted_by
       LEFT JOIN users reviewer ON reviewer.id = r.reviewed_by
       LEFT JOIN users approver ON approver.id = r.approved_by
+      LEFT JOIN users sender ON sender.id = r.sent_to_admin_by
       WHERE r.submitted_by = $1
     `;
     const params: unknown[] = [userId];
     let paramCount = 2;
+
+    if (filters.visibleToAdmin !== undefined) {
+      if (filters.visibleToAdmin === true) {
+        query += ` AND r.status = ANY($${paramCount}::text[])`;
+        params.push(VISIBLE_TO_SUPER_ADMIN_STATUSES);
+        paramCount++;
+      } else if (filters.visibleToAdmin === false) {
+        query += ` AND r.status = $${paramCount}`;
+        params.push('draft');
+        paramCount++;
+      }
+    }
 
     if (filters.category) {
       query += ` AND r.categories @> $${paramCount}::jsonb`;
@@ -588,6 +1022,22 @@ export class StationEngagementService {
     return { data, total };
   }
 
+  // ─── Get Drafts by User ────────────────────────────────────────────────
+
+  /**
+   * Get all drafts for a specific user (not visible to admin)
+   */
+  static async getDraftsByUser(
+    userId: string,
+    filters: EngagementReportFilters = {}
+  ): Promise<{ data: StationEngagementReport[]; total: number }> {
+    return this.getReportsByUser(userId, {
+      ...filters,
+      status: 'draft',
+      visibleToAdmin: false,
+    });
+  }
+
   // ─── Get Reports by Reviewer ────────────────────────────────────────────
 
   static async getReportsByReviewer(
@@ -600,6 +1050,7 @@ export class StationEngagementService {
       LEFT JOIN users submitter ON submitter.id = r.submitted_by
       LEFT JOIN users reviewer ON reviewer.id = r.reviewed_by
       LEFT JOIN users approver ON approver.id = r.approved_by
+      LEFT JOIN users sender ON sender.id = r.sent_to_admin_by
       WHERE r.reviewed_by = $1
     `;
     const params: unknown[] = [reviewerId];
@@ -635,10 +1086,23 @@ export class StationEngagementService {
       LEFT JOIN users submitter ON submitter.id = r.submitted_by
       LEFT JOIN users reviewer ON reviewer.id = r.reviewed_by
       LEFT JOIN users approver ON approver.id = r.approved_by
+      LEFT JOIN users sender ON sender.id = r.sent_to_admin_by
       WHERE r.week_start = $1 AND r.week_end = $2
     `;
     const params: unknown[] = [weekStart, weekEnd];
     let paramCount = 3;
+
+    if (filters.visibleToAdmin !== undefined) {
+      if (filters.visibleToAdmin === true) {
+        query += ` AND r.status = ANY($${paramCount}::text[])`;
+        params.push(VISIBLE_TO_SUPER_ADMIN_STATUSES);
+        paramCount++;
+      } else if (filters.visibleToAdmin === false) {
+        query += ` AND r.status = $${paramCount}`;
+        params.push('draft');
+        paramCount++;
+      }
+    }
 
     if (filters.category) {
       query += ` AND r.categories @> $${paramCount}::jsonb`;
@@ -698,6 +1162,10 @@ export class StationEngagementService {
       if (!engagement.station_category) {
         throw new AppError(400, `Engagement at station '${engagement.station_name}' is missing station_category`);
       }
+      // Validate walk_in mode is allowed
+      if (engagement.mode && !['phone_call', 'whatsapp', 'email', 'physical_visit', 'webinar_followup', 'video_call', 'walk_in'].includes(engagement.mode)) {
+        throw new AppError(400, `Invalid engagement mode '${engagement.mode}' for station '${engagement.station_name}'`);
+      }
     }
   }
 
@@ -728,6 +1196,16 @@ export class StationEngagementService {
       additional_issues: row.additional_issues || '',
       recurring_patterns: row.recurring_patterns || '',
       priorities: row.priorities || '',
+      pdfPublicId: row.pdf_public_id || null,
+      pdfSecureUrl: row.pdf_secure_url || null,
+      pdfFileName: row.pdf_file_name || null,
+      pdfGeneratedAt: row.pdf_generated_at || null,
+      pdfPreviewData: row.pdf_preview_data || null,
+      pdfPreviewUrl: row.pdf_preview_url || null,
+      sent_to_admin_at: row.sent_to_admin_at || null,
+      sent_to_admin_by: row.sent_to_admin_by || null,
+      download_count: parseInt(row.download_count, 10) || 0,
+      last_downloaded_at: row.last_downloaded_at || null,
       submitted_by: row.submitted_by,
       submitted_at: row.submitted_at,
       reviewed_by: row.reviewed_by,
@@ -751,7 +1229,7 @@ export class StationEngagementService {
       if (s.station_id) stationIds.add(s.station_id);
     });
 
-    // Fetch station names from the database using the 'station' column
+    // Fetch station names from the database
     if (stationIds.size > 0) {
       const ids = Array.from(stationIds);
       const { rows: stationRows } = await pool.query(
@@ -773,7 +1251,7 @@ export class StationEngagementService {
       // Update unengaged stations with station names
       report.unengaged_stations = report.unengaged_stations.map(station => ({
         ...station,
-      station_name: stationNameMap.get(station.station_id) || station.station_name || station.station_id,
+        station_name: stationNameMap.get(station.station_id) || station.station_name || station.station_id,
       }));
     }
 
@@ -782,6 +1260,7 @@ export class StationEngagementService {
       submitted_by_display: row.submitted_by_display || row.submitted_by,
       reviewed_by_display: row.reviewed_by_display || row.reviewed_by,
       approved_by_display: row.approved_by_display || row.approved_by,
+      sent_to_admin_by_display: row.sent_to_admin_by_display || row.sent_to_admin_by,
     });
 
     return report;

@@ -1,6 +1,4 @@
-// ============================================================
 // src/features/station-engagement/station-engagement.export.service.ts
-// ============================================================
 
 import { AppError } from '../../utils/response';
 import { StationEngagementService } from './station-engagement.service';
@@ -8,7 +6,9 @@ import type {
   StationEngagementReport, 
   Engagement, 
   UnengagedStation,
-  EscalationItem
+  EscalationItem,
+  PDFGenerationOptions,
+  PDFGenerationResult,
 } from './station-engagement.types';
 import * as ExcelJS from 'exceljs';
 import PDFDocument from 'pdfkit';
@@ -37,6 +37,26 @@ export interface ReportExportData {
 
 const LOGO_URL = "https://res.cloudinary.com/do0yflasl/image/upload/v1784363826/ORHC_L_crclut.jpg";
 
+// ✅ Mode display mapping (including walk_in)
+const MODE_DISPLAY_MAP: Record<string, string> = {
+  phone_call: 'Phone Call',
+  whatsapp: 'WhatsApp',
+  email: 'Email',
+  physical_visit: 'Physical Visit',
+  webinar_followup: 'Webinar Follow-up',
+  video_call: 'Video Call',
+  walk_in: 'Walk-in',
+};
+
+// ✅ Status color mapping for visual indicators
+const STATUS_COLORS: Record<string, string> = {
+  draft: '#9e9e9e',
+  submitted: '#1a237e',
+  reviewed: '#e65100',
+  approved: '#2e7d32',
+  rejected: '#c62828',
+};
+
 // ─── Export Service ─────────────────────────────────────────────────────
 
 export class StationEngagementExportService {
@@ -58,12 +78,16 @@ export class StationEngagementExportService {
 
   // ─── PDF Generation ──────────────────────────────────────────────────
 
-// ─── PDF Generation ──────────────────────────────────────────────────
-
+  /**
+   * Generate PDF for a report
+   * ✅ This can be called regardless of report status
+   * Supports preview mode for in-browser preview
+   */
   static async generatePDF(
     reportId: string,
-    userId: string
-  ): Promise<Buffer> {
+    userId: string,
+    options?: PDFGenerationOptions & { previewOnly?: boolean }
+  ): Promise<Buffer | PDFGenerationResult> {
     const report = await StationEngagementService.findById(reportId);
     if (!report) {
       throw new AppError(404, 'Engagement report not found');
@@ -86,10 +110,50 @@ export class StationEngagementExportService {
     // Fetch logo from URL
     const logoBuffer = await this.fetchImage(LOGO_URL);
 
+    // ✅ Preview mode - return base64 for browser preview
+    if (options?.previewOnly) {
+      const previewBuffer = await this.generatePDFBuffer(
+        report, 
+        logoBuffer, 
+        supportPersonName, 
+        { ...options, previewMode: true }
+      );
+      
+      return {
+        success: true,
+        previewData: previewBuffer.toString('base64'),
+        previewUrl: `/api/station-engagement/reports/${reportId}/pdf/preview`,
+        isPreview: true,
+        fileName: `preview-engagement-report-${report.week_start}-${report.week_end}.pdf`,
+        fileSize: previewBuffer.length,
+      };
+    }
+
+    // ✅ Full PDF generation
+    const pdfBuffer = await this.generatePDFBuffer(
+      report, 
+      logoBuffer, 
+      supportPersonName, 
+      options
+    );
+
+    return pdfBuffer;
+  }
+
+  // ─── Core PDF Buffer Generation ──────────────────────────────────────
+
+  private static async generatePDFBuffer(
+    report: StationEngagementReport,
+    logoBuffer: Buffer | null,
+    supportPersonName: string,
+    options?: PDFGenerationOptions & { previewMode?: boolean }
+  ): Promise<Buffer> {
+    const isPreview = options?.previewMode || false;
+
     return new Promise<Buffer>((resolve, reject) => {
       const doc = new PDFDocument({
-        size: 'A4',
-        margin: 50,
+        size: options?.pageSize || 'A4',
+        margin: options?.margin?.top || 50,
         font: 'Times-Roman',
       });
 
@@ -99,6 +163,18 @@ export class StationEngagementExportService {
       doc.on('error', reject);
 
       try {
+        // ✅ Add watermark if preview
+        if (isPreview && options?.showWatermark !== false) {
+          doc.save();
+          doc.opacity(0.15);
+          doc.fontSize(80)
+             .font('Times-Bold')
+             .fillColor('#000000')
+             .text('PREVIEW', 0, 250, { align: 'center', width: doc.page.width });
+          doc.opacity(1);
+          doc.restore();
+        }
+
         // ─── Header ───────────────────────────────────────────────────
 
         // Logo - Centered at top with proper spacing
@@ -143,19 +219,27 @@ export class StationEngagementExportService {
              { align: 'center' }
            );
 
+        // ✅ Show status badge with color
+        doc.moveDown(0.3);
+        const statusColor = STATUS_COLORS[report.status] || '#6b7280';
+        doc.fillColor(statusColor)
+           .fontSize(10)
+           .font('Times-Bold')
+           .text(`Status: ${report.status.toUpperCase()}`, { align: 'center' });
+
         doc.moveDown(0.6);
         doc.strokeColor('#1a237e').lineWidth(1.5).moveTo(50, doc.y).lineTo(550, doc.y).stroke();
         doc.moveDown(0.8);
 
-        // Status field box row - Now showing: Support Person Name, Status, Last Updated/Submission Date
+        // Status field box row
         const topFieldY = doc.y;
         const fieldGap = 10;
         const fieldWidth = (500 - fieldGap * 2) / 3;
         
-        // Field 1: Support Person (with actual name)
+        // Field 1: Support Person
         this.drawFieldBox(doc, 50, topFieldY, fieldWidth, 34, 'Submitted By:', supportPersonName);
         
-        // Field 2: Status
+        // Field 2: Status with color
         this.drawFieldBox(doc, 50 + fieldWidth + fieldGap, topFieldY, fieldWidth, 34, 'Status', report.status.toUpperCase());
         
         // Field 3: Last Updated or Submission Date
@@ -273,6 +357,13 @@ export class StationEngagementExportService {
              { align: 'center' }
            );
 
+        // ✅ Preview watermark at bottom
+        if (isPreview) {
+          doc.fontSize(7)
+             .fillColor('#c62828')
+             .text('PREVIEW - Not for official use', { align: 'center' });
+        }
+
         doc.end();
       } catch (err) {
         reject(err);
@@ -346,6 +437,8 @@ export class StationEngagementExportService {
 
     let cursorY = cardY + pad;
 
+    const modeDisplay = engagement.mode ? MODE_DISPLAY_MAP[engagement.mode] || engagement.mode.replace('_', ' ').toUpperCase() : 'N/A';
+
     this.drawFieldBox(doc, x + pad, cursorY, col3, rowH, 'Station', engagement.station_name || 'N/A');
     this.drawFieldBox(doc, x + pad + col3 + colGap, cursorY, col3, rowH, 'Date',
       engagement.date ? new Date(engagement.date).toLocaleDateString('en-KE') : 'N/A');
@@ -354,8 +447,7 @@ export class StationEngagementExportService {
 
     cursorY += rowH + 8;
 
-    this.drawFieldBox(doc, x + pad, cursorY, col3, rowH, 'Mode of Engagement',
-      engagement.mode ? engagement.mode.replace('_', ' ').toUpperCase() : 'N/A');
+    this.drawFieldBox(doc, x + pad, cursorY, col3, rowH, 'Mode of Engagement', modeDisplay);
     this.drawFieldBox(doc, x + pad + col3 + colGap, cursorY, col3, rowH, 'Status',
       engagement.status ? engagement.status.toUpperCase() : 'N/A');
     this.drawFieldBox(doc, x + pad + (col3 + colGap) * 2, cursorY, col3, rowH, 'Follow-up Date',
@@ -447,387 +539,22 @@ export class StationEngagementExportService {
     doc.y = cursorY + 12;
   }
 
-  // ─── Styled PDF Table Drawing Helpers ────────────────────────────────
+  // ─── Generate Preview ────────────────────────────────────────────────
 
-  private static drawStyledEngagementTable(doc: PDFKit.PDFDocument, engagements: Engagement[]): void {
-    const pageWidth = 550;
-    const margin = 50;
-    const tableWidth = pageWidth - margin;
-    const columns = [
-      { header: 'Station', width: 90, align: 'left' },
-      { header: 'Date', width: 70, align: 'left' },
-      { header: 'Contact', width: 80, align: 'left' },
-      { header: 'Mode', width: 60, align: 'left' },
-      { header: 'Status', width: 60, align: 'center' },
-      { header: 'Issues', width: 90, align: 'left' },
-      { header: 'Action', width: 100, align: 'left' },
-    ];
-
-    let startY = doc.y;
-    const rowHeight = 22;
-    const headerHeight = 28;
-    const colX: number[] = [];
-    let x = margin;
-    columns.forEach((col) => {
-      colX.push(x);
-      x += col.width;
+  /**
+   * Generate a PDF preview (not downloaded, returns base64 for browser preview)
+   * ✅ This can be called regardless of report status
+   */
+  static async generatePreview(
+    reportId: string,
+    userId: string,
+    options?: PDFGenerationOptions
+  ): Promise<PDFGenerationResult> {
+    const result = await this.generatePDF(reportId, userId, { 
+      ...options, 
+      previewOnly: true 
     });
-
-    // Table Header with gradient-like background
-    const headerY = startY;
-    doc.rect(margin, headerY, tableWidth, headerHeight)
-       .fillColor('#1a237e')
-       .fill()
-       .strokeColor('#1a237e')
-       .lineWidth(1)
-       .stroke();
-
-    doc.fillColor('#ffffff')
-       .fontSize(8)
-       .font('Times-Bold');
-    columns.forEach((col, i) => {
-      const textX = colX[i] + (col.align === 'center' ? col.width / 2 : 5);
-      const textOptions: PDFKit.Mixins.TextOptions = {
-        width: col.width - 10,
-        align: col.align as 'left' | 'center' | 'right',
-        ellipsis: true,
-      };
-      if (col.align === 'center') {
-        doc.text(col.header, textX, headerY + 8, textOptions);
-      } else {
-        doc.text(col.header, textX, headerY + 8, textOptions);
-      }
-    });
-
-    startY = headerY + headerHeight;
-
-    // Table Rows
-    const maxRows = 18;
-    const rows = engagements.slice(0, maxRows);
-
-    rows.forEach((engagement, rowIndex) => {
-      if (startY > 720) {
-        doc.addPage();
-        startY = 50;
-        // Redraw header on new page
-        const newHeaderY = startY;
-        doc.rect(margin, newHeaderY, tableWidth, headerHeight)
-           .fillColor('#1a237e')
-           .fill()
-           .strokeColor('#1a237e')
-           .lineWidth(1)
-           .stroke();
-
-        doc.fillColor('#ffffff')
-           .fontSize(8)
-           .font('Times-Bold');
-        columns.forEach((col, i) => {
-          const textX = colX[i] + (col.align === 'center' ? col.width / 2 : 5);
-          const textOptions: PDFKit.Mixins.TextOptions = {
-            width: col.width - 10,
-            align: col.align as 'left' | 'center' | 'right',
-            ellipsis: true,
-          };
-          if (col.align === 'center') {
-            doc.text(col.header, textX, newHeaderY + 8, textOptions);
-          } else {
-            doc.text(col.header, textX, newHeaderY + 8, textOptions);
-          }
-        });
-        startY = newHeaderY + headerHeight;
-      }
-
-      // Alternating row colors
-      const rowColor = rowIndex % 2 === 0 ? '#fafafa' : '#ffffff';
-      doc.rect(margin, startY, tableWidth, rowHeight)
-         .fillColor(rowColor)
-         .fill()
-         .strokeColor('#e0e0e0')
-         .lineWidth(0.5)
-         .stroke();
-
-      const rowData = [
-        (engagement.station_name || 'N/A').substring(0, 20),
-        engagement.date ? new Date(engagement.date).toLocaleDateString('en-KE') : 'N/A',
-        (engagement.contact_person || 'N/A').substring(0, 15),
-        engagement.mode ? engagement.mode.replace('_', ' ').toUpperCase() : 'N/A',
-        engagement.status ? engagement.status.toUpperCase() : 'N/A',
-        (engagement.issues_raised?.slice(0, 2).join(', ') || 'None').substring(0, 25),
-        (engagement.action_taken || 'N/A').substring(0, 25),
-      ];
-
-      doc.fontSize(7).font('Times-Roman').fillColor('#333333');
-      columns.forEach((col, i) => {
-        const textX = colX[i] + (col.align === 'center' ? col.width / 2 : 5);
-        const text = rowData[i] || '';
-        const textOptions: PDFKit.Mixins.TextOptions = {
-          width: col.width - 10,
-          align: col.align as 'left' | 'center' | 'right',
-          ellipsis: true,
-        };
-        
-        // Color status badges
-        if (i === 4 && engagement.status) {
-          const statusColors: Record<string, string> = {
-            resolved: '#2e7d32',
-            ongoing: '#e65100',
-            escalated: '#c62828',
-          };
-          doc.fillColor(statusColors[engagement.status] || '#333333');
-        } else {
-          doc.fillColor('#333333');
-        }
-        
-        if (col.align === 'center') {
-          doc.text(text, textX, startY + 5, textOptions);
-        } else {
-          doc.text(text, textX, startY + 5, textOptions);
-        }
-        doc.fillColor('#333333');
-      });
-
-      startY += rowHeight;
-    });
-
-    if (engagements.length > maxRows) {
-      doc.fontSize(8)
-         .font('Times-Roman')
-         .fillColor('#666666')
-         .text(`... and ${engagements.length - maxRows} more engagements`, margin, startY + 5);
-      startY += 20;
-    }
-
-    doc.y = startY + 10;
-  }
-
-  private static drawStyledUnengagedTable(doc: PDFKit.PDFDocument, stations: UnengagedStation[]): void {
-    const pageWidth = 550;
-    const margin = 50;
-    const tableWidth = pageWidth - margin;
-    const columns = [
-      { header: 'Station', width: 130, align: 'left' },
-      { header: 'Reason', width: 130, align: 'left' },
-      { header: 'Details', width: 160, align: 'left' },
-      { header: 'Planned Date', width: 130, align: 'left' },
-    ];
-
-    let startY = doc.y;
-    const rowHeight = 22;
-    const headerHeight = 28;
-    const colX: number[] = [];
-    let x = margin;
-    columns.forEach((col) => {
-      colX.push(x);
-      x += col.width;
-    });
-
-    // Table Header
-    const headerY = startY;
-    doc.rect(margin, headerY, tableWidth, headerHeight)
-       .fillColor('#1a237e')
-       .fill()
-       .strokeColor('#1a237e')
-       .lineWidth(1)
-       .stroke();
-
-    doc.fillColor('#ffffff')
-       .fontSize(8)
-       .font('Times-Bold');
-    columns.forEach((col, i) => {
-      const textX = colX[i] + 5;
-      doc.text(col.header, textX, headerY + 8, { width: col.width - 10, align: 'left' });
-    });
-
-    startY = headerY + headerHeight;
-
-    stations.forEach((station, rowIndex) => {
-      if (startY > 720) {
-        doc.addPage();
-        startY = 50;
-        const newHeaderY = startY;
-        doc.rect(margin, newHeaderY, tableWidth, headerHeight)
-           .fillColor('#1a237e')
-           .fill()
-           .strokeColor('#1a237e')
-           .lineWidth(1)
-           .stroke();
-
-        doc.fillColor('#ffffff')
-           .fontSize(8)
-           .font('Times-Bold');
-        columns.forEach((col, i) => {
-          const textX = colX[i] + 5;
-          doc.text(col.header, textX, newHeaderY + 8, { width: col.width - 10, align: 'left' });
-        });
-        startY = newHeaderY + headerHeight;
-      }
-
-      const rowColor = rowIndex % 2 === 0 ? '#fafafa' : '#ffffff';
-      doc.rect(margin, startY, tableWidth, rowHeight)
-         .fillColor(rowColor)
-         .fill()
-         .strokeColor('#e0e0e0')
-         .lineWidth(0.5)
-         .stroke();
-
-      const rowData = [
-        (station.station_name || station.station_id || 'N/A').substring(0, 25),
-        station.reason_not_reached ? station.reason_not_reached.replace('_', ' ').toUpperCase() : 'N/A',
-        (station.reason_not_reached_detail || '').substring(0, 30),
-        station.planned_engagement_date
-          ? new Date(station.planned_engagement_date).toLocaleDateString('en-KE')
-          : 'N/A',
-      ];
-
-      doc.fontSize(7).font('Times-Roman').fillColor('#333333');
-      columns.forEach((col, i) => {
-        const textX = colX[i] + 5;
-        doc.text(rowData[i] || '', textX, startY + 5, { width: col.width - 10, align: 'left' });
-      });
-
-      startY += rowHeight;
-    });
-
-    doc.y = startY + 10;
-  }
-
-  private static drawStyledEscalationTable(doc: PDFKit.PDFDocument, escalations: EscalationItem[]): void {
-    const pageWidth = 550;
-    const margin = 50;
-    const tableWidth = pageWidth - margin;
-    const columns = [
-      { header: 'Station', width: 90, align: 'left' },
-      { header: 'Issue', width: 120, align: 'left' },
-      { header: 'Urgency', width: 70, align: 'center' },
-      { header: 'Recommended Action', width: 150, align: 'left' },
-      { header: 'Status', width: 70, align: 'center' },
-    ];
-
-    let startY = doc.y;
-    const rowHeight = 25;
-    const headerHeight = 28;
-    const colX: number[] = [];
-    let x = margin;
-    columns.forEach((col) => {
-      colX.push(x);
-      x += col.width;
-    });
-
-    // Table Header
-    const headerY = startY;
-    doc.rect(margin, headerY, tableWidth, headerHeight)
-       .fillColor('#1a237e')
-       .fill()
-       .strokeColor('#1a237e')
-       .lineWidth(1)
-       .stroke();
-
-    doc.fillColor('#ffffff')
-       .fontSize(8)
-       .font('Times-Bold');
-    columns.forEach((col, i) => {
-      const textX = colX[i] + (col.align === 'center' ? col.width / 2 : 5);
-      const textOptions: PDFKit.Mixins.TextOptions = {
-        width: col.width - 10,
-        align: col.align as 'left' | 'center' | 'right',
-        ellipsis: true,
-      };
-      if (col.align === 'center') {
-        doc.text(col.header, textX, headerY + 8, textOptions);
-      } else {
-        doc.text(col.header, textX, headerY + 8, textOptions);
-      }
-    });
-
-    startY = headerY + headerHeight;
-
-    escalations.forEach((escalation, rowIndex) => {
-      if (startY > 720) {
-        doc.addPage();
-        startY = 50;
-        const newHeaderY = startY;
-        doc.rect(margin, newHeaderY, tableWidth, headerHeight)
-           .fillColor('#1a237e')
-           .fill()
-           .strokeColor('#1a237e')
-           .lineWidth(1)
-           .stroke();
-
-        doc.fillColor('#ffffff')
-           .fontSize(8)
-           .font('Times-Bold');
-        columns.forEach((col, i) => {
-          const textX = colX[i] + (col.align === 'center' ? col.width / 2 : 5);
-          const textOptions: PDFKit.Mixins.TextOptions = {
-            width: col.width - 10,
-            align: col.align as 'left' | 'center' | 'right',
-            ellipsis: true,
-          };
-          if (col.align === 'center') {
-            doc.text(col.header, textX, newHeaderY + 8, textOptions);
-          } else {
-            doc.text(col.header, textX, newHeaderY + 8, textOptions);
-          }
-        });
-        startY = newHeaderY + headerHeight;
-      }
-
-      const rowColor = rowIndex % 2 === 0 ? '#fafafa' : '#ffffff';
-      doc.rect(margin, startY, tableWidth, rowHeight)
-         .fillColor(rowColor)
-         .fill()
-         .strokeColor('#e0e0e0')
-         .lineWidth(0.5)
-         .stroke();
-
-      const stationName = (escalation.station_name || escalation.station_id || 'N/A').substring(0, 18);
-      const issue = (escalation.issue || 'No issue described').substring(0, 30);
-      const urgency = escalation.urgency ? escalation.urgency.toUpperCase() : 'N/A';
-      const recommendedAction = (escalation.recommended_action || 'No action specified').substring(0, 30);
-      const status = escalation.status ? escalation.status.toUpperCase() : 'N/A';
-
-      const rowData = [stationName, issue, urgency, recommendedAction, status];
-
-      doc.fontSize(7).font('Times-Roman');
-      columns.forEach((col, i) => {
-        const textX = colX[i] + (col.align === 'center' ? col.width / 2 : 5);
-        const text = rowData[i] || '';
-        const textOptions: PDFKit.Mixins.TextOptions = {
-          width: col.width - 10,
-          align: col.align as 'left' | 'center' | 'right',
-          ellipsis: true,
-        };
-
-        // Color urgency badges
-        if (i === 2 && escalation.urgency) {
-          const urgencyColors: Record<string, string> = {
-            high: '#c62828',
-            medium: '#e65100',
-            low: '#2e7d32',
-          };
-          doc.fillColor(urgencyColors[escalation.urgency] || '#333333');
-        } else if (i === 4 && escalation.status) {
-          const statusColors: Record<string, string> = {
-            pending: '#e65100',
-            resolved: '#2e7d32',
-          };
-          doc.fillColor(statusColors[escalation.status] || '#333333');
-        } else {
-          doc.fillColor('#333333');
-        }
-
-        if (col.align === 'center') {
-          doc.text(text, textX, startY + 6, textOptions);
-        } else {
-          doc.text(text, textX, startY + 6, textOptions);
-        }
-        doc.fillColor('#333333');
-      });
-
-      startY += rowHeight;
-    });
-
-    doc.y = startY + 10;
+    return result as PDFGenerationResult;
   }
 
   // ─── Excel Generation ──────────────────────────────────────────────────
@@ -876,8 +603,15 @@ export class StationEngagementExportService {
     periodCell.font = { name: 'Times New Roman', size: 10 };
     periodCell.alignment = { horizontal: 'center', vertical: 'middle' };
 
+    // ✅ Status badge on cover sheet
+    coverSheet.mergeCells('A5:F5');
+    const statusCell = coverSheet.getCell('A5');
+    statusCell.value = `Status: ${report.status.toUpperCase()}`;
+    statusCell.font = { name: 'Times New Roman', size: 10, bold: true, color: { argb: STATUS_COLORS[report.status] || 'FF1a237e' } };
+    statusCell.alignment = { horizontal: 'center', vertical: 'middle' };
+
     // Metadata Table with styled background
-    const metadataStartRow = 7;
+    const metadataStartRow = 8;
     const metadata = [
       ['Report ID', report.id || 'N/A'],
       ['Status', report.status ? report.status.toUpperCase() : 'N/A'],
@@ -886,6 +620,8 @@ export class StationEngagementExportService {
       ['Total Stations Assigned', report.total_stations_assigned ?? 0],
       ['Created At', report.created_at ? new Date(report.created_at).toLocaleString('en-KE') : 'N/A'],
       ['Last Updated', report.updated_at ? new Date(report.updated_at).toLocaleString('en-KE') : 'N/A'],
+      ['Is Draft', report.status === 'draft' ? 'Yes' : 'No'],
+      ['Visible to Admin', report.status !== 'draft' ? 'Yes' : 'No'],
     ];
 
     metadata.forEach(([key, value], index) => {
@@ -958,7 +694,7 @@ export class StationEngagementExportService {
           engagement.date ? new Date(engagement.date).toLocaleDateString('en-KE') : 'N/A',
           engagement.contact_person || 'N/A',
           engagement.contact_role || '',
-          engagement.mode || 'N/A',
+          engagement.mode ? MODE_DISPLAY_MAP[engagement.mode] || engagement.mode : 'N/A',
           engagement.status || 'N/A',
           engagement.follow_up_date ? new Date(engagement.follow_up_date).toLocaleDateString('en-KE') : '',
           engagement.issues_raised?.join(', ') || '',
@@ -1133,6 +869,8 @@ export class StationEngagementExportService {
       ['Resolved Engagements', report.engagements?.filter(e => e.status === 'resolved').length || 0],
       ['Ongoing Engagements', report.engagements?.filter(e => e.status === 'ongoing').length || 0],
       ['Escalated Engagements', report.engagements?.filter(e => e.status === 'escalated').length || 0],
+      ['Is Draft Report', report.status === 'draft' ? 'Yes' : 'No'],
+      ['Status', report.status.toUpperCase()],
     ];
 
     summaryData.forEach((row, index) => {
@@ -1195,8 +933,6 @@ export class StationEngagementExportService {
     footerEmail.font = { name: 'Times New Roman', size: 9 };
     footerEmail.alignment = { horizontal: 'center', vertical: 'middle' };
 
-    
-
     footerSheet.mergeCells('A5:C5');
     const footerDate = footerSheet.getCell('A5');
     footerDate.value = `Generated on: ${new Date().toLocaleString('en-KE', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`;
@@ -1206,8 +942,6 @@ export class StationEngagementExportService {
     footerSheet.getColumn('A').width = 25;
     footerSheet.getColumn('B').width = 25;
     footerSheet.getColumn('C').width = 25;
-
-    
 
     // ─── Export ────────────────────────────────────────────────────────
 
@@ -1219,13 +953,17 @@ export class StationEngagementExportService {
 
   static async generateBoth(
     reportId: string,
-    userId: string
+    userId: string,
+    options?: PDFGenerationOptions
   ): Promise<{ pdf: Buffer; excel: Buffer }> {
     const [pdf, excel] = await Promise.all([
-      this.generatePDF(reportId, userId),
+      this.generatePDF(reportId, userId, options),
       this.generateExcel(reportId, userId),
     ]);
 
-    return { pdf, excel };
+    // Handle case where generatePDF returns PDFGenerationResult (preview)
+    const pdfBuffer = Buffer.isBuffer(pdf) ? pdf : Buffer.from((pdf as PDFGenerationResult).previewData || '', 'base64');
+
+    return { pdf: pdfBuffer, excel };
   }
 }

@@ -254,11 +254,9 @@ export class ServiceWeekExportService {
              .font('Helvetica')
              .text(`Designation: ${designation || '..............................'}`, 150, nameY, { width: 190 });
 
-          doc.text('Signature: ..........................', 350, nameY);
-
           doc.text(
             `Date: ${date ? new Date(date).toLocaleDateString('en-GB') : '..........'}`,
-            470,
+            350,
             nameY
           );
 

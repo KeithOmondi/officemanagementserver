@@ -10,6 +10,7 @@ import type {
   TicketApprovalStep,
   TicketComment,
   TicketStatus,
+  Passenger,
 } from './tickets.types';
 import type {
   CreateTicketInput,
@@ -78,6 +79,17 @@ const COMMENT_JOIN = `
   LEFT JOIN users u ON u.id = c.user_id
 `;
 
+// ─── Passenger SELECT fragments ─────────────────────────────────────────────
+
+const PASSENGER_SELECT = `
+  p.id, p.ticket_id, p.name, p.judge_name, p.pj_number,
+  p.time_of_travel, p.return_time, p.created_at, p.updated_at
+`;
+
+const PASSENGER_JOIN = `
+  FROM ticket_passengers p
+`;
+
 const ALLOWED_SORT = new Set(['created_at', 'updated_at', 'date_of_travel', 'priority', 'status']);
 
 // ── Service ───────────────────────────────────────────────────────────────────
@@ -113,6 +125,51 @@ export class TicketService {
        VALUES ($1, $2, $3, $4, $5)`,
       [ticketId, action, fromUserId, toUserId, comments]
     );
+  }
+
+  // ── Helper: Save Passengers ─────────────────────────────────────────────────
+
+  private static async savePassengers(
+    ticketId: string,
+    passengers: Passenger[],
+    client?: any
+  ): Promise<void> {
+    const db = client || pool;
+    
+    // Delete existing passengers
+    await db.query(
+      `DELETE FROM ticket_passengers WHERE ticket_id = $1`,
+      [ticketId]
+    );
+
+    // Insert new passengers
+    if (passengers && passengers.length > 0) {
+      for (const passenger of passengers) {
+        await db.query(
+          `INSERT INTO ticket_passengers
+             (ticket_id, name, judge_name, pj_number, time_of_travel, return_time)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [
+            ticketId,
+            passenger.name.trim(),
+            passenger.judge_name?.trim() ?? null,
+            passenger.pj_number?.trim() ?? null,
+            passenger.time_of_travel ?? null,
+            passenger.return_time ?? null,
+          ]
+        );
+      }
+    }
+  }
+
+  // ── Helper: Get Passengers for Ticket ──────────────────────────────────────
+
+  private static async getPassengers(ticketId: string): Promise<Passenger[]> {
+    const { rows } = await pool.query(
+      `SELECT ${PASSENGER_SELECT} ${PASSENGER_JOIN} WHERE p.ticket_id = $1 ORDER BY p.created_at ASC`,
+      [ticketId]
+    );
+    return rows;
   }
 
   // ── Helper: Validate department & assignment ───────────────────────────────
@@ -179,6 +236,14 @@ export class TicketService {
       input.assigned_to
     );
 
+    // Validate passengers if provided
+    if (input.passengers && input.passengers.length > 0) {
+      // Ensure passenger count matches
+      if (input.passengers.length !== input.number_of_passengers) {
+        throw new AppError(400, 'Number of passengers does not match passenger details');
+      }
+    }
+
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -228,6 +293,11 @@ export class TicketService {
       );
 
       const ticketId = rows[0].id;
+
+      // Save passengers
+      if (input.passengers && input.passengers.length > 0) {
+        await this.savePassengers(ticketId, input.passengers, client);
+      }
 
       await this.addApprovalHistory(
         ticketId,
@@ -308,8 +378,15 @@ export class TicketService {
     ]);
 
     const total = parseInt(countResult.rows[0]?.total ?? '0', 10);
+    
+    // Fetch passengers for each ticket
+    const tickets = dataResult.rows;
+    for (const ticket of tickets) {
+      ticket.passengers = await this.getPassengers(ticket.id);
+    }
+
     return {
-      data: dataResult.rows,
+      data: tickets,
       total,
       page,
       limit,
@@ -324,7 +401,11 @@ export class TicketService {
       `SELECT ${TICKET_SELECT} ${TICKET_JOIN} WHERE t.id = $1 AND t.is_active = true`,
       [id]
     );
-    return rows[0] ?? null;
+    if (!rows.length) return null;
+    
+    const ticket = rows[0];
+    ticket.passengers = await this.getPassengers(id);
+    return ticket;
   }
 
   static async findByIdWithHistory(id: string): Promise<TicketWithHistory | null> {
@@ -349,8 +430,11 @@ export class TicketService {
 
     if (!ticketResult.rows[0]) return null;
 
+    const ticket = ticketResult.rows[0];
+    ticket.passengers = await this.getPassengers(id);
+
     return {
-      ...ticketResult.rows[0],
+      ...ticket,
       approval_history: historyResult.rows,
       comments: commentsResult.rows,
     };
@@ -374,41 +458,68 @@ export class TicketService {
       input.assigned_to ?? existing.assigned_to
     );
 
-    const updates: string[] = [];
-    const values: unknown[] = [];
-    let p = 1;
+    // Validate passengers if provided
+    if (input.passengers !== undefined) {
+      if (input.passengers.length === 0) {
+        throw new AppError(400, 'At least one passenger is required');
+      }
+      const passengerCount = input.number_of_passengers ?? input.passengers.length;
+      if (input.passengers.length !== passengerCount) {
+        throw new AppError(400, 'Number of passengers does not match passenger details');
+      }
+    }
 
-    if (input.title !== undefined) { updates.push(`title = $${p++}`); values.push(input.title.trim()); }
-    if (input.description !== undefined) { updates.push(`description = $${p++}`); values.push(input.description?.trim() ?? null); }
-    if (input.department_id !== undefined) { updates.push(`department_id = $${p++}`); values.push(departmentId); }
-    if (input.trip_type !== undefined) { updates.push(`trip_type = $${p++}`); values.push(input.trip_type); }
-    if (input.date_of_travel !== undefined) { updates.push(`date_of_travel = $${p++}`); values.push(new Date(input.date_of_travel)); }
-    if (input.time_of_travel !== undefined) { updates.push(`time_of_travel = $${p++}`); values.push(input.time_of_travel ?? null); }
-    if (input.return_date !== undefined) { updates.push(`return_date = $${p++}`); values.push(input.return_date ? new Date(input.return_date) : null); }
-    if (input.return_time !== undefined) { updates.push(`return_time = $${p++}`); values.push(input.return_time ?? null); }
-    if (input.preferred_departure_time !== undefined) { updates.push(`preferred_departure_time = $${p++}`); values.push(input.preferred_departure_time); }
-    if (input.preferred_return_time !== undefined) { updates.push(`preferred_return_time = $${p++}`); values.push(input.preferred_return_time ?? null); }
-    if (input.departure_from !== undefined) { updates.push(`departure_from = $${p++}`); values.push(input.departure_from.trim()); }
-    if (input.destination !== undefined) { updates.push(`destination = $${p++}`); values.push(input.destination.trim()); }
-    if (input.remarks !== undefined) { updates.push(`remarks = $${p++}`); values.push(input.remarks?.trim() ?? null); }
-    if (input.judge_name !== undefined) { updates.push(`judge_name = $${p++}`); values.push(input.judge_name?.trim() ?? null); }
-    if (input.pj_number !== undefined) { updates.push(`pj_number = $${p++}`); values.push(input.pj_number?.trim() ?? null); }
-    if (input.travel_class !== undefined) { updates.push(`travel_class = $${p++}`); values.push(input.travel_class); }
-    if (input.number_of_passengers !== undefined) { updates.push(`number_of_passengers = $${p++}`); values.push(input.number_of_passengers); }
-    if (input.special_requests !== undefined) { updates.push(`special_requests = $${p++}`); values.push(input.special_requests?.trim() ?? null); }
-    if (input.priority !== undefined) { updates.push(`priority = $${p++}`); values.push(input.priority); }
-    if (input.assigned_to !== undefined) { updates.push(`assigned_to = $${p++}`); values.push(assigneeId); }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
 
-    if (!updates.length) return existing;
+      const updates: string[] = [];
+      const values: unknown[] = [];
+      let p = 1;
 
-    updates.push(`updated_at = NOW()`);
-    values.push(id);
+      if (input.title !== undefined) { updates.push(`title = $${p++}`); values.push(input.title.trim()); }
+      if (input.description !== undefined) { updates.push(`description = $${p++}`); values.push(input.description?.trim() ?? null); }
+      if (input.department_id !== undefined) { updates.push(`department_id = $${p++}`); values.push(departmentId); }
+      if (input.trip_type !== undefined) { updates.push(`trip_type = $${p++}`); values.push(input.trip_type); }
+      if (input.date_of_travel !== undefined) { updates.push(`date_of_travel = $${p++}`); values.push(new Date(input.date_of_travel)); }
+      if (input.time_of_travel !== undefined) { updates.push(`time_of_travel = $${p++}`); values.push(input.time_of_travel ?? null); }
+      if (input.return_date !== undefined) { updates.push(`return_date = $${p++}`); values.push(input.return_date ? new Date(input.return_date) : null); }
+      if (input.return_time !== undefined) { updates.push(`return_time = $${p++}`); values.push(input.return_time ?? null); }
+      if (input.preferred_departure_time !== undefined) { updates.push(`preferred_departure_time = $${p++}`); values.push(input.preferred_departure_time); }
+      if (input.preferred_return_time !== undefined) { updates.push(`preferred_return_time = $${p++}`); values.push(input.preferred_return_time ?? null); }
+      if (input.departure_from !== undefined) { updates.push(`departure_from = $${p++}`); values.push(input.departure_from.trim()); }
+      if (input.destination !== undefined) { updates.push(`destination = $${p++}`); values.push(input.destination.trim()); }
+      if (input.remarks !== undefined) { updates.push(`remarks = $${p++}`); values.push(input.remarks?.trim() ?? null); }
+      if (input.judge_name !== undefined) { updates.push(`judge_name = $${p++}`); values.push(input.judge_name?.trim() ?? null); }
+      if (input.pj_number !== undefined) { updates.push(`pj_number = $${p++}`); values.push(input.pj_number?.trim() ?? null); }
+      if (input.travel_class !== undefined) { updates.push(`travel_class = $${p++}`); values.push(input.travel_class); }
+      if (input.number_of_passengers !== undefined) { updates.push(`number_of_passengers = $${p++}`); values.push(input.number_of_passengers); }
+      if (input.special_requests !== undefined) { updates.push(`special_requests = $${p++}`); values.push(input.special_requests?.trim() ?? null); }
+      if (input.priority !== undefined) { updates.push(`priority = $${p++}`); values.push(input.priority); }
+      if (input.assigned_to !== undefined) { updates.push(`assigned_to = $${p++}`); values.push(assigneeId); }
 
-    await pool.query(
-      `UPDATE tickets SET ${updates.join(', ')} WHERE id = $${p}`,
-      values
-    );
-    return (await this.findById(id))!;
+      if (updates.length) {
+        updates.push(`updated_at = NOW()`);
+        values.push(id);
+        await client.query(
+          `UPDATE tickets SET ${updates.join(', ')} WHERE id = $${p}`,
+          values
+        );
+      }
+
+      // Update passengers if provided
+      if (input.passengers !== undefined) {
+        await this.savePassengers(id, input.passengers, client);
+      }
+
+      await client.query('COMMIT');
+      return (await this.findById(id))!;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   // ── Submit for Approval ─────────────────────────────────────────────────────
@@ -467,6 +578,14 @@ export class TicketService {
             ${ticket.trip_type === 'round_trip' ? `<p style="color:#555;font-size:14px;">Return Date: ${ticket.return_date ? new Date(ticket.return_date).toLocaleDateString() : 'N/A'}</p>` : ''}
             ${ticket.judge_name ? `<p style="color:#555;font-size:14px;">Judge: ${ticket.judge_name}</p>` : ''}
             ${ticket.pj_number ? `<p style="color:#555;font-size:14px;">PJ Number: ${ticket.pj_number}</p>` : ''}
+            ${ticket.passengers && ticket.passengers.length > 0 ? `
+              <p style="color:#555;font-size:14px;margin-top:8px;"><strong>Passengers (${ticket.passengers.length}):</strong></p>
+              <ul style="color:#555;font-size:13px;">
+                ${ticket.passengers.map(p => `
+                  <li>${p.name}${p.judge_name ? ` (Judge: ${p.judge_name})` : ''}${p.pj_number ? ` - PJ: ${p.pj_number}` : ''}${p.time_of_travel ? ` @ ${p.time_of_travel}` : ''}</li>
+                `).join('')}
+              </ul>
+            ` : ''}
             <p style="font-size:12px;color:#999;margin-top:16px;">Please log in to review and take action.</p>
           </div>
         `,
@@ -552,6 +671,12 @@ export class TicketService {
               <p style="font-weight:bold;color:#333;">${ticket.title}</p>
               <p style="color:#555;font-size:14px;">Reference: ${ticket.reference_no}</p>
               ${input.comments ? `<p style="color:#555;">Comments: ${input.comments}</p>` : ''}
+              ${ticket.passengers && ticket.passengers.length > 0 ? `
+                <p style="color:#555;font-size:14px;margin-top:8px;"><strong>Passengers (${ticket.passengers.length}):</strong></p>
+                <ul style="color:#555;font-size:13px;">
+                  ${ticket.passengers.map(p => `<li>${p.name}</li>`).join('')}
+                </ul>
+              ` : ''}
             </div>
           `,
         }).catch(console.error);

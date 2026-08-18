@@ -29,6 +29,17 @@ const timeString = z
   .optional()
   .nullable();
 
+// ─── Passenger Schema ────────────────────────────────────────────────────────
+
+const passengerSchema = z.object({
+  id: z.string().optional(), // Optional - may be auto-generated
+  name: z.string().min(1, 'Passenger name is required').max(255).trim(),
+  judge_name: z.string().max(255).trim().optional().nullable(),
+  pj_number: z.string().max(100).trim().optional().nullable(),
+  time_of_travel: timeString, // Individual departure time
+  return_time: timeString, // Individual return time
+});
+
 // ── Create Ticket ──────────────────────────────────────────────────────────────
 
 export const createTicketSchema = z.object({
@@ -63,6 +74,26 @@ export const createTicketSchema = z.object({
     travel_class: travelClassEnum.default('economy'),
     number_of_passengers: z.number().int().min(1).max(50).default(1),
     special_requests: z.string().max(1000).trim().optional(),
+
+    // ─── Passengers ──────────────────────────────────────────────────────────
+    passengers: z.array(passengerSchema).optional()
+      .refine(
+        (passengers) => {
+          if (!passengers || passengers.length === 0) return true;
+          // Ensure all passengers have unique names (case insensitive)
+          const names = passengers.map(p => p.name.toLowerCase().trim());
+          return names.length === new Set(names).size;
+        },
+        { message: 'Passenger names must be unique', path: ['passengers'] }
+      )
+      .refine(
+        (passengers) => {
+          if (!passengers || passengers.length === 0) return true;
+          // Ensure at least one passenger has a name
+          return passengers.some(p => p.name && p.name.trim().length > 0);
+        },
+        { message: 'At least one passenger must have a name', path: ['passengers'] }
+      ),
 
     priority: ticketPriorityEnum.default('normal'),
     assigned_to: z.string().uuid().optional(),
@@ -111,6 +142,16 @@ export const createTicketSchema = z.object({
   }, {
     message: 'Return flight time preference is required for round trip',
     path: ['preferred_return_time'],
+  })
+  .refine((data) => {
+    // If passengers are provided, number_of_passengers should match
+    if (data.passengers && data.passengers.length > 0) {
+      return data.passengers.length === data.number_of_passengers;
+    }
+    return true;
+  }, {
+    message: 'Number of passengers must match the number of passenger details provided',
+    path: ['number_of_passengers'],
   }),
 });
 
@@ -147,6 +188,18 @@ export const updateTicketSchema = z.object({
     travel_class: travelClassEnum.optional(),
     number_of_passengers: z.number().int().min(1).max(50).optional(),
     special_requests: z.string().max(1000).trim().optional().nullable(),
+
+    // ─── Passengers ──────────────────────────────────────────────────────────
+    passengers: z.array(passengerSchema).optional()
+      .refine(
+        (passengers) => {
+          if (!passengers || passengers.length === 0) return true;
+          // Ensure all passengers have unique names (case insensitive)
+          const names = passengers.map(p => p.name.toLowerCase().trim());
+          return names.length === new Set(names).size;
+        },
+        { message: 'Passenger names must be unique', path: ['passengers'] }
+      ),
 
     priority: ticketPriorityEnum.optional(),
     assigned_to: z.string().uuid().optional().nullable(),
@@ -192,6 +245,16 @@ export const updateTicketSchema = z.object({
   }, {
     message: 'Return flight time preference is required for round trip',
     path: ['preferred_return_time'],
+  })
+  .refine((data) => {
+    // If passengers are provided, number_of_passengers should match
+    if (data.passengers && data.passengers.length > 0 && data.number_of_passengers) {
+      return data.passengers.length === data.number_of_passengers;
+    }
+    return true;
+  }, {
+    message: 'Number of passengers must match the number of passenger details provided',
+    path: ['number_of_passengers'],
   }),
 });
 

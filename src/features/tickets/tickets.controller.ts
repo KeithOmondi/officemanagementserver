@@ -17,6 +17,7 @@ import {
   ticketCommentIdSchema,
 } from './tickets.validator';
 import { getRealtimeService } from '../../middleware/realtime.middleware';
+import type { Ticket } from './tickets.types';
 
 // ─── Helper: Safe realtime emit ──────────────────────────────────────────────
 
@@ -38,6 +39,27 @@ const safeRealtimeEmitToRoom = (req: Request, room: string, event: string, data:
   }
 };
 
+// ─── Helper: Format ticket for realtime events ──────────────────────────────
+
+const formatTicketForRealtime = (ticket: Ticket) => ({
+  id: ticket.id,
+  title: ticket.title,
+  reference_no: ticket.reference_no,
+  status: ticket.status,
+  trip_type: ticket.trip_type,
+  date_of_travel: ticket.date_of_travel,
+  departure_from: ticket.departure_from,
+  destination: ticket.destination,
+  number_of_passengers: ticket.number_of_passengers,
+  passengers: ticket.passengers?.map(p => ({
+    name: p.name,
+    judge_name: p.judge_name,
+    pj_number: p.pj_number,
+    time_of_travel: p.time_of_travel,
+    return_time: p.return_time,
+  })) || [],
+});
+
 export const ticketController = {
 
   // ─── Create ────────────────────────────────────────────────────────────────────
@@ -50,7 +72,7 @@ export const ticketController = {
     const ticket = await TicketService.createTicket(result.data.body, req.user!.id);
     
     // ── Emit real-time event ──────────────────────────────────────────────────
-    safeRealtimeEmit(req, 'ticket_created', ticket);
+    safeRealtimeEmit(req, 'ticket_created', formatTicketForRealtime(ticket));
     
     return sendSuccess(res, ticket, 'Ticket created successfully', 201);
   }),
@@ -96,7 +118,7 @@ export const ticketController = {
     );
     
     // ── Emit real-time event ──────────────────────────────────────────────────
-    safeRealtimeEmit(req, 'ticket_updated', ticket);
+    safeRealtimeEmit(req, 'ticket_updated', formatTicketForRealtime(ticket));
     
     return sendSuccess(res, ticket, 'Ticket updated successfully');
   }),
@@ -116,6 +138,8 @@ export const ticketController = {
       title: ticket.title,
       status: ticket.status,
       reference_no: ticket.reference_no,
+      number_of_passengers: ticket.number_of_passengers,
+      passengers: ticket.passengers?.map(p => p.name) || [],
     });
     
     return sendSuccess(res, ticket, 'Ticket submitted for approval');
@@ -142,6 +166,7 @@ export const ticketController = {
       title: ticket.title,
       status: ticket.status,
       reference_no: ticket.reference_no,
+      number_of_passengers: ticket.number_of_passengers,
       approved_by: req.user!.full_name,
       approved_at: new Date().toISOString(),
     });
@@ -226,6 +251,7 @@ export const ticketController = {
       title: ticket.title,
       status: ticket.status,
       reference_no: ticket.reference_no,
+      number_of_passengers: ticket.number_of_passengers,
       booking_reference: bodyResult.data.body.booking_reference,
       booked_by: req.user!.full_name,
     });

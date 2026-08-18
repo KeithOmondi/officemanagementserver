@@ -220,71 +220,36 @@ export class ServiceWeekExportService {
           });
         }
 
-        // ─── Footer ───────────────────────────────────────────────────
+        // ─── Footer — Submitted by only ─────────────────────────────────
 
-        if (currentY > 550) {
+        if (currentY > 630) {
           doc.addPage();
           currentY = 50;
         } else {
           currentY += 30;
         }
 
-        // Helper for one signature block — fixed offsets, no doc.y chaining.
-        const drawSignatureBlock = (
-          label: string,
-          name: string,
-          designation: string,
-          date: string | null | undefined,
-          startY: number
-        ): number => {
-          doc.fillColor(COLOR_TEXT)
-             .fontSize(9)
-             .font('Helvetica-Bold')
-             .text(label, 50, startY);
+        doc.fillColor(COLOR_TEXT)
+           .fontSize(9)
+           .font('Helvetica-Bold')
+           .text('Submitted by:', 50, currentY);
 
-          const nameY = startY + 15;
+        const nameY = currentY + 15;
 
-          doc.fillColor(COLOR_TEXT)
-             .fontSize(9)
-             .font('Helvetica')
-             .text(name || '.................................', 50, nameY, { width: 90 });
+        doc.fillColor(COLOR_TEXT)
+           .fontSize(9)
+           .font('Helvetica')
+           .text(report.prepared_by || '.................................', 50, nameY, { width: 130 });
 
-          doc.fillColor(COLOR_MUTED)
-             .fontSize(8)
-             .font('Helvetica')
-             .text(`Designation: ${designation || '..............................'}`, 150, nameY, { width: 190 });
+        doc.fillColor(COLOR_MUTED)
+           .fontSize(8)
+           .font('Helvetica')
+           .text(`Designation: ${report.prepared_designation || '..............................'}`, 200, nameY, { width: 190 });
 
-          doc.text(
-            `Date: ${date ? new Date(date).toLocaleDateString('en-GB') : '..........'}`,
-            350,
-            nameY
-          );
-
-          return nameY + 35; // fixed gap before next block
-        };
-
-        currentY = drawSignatureBlock(
-          'Prepared by (Court Assistant):',
-          report.prepared_by,
-          report.prepared_designation,
-          report.prepared_date,
-          currentY
-        );
-
-        currentY = drawSignatureBlock(
-          'Confirmed by (Deputy Registrar):',
-          report.confirmed_by || '',
-          report.confirmed_designation || '',
-          report.confirmed_date,
-          currentY
-        );
-
-        drawSignatureBlock(
-          'Approved by (Judge):',
-          report.approved_by || '',
-          report.approved_designation || '',
-          report.approved_date,
-          currentY
+        doc.text(
+          `Date: ${report.prepared_date ? new Date(report.prepared_date).toLocaleDateString('en-GB') : '..........'}`,
+          420,
+          nameY
         );
 
         doc.end();
@@ -399,7 +364,11 @@ export class ServiceWeekExportService {
           doc.fillColor(COLOR_MUTED)
              .fontSize(8)
              .font('Helvetica')
-             .text(`Week: ${weekStart} – ${weekEnd}   |   Status: ${report.status.toUpperCase()}`, 50, currentY);
+             .text(
+               `Week: ${weekStart} – ${weekEnd}   |   Status: ${report.status.toUpperCase()}   |   Submitted by: ${report.prepared_by || '—'}`,
+               50,
+               currentY
+             );
 
           currentY = doc.y + 8;
 

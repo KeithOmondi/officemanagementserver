@@ -105,7 +105,8 @@ const SIGNATURE_ANCHOR_TEXT = 'RHC-SIGNATURE-ANCHOR';
 // DEFAULT_NAME_PATTERN fallback (used when no signerName is supplied)
 // matches any two-capitalized-word run, which "Yours Sincerely" or
 // "Dear Sir" would also satisfy. Explicitly skip these before testing
-// name patterns against a line, in both Pass 1 and Pass 2 below.
+// name patterns against a line, in both Pass 1 and Pass 2 below (and in
+// the Pass 0 next-line validation — see looksLikeSignatoryLine).
 const EXCLUDED_LINE_PATTERNS = [
   /^yours\s+(sincerely|faithfully|truly)/i,
   /^respectfully/i,
@@ -128,6 +129,21 @@ function isExcludedLine(text: string): boolean {
  */
 const DEFAULT_NAME_PATTERN =
   /(?:HON\.?\s*)?\b([A-Z][A-Za-z'-]*\s+[A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*)?)\b(?:\s*,\s*(?:OGW|CBS|MBS|EBS|HSC|EGH)\.?)?/;
+
+// Title patterns identifying the signatory's role line (e.g.
+// "REGISTRAR, HIGH COURT"). Defined once at module scope so both the
+// fuzzy-matching passes (1 & 2) AND the Pass 0 anchor next-line validator
+// can reuse the exact same patterns — previously these were declared
+// fresh inside findSignatureBlockPosition's Pass 2 section and Pass 0 had
+// no equivalent check at all, which is what let Pass 0 misidentify
+// unrelated lines (e.g. table rows) as "the next line."
+const TITLE_PATTERNS = [
+  /REGISTRAR\s*,\s*HIGH\s*COURT/i,
+  /REGISTRAR\s+HIGH\s+COURT/i,
+  /REGISTRAR\s*[—\-]\s*HIGH\s*COURT/i,
+  /HIGH\s*COURT/i,
+  /registrar/i,
+];
 
 // Tunable placement offsets — adjust these two numbers to nudge the
 // signature relative to the detected name line without touching the
@@ -201,6 +217,16 @@ const ANCHOR_MIN_HEIGHT = 20; // never shrink the signature below this, even if 
 // per-glyph measurement, but it comfortably covers the cap-height of the
 // bold uppercase signatory lines used across Letter/Memo/Certificate.
 const NEXT_LINE_CAP_HEIGHT_ESTIMATE = 8.5;
+
+// ── Pass 0 next-line validation ─────────────────────────────────────────────
+// How many lines below the anchor we're willing to scan looking for a
+// line that actually looks like the signatory block, before giving up and
+// falling back to unconstrained placement. Kept small deliberately: we
+// want to skip over a repeated table header/row that happens to land on
+// the same page as the anchor, but NOT wander far enough to grab an
+// unrelated block further down the page (e.g. a CC list entry that
+// happens to match a loose name pattern).
+const ANCHOR_NEXT_LINE_MAX_LOOKAHEAD = 6;
 
 /**
  * Build a set of case-insensitive regexes that match a signer's name.
@@ -282,10 +308,11 @@ interface DetectedPosition {
   belowAnchor?: boolean;
   // The y of the line immediately below the anchor (typically the first
   // line of the signatory block, e.g. "REGISTRAR, HIGH COURT" or the
-  // printed name), when one exists on the same page. Used to MEASURE the
-  // actual available gap so the image is sized to fit it, rather than
-  // assuming a fixed height that may be wrong for a given template. NOTE:
-  // this is a BASELINE y, not the line's visible top — see
+  // printed name), when one exists on the same page AND has been VALIDATED
+  // to actually look like a signatory line (see looksLikeSignatoryLine).
+  // Used to MEASURE the actual available gap so the image is sized to fit
+  // it, rather than assuming a fixed height that may be wrong for a given
+  // template. NOTE: this is a BASELINE y, not the line's visible top — see
   // NEXT_LINE_CAP_HEIGHT_ESTIMATE above for why that distinction matters.
   nextLineY?: number;
   // Leftmost x of the line immediately below the anchor (the name line).
@@ -305,11 +332,36 @@ interface DetectedPosition {
 }
 
 /**
+ * Whether a line plausibly IS the signatory block (a name or title line),
+ * as opposed to unrelated content that merely happens to be array-adjacent
+ * to the anchor.
+ *
+ * THIS IS THE FIX for the two-page misplacement bug: Pass 0 previously
+ * took `linesTopToBottom[anchorIdx + 1]` on faith as "the line right below
+ * the anchor," which is only true when nothing else shares the anchor's
+ * page. Once a letter spans two pages, a table with a <thead> gets its
+ * header row repeated on the continuation page by the browser's print
+ * engine, and that repeated header (or a table data row) can land on the
+ * same page as the anchor — becoming "the next line" instead of the real
+ * signatory name, and pulling the signature's placement/sizing into the
+ * table area. Validating the candidate against the same name/title
+ * patterns used by Passes 1 & 2 closes that gap.
+ */
+function looksLikeSignatoryLine(text: string, namePatterns: RegExp[]): boolean {
+  if (!text || isExcludedLine(text)) return false;
+  if (TITLE_PATTERNS.some((p) => p.test(text))) return true;
+  if (namePatterns.some((p) => p.test(text))) return true;
+  return false;
+}
+
+/**
  * Find the anchor or signature block position in the PDF text.
  *
  * Pass 0: Explicit SIGNATURE_ANCHOR_TEXT marker (most reliable)
  *   - Handles split anchor text across multiple lines
  *   - Uses increased tolerance for production PDF variations
+ *   - Validates the "next line" against name/title patterns before
+ *     trusting it, instead of assuming array adjacency == visual adjacency
  *
  * Pass 1 & 2: Fuzzy matching (only used when anchorOnly=false)
  *   - Falls back to name and title pattern matching
@@ -336,15 +388,11 @@ function findSignatureBlockPosition(
   const pageIndices = Object.keys(itemsByPage).map(Number).sort((a, b) => b - a);
   console.log('[findSignatureBlockPosition] Pages:', pageIndices);
 
-  // Build name and title patterns
+  // Build name patterns up front (moved above Pass 0, which now also
+  // needs them for next-line validation — previously this was declared
+  // further down, right before Pass 1).
   const namePatterns = buildNamePatterns(signerName);
-  const titlePatterns = [
-    /REGISTRAR\s*,\s*HIGH\s*COURT/i,
-    /REGISTRAR\s+HIGH\s+COURT/i,
-    /REGISTRAR\s*[—\-]\s*HIGH\s*COURT/i,
-    /HIGH\s*COURT/i,
-    /registrar/i,
-  ];
+  const titlePatterns = TITLE_PATTERNS;
 
   // ── Pass 0: explicit anchor marker (robust to item splitting) ──
   console.log('[findSignatureBlockPosition] Pass 0: Searching for explicit signature anchor...');
@@ -365,17 +413,17 @@ function findSignatureBlockPosition(
       // Look for the anchor text parts across adjacent lines
       for (let i = 0; i < linesTopToBottom.length - 1; i++) {
         const currentLine = linesTopToBottom[i];
-        const nextLine = linesTopToBottom[i + 1];
+        const nextLineCandidate = linesTopToBottom[i + 1];
 
         // Check if the combined text of current + next line contains the anchor
-        const combinedText = currentLine.text + ' ' + nextLine.text;
+        const combinedText = currentLine.text + ' ' + nextLineCandidate.text;
         if (combinedText.includes(SIGNATURE_ANCHOR_TEXT)) {
           // The anchor is split across these two lines
           // Use the first line's y as the anchor position
           anchorIdx = i;
           console.log(`[findSignatureBlockPosition] Found split anchor across lines ${i} and ${i+1}`);
           console.log(`  Line ${i}: "${currentLine.text}"`);
-          console.log(`  Line ${i+1}: "${nextLine.text}"`);
+          console.log(`  Line ${i+1}: "${nextLineCandidate.text}"`);
           break;
         }
       }
@@ -401,12 +449,47 @@ function findSignatureBlockPosition(
 
     if (anchorIdx !== -1) {
       const anchorLine = linesTopToBottom[anchorIdx];
-      const anchorItem = anchorLine.items[0];
-      const nextLine = linesTopToBottom[anchorIdx + 1];
+
+      // ── Validated next-line search ────────────────────────────────────
+      // Walk forward from the anchor looking for the FIRST line that
+      // actually looks like a signatory name or title (per
+      // looksLikeSignatoryLine), instead of blindly trusting whatever
+      // happens to be array-adjacent (linesTopToBottom[anchorIdx + 1]).
+      // Bounded to ANCHOR_NEXT_LINE_MAX_LOOKAHEAD lines so we skip over
+      // an intervening table header/row without wandering into unrelated
+      // content further down the page.
+      let nextLine: { y: number; text: string; items: TextItem[] } | null = null;
+      const rejectedLines: string[] = [];
+
+      const lookaheadEnd = Math.min(
+        linesTopToBottom.length,
+        anchorIdx + 1 + ANCHOR_NEXT_LINE_MAX_LOOKAHEAD
+      );
+      for (let i = anchorIdx + 1; i < lookaheadEnd; i++) {
+        const candidate = linesTopToBottom[i];
+        if (looksLikeSignatoryLine(candidate.text, namePatterns)) {
+          nextLine = candidate;
+          break;
+        }
+        rejectedLines.push(candidate.text.substring(0, 40));
+      }
+
+      if (!nextLine && rejectedLines.length > 0) {
+        console.warn(
+          `[findSignatureBlockPosition] Pass 0: no signatory-looking line found within ` +
+          `${ANCHOR_NEXT_LINE_MAX_LOOKAHEAD} lines below the anchor on page ${pageIndex + 1} — ` +
+          `rejected candidates: ${JSON.stringify(rejectedLines)}. This usually means unrelated ` +
+          `content (e.g. a continued table's repeated header row) landed on the anchor's page. ` +
+          `Falling back to unconstrained placement (no nextLineY) rather than mis-measuring ` +
+          `against that content.`
+        );
+      }
 
       console.log(
         `[findSignatureBlockPosition] Found anchor marker (line: "${anchorLine.text.substring(0, 50)}...") at y=${anchorLine.y}` +
-        (nextLine ? `, next line: "${nextLine.text.substring(0, 50)}..." at y=${nextLine.y}` : ', no next line found on this page') +
+        (nextLine
+          ? `, validated next line: "${nextLine.text.substring(0, 50)}..." at y=${nextLine.y}`
+          : ', no validated next line found on this page') +
         `, page=${pageIndex + 1}`
       );
 
@@ -696,9 +779,14 @@ export async function embedSignatureIntoPDF(
           );
         }
       } else {
-        // No next line was found on the anchor's page.
+        // No VALIDATED next line was found below the anchor on its page —
+        // either the page genuinely ends there, or (the two-page bug case)
+        // everything within the lookahead window was unrelated content
+        // (e.g. a continued table) and got correctly rejected. Either way,
+        // falling back to a fixed, known-safe height below the anchor is
+        // strictly safer than measuring against an unvalidated line.
         console.warn(
-          '[embedSignature] No next line found below the anchor on its page — using the ' +
+          '[embedSignature] No validated next line found below the anchor on its page — using the ' +
           `no-next-line fallback with anchorMaxHeight=${effectiveAnchorMaxHeight}pt.`
         );
         heightCap = effectiveAnchorMaxHeight;
@@ -812,13 +900,7 @@ export function embedSignatureIntoHTML(
   }
 
   // ── 1. Signatory block detection ──────────────────────────────────────────
-  const titlePatterns = [
-    /REGISTRAR\s*,\s*HIGH\s*COURT/i,
-    /REGISTRAR\s+HIGH\s+COURT/i,
-    /REGISTRAR\s*[—\-]\s*HIGH\s*COURT/i,
-    /HIGH\s*COURT/i,
-    /registrar/i,
-  ];
+  const titlePatterns = TITLE_PATTERNS;
 
   const namePatterns = buildNamePatterns(signerName);
 

@@ -18,33 +18,59 @@ export const uploadToCloudinary = (
   folder: string
 ): Promise<UploadApiResponse> => {
   return new Promise((resolve, reject) => {
+    const fileExtension = file.originalname.split('.').pop()?.toLowerCase() || '';
+    
+    // DOCX files are ZIP archives internally - treat as raw
+    const isWord  = file.mimetype === "application/msword" || 
+                    file.mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+                    ['doc', 'docx'].includes(fileExtension);
+    const isExcel = file.mimetype === "application/vnd.ms-excel" ||
+                    file.mimetype === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+                    ['xls', 'xlsx'].includes(fileExtension);
+    const isPdf   = file.mimetype === "application/pdf" || fileExtension === 'pdf';
     const isVideo = file.mimetype.startsWith("video");
     const isImage = file.mimetype.startsWith("image");
-    const isPdf   = file.mimetype === "application/pdf";
+
+    let resourceType: 'image' | 'video' | 'raw' | 'auto' = 'auto';
+    
+    if (isPdf) {
+      resourceType = 'image'; // PDF works as image
+    } else if (isVideo) {
+      resourceType = 'video';
+    } else if (isImage) {
+      resourceType = 'image';
+    } else {
+      // Word, Excel, and everything else - raw
+      resourceType = 'raw';
+    }
+
+    console.log('📄 Resource type:', resourceType, 'for', file.originalname);
 
     const options: UploadApiOptions = {
       folder,
       access_mode: "public",
-      // PDFs must use resource_type "image" so Cloudinary serves them
-      // inline (with Content-Disposition: inline) instead of as raw
-      // attachments that force a browser download.
-      resource_type: isPdf ? "image" : "auto",
+      resource_type: resourceType,
     };
 
-    if (isPdf) {
-      // Request a page-1 preview thumbnail while we're at it (optional but useful)
-      options.format = "pdf";
-    } else if (isVideo) {
-      options.eager       = [{ streaming_profile: "hd", quality: "auto" }];
-      options.eager_async = true;
-    } else if (isImage) {
-      options.transformation = [{ width: 1600, crop: "limit", quality: "auto" }];
+    // Only add transformations for non-raw files
+    if (resourceType !== 'raw') {
+      if (isPdf) {
+        options.format = "pdf";
+      } else if (isVideo) {
+        options.eager = [{ streaming_profile: "hd", quality: "auto" }];
+        options.eager_async = true;
+      } else if (isImage && !isPdf) {
+        options.transformation = [{ width: 1600, crop: "limit", quality: "auto" }];
+      }
     }
 
     const uploadStream = cloudinary.uploader.upload_stream(
       options,
       (error, result) => {
-        if (error) return reject(error);
+        if (error) {
+          console.error('❌ Cloudinary upload error:', error);
+          return reject(error);
+        }
         if (!result) return reject(new Error("Upload failed: No result from Cloudinary"));
         resolve(result);
       }

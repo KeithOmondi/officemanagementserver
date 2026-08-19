@@ -344,28 +344,36 @@ export function getLetterHTML(data: LetterData): string {
 
         /* Signature Section - Reserved Box for Stamper */
         .signature-section {
-          margin-top: 8px;
+          margin-top: 15px;
           page-break-inside: avoid !important;
           break-inside: avoid !important;
+          display: block;
+          position: relative;
+        }
+
+        .signature-anchor-wrapper {
+          min-height: 65px;
+          height: 65px;
+          width: 220px;
+          display: flex;
+          align-items: flex-end;
+          position: relative;
         }
 
         .signature-anchor {
-          display: block;
-          width: 220px;
-          height: 65px;
-          margin-top: 6px;
-          margin-bottom: 4px;
-          font-size: 1pt;
-          color: transparent;
+          font-size: 8pt;
           line-height: 1;
+          color: transparent;
           user-select: none;
-          overflow: hidden;
+          white-space: nowrap;
+          display: inline-block;
         }
 
         /* Styling if stamp injects an <img> tag into .signature-anchor */
+        .signature-anchor-wrapper img,
         .signature-anchor img,
         .signature-section img {
-          height: 60px !important;
+          max-height: 60px !important;
           width: auto !important;
           max-width: 220px;
           object-fit: contain;
@@ -373,7 +381,7 @@ export function getLetterHTML(data: LetterData): string {
         }
 
         .signature {
-          margin-top: 0;
+          margin-top: 4px;
         }
 
         .signature .name {
@@ -454,7 +462,9 @@ export function getLetterHTML(data: LetterData): string {
               </div>
 
               <div class="signature-section">
-                <div class="signature-anchor">${SIGNATURE_ANCHOR_TEXT}</div>
+                <div class="signature-anchor-wrapper">
+                  <span class="signature-anchor">${SIGNATURE_ANCHOR_TEXT}</span>
+                </div>
                 
                 <div class="signature">
                   <div class="name">${escapeHtml(sender)}</div>

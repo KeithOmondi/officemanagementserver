@@ -54,6 +54,42 @@ export const sendMessageSchema = z.object({
     ),
 });
 
+// ─── NEW: Edit Message ──────────────────────────────────────────────────────
+
+export const editMessageSchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Message ID must be a valid UUID'),
+    }),
+    body: z.object({
+        content: z.string().min(1).max(10000).trim(),
+    }).strict(),
+});
+
+// ─── NEW: Delete Message ────────────────────────────────────────────────────
+
+export const deleteMessageSchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Message ID must be a valid UUID'),
+    }),
+    body: z.object({
+        for_everyone: z.boolean().default(false),
+    }).strict().optional(),
+});
+
+// ─── NEW: Mark Message as Read ─────────────────────────────────────────────
+
+export const markMessageReadSchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Message ID must be a valid UUID'),
+    }),
+});
+
+export const markMultipleMessagesReadSchema = z.object({
+    body: z.object({
+        message_ids: z.array(z.string().uuid()).min(1),
+    }).strict(),
+});
+
 export const messageFiltersSchema = z.object({
     query: z.object({
         search: z.string().optional(),
@@ -83,7 +119,7 @@ export const groupIdSchema = z.object({
     }),
 });
 
-// ─── NEW: Conversation params ─────────────────────────────────────────────────
+// ─── Conversations ───────────────────────────────────────────────────────────
 
 export const conversationParamsSchema = z.object({
     params: z.object({
@@ -95,11 +131,22 @@ export const conversationParamsSchema = z.object({
     }),
 });
 
+// ─── NEW: Get Unread Count ──────────────────────────────────────────────────
+
+export const unreadCountSchema = z.object({
+    query: z.object({
+        group_id: z.string().uuid().optional(),
+    }).strict(),
+});
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type CreateGroupInput   = z.infer<typeof createGroupSchema>['body'];
-export type UpdateGroupInput   = z.infer<typeof updateGroupSchema>['body'];
+export type CreateGroupInput    = z.infer<typeof createGroupSchema>['body'];
+export type UpdateGroupInput    = z.infer<typeof updateGroupSchema>['body'];
 export type AddGroupMembersInput = z.infer<typeof addGroupMembersSchema>['body'];
-export type SendMessageInput   = z.infer<typeof sendMessageSchema>['body'];
-export type MessageFilters     = z.infer<typeof messageFiltersSchema>['query'];
-export type ConversationParams = z.infer<typeof conversationParamsSchema>;
+export type SendMessageInput    = z.infer<typeof sendMessageSchema>['body'];
+export type EditMessageInput    = z.infer<typeof editMessageSchema>['body'];
+export type DeleteMessageInput  = z.infer<typeof deleteMessageSchema>['body'];
+export type MessageFilters      = z.infer<typeof messageFiltersSchema>['query'];
+export type ConversationParams  = z.infer<typeof conversationParamsSchema>;
+export type MarkMultipleMessagesReadInput = z.infer<typeof markMultipleMessagesReadSchema>['body'];

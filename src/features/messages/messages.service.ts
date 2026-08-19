@@ -1,3 +1,5 @@
+// src/features/messages/messages.service.ts
+
 import { pool } from '../../config/db';
 import { AppError } from '../../utils/response';
 import type {
@@ -5,13 +7,17 @@ import type {
     GroupMember,
     Message,
     MessageAttachment,
-    MessageStatus,
+    //MessageStatus,
+    //MessageEditHistory,
     CreateGroupInput,
     UpdateGroupInput,
     AddGroupMembersInput,
     SendMessageInput,
+    EditMessageInput,
+    DeleteMessageInput,
     MessageFilters,
     UnreadCount,
+    Conversation,
 } from './messages.types';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -30,6 +36,7 @@ const MESSAGE_SELECT = `
     m.recipient_id, r.full_name AS recipient_name,
     m.content, m.message_type, m.priority,
     m.is_read, m.read_at, m.is_archived, m.parent_message_id,
+    m.is_edited, m.edited_at,
     m.created_at, m.updated_at
 `;
 
@@ -313,23 +320,125 @@ export class MessagesService {
 
             for (const member of members) {
                 await pool.query(
-                    `INSERT INTO message_status (message_id, user_id, delivered_at)
-                     VALUES ($1, $2, NOW())
-                     ON CONFLICT (message_id, user_id) DO NOTHING`,
+                    `INSERT INTO message_status (message_id, user_id, delivered_at, status)
+                     VALUES ($1, $2, NOW(), 'delivered')
+                     ON CONFLICT (message_id, user_id) DO UPDATE 
+                     SET delivered_at = NOW(), status = 'delivered'`,
                     [message.id, member.user_id]
                 );
             }
         } else if (input.recipient_id) {
             await pool.query(
-                `INSERT INTO message_status (message_id, user_id, delivered_at)
-                 VALUES ($1, $2, NOW())
-                 ON CONFLICT (message_id, user_id) DO NOTHING`,
+                `INSERT INTO message_status (message_id, user_id, delivered_at, status)
+                 VALUES ($1, $2, NOW(), 'delivered')
+                 ON CONFLICT (message_id, user_id) DO UPDATE 
+                 SET delivered_at = NOW(), status = 'delivered'`,
                 [message.id, input.recipient_id]
             );
         }
 
+        // Update sender's own status to 'sent'
+        await pool.query(
+            `INSERT INTO message_status (message_id, user_id, sent_at, status)
+             VALUES ($1, $2, NOW(), 'sent')
+             ON CONFLICT (message_id, user_id) DO UPDATE 
+             SET sent_at = NOW(), status = 'sent'`,
+            [message.id, userId]
+        );
+
         return message;
     }
+
+    // ─── NEW: Edit Message ──────────────────────────────────────────────────
+
+    static async editMessage(
+        messageId: string,
+        input: EditMessageInput,
+        userId: string
+    ): Promise<Message> {
+        const message = await this.findMessageById(messageId);
+        if (!message) {
+            throw new AppError(404, 'Message not found');
+        }
+
+        // Only sender can edit their messages
+        if (message.sender_id !== userId) {
+            throw new AppError(403, 'You can only edit your own messages');
+        }
+
+        // Save edit history
+        await pool.query(
+            `INSERT INTO message_edit_history (message_id, old_content, new_content, edited_by)
+             VALUES ($1, $2, $3, $4)`,
+            [messageId, message.content, input.content.trim(), userId]
+        );
+
+        // Update message
+        await pool.query(
+            `UPDATE messages 
+             SET content = $1, is_edited = true, edited_at = NOW(), updated_at = NOW()
+             WHERE id = $2`,
+            [input.content.trim(), messageId]
+        );
+
+        return this.findMessageById(messageId) as Promise<Message>;
+    }
+
+    // ─── NEW: Delete Message ────────────────────────────────────────────────
+
+    static async deleteMessage(
+        messageId: string,
+        input: DeleteMessageInput | undefined,
+        userId: string,
+        userRole: string
+    ): Promise<void> {
+        const message = await this.findMessageById(messageId);
+        if (!message) {
+            throw new AppError(404, 'Message not found');
+        }
+
+        const isSender = message.sender_id === userId;
+        const isAdmin = userRole === 'super_admin';
+
+        // Check if user is a group admin if it's a group message
+        let isGroupAdmin = false;
+        if (message.group_id) {
+            const { rows } = await pool.query(
+                `SELECT id FROM group_members 
+                 WHERE group_id = $1 AND user_id = $2 AND role = 'admin' AND is_active = true`,
+                [message.group_id, userId]
+            );
+            isGroupAdmin = rows.length > 0;
+        }
+
+        const canDeleteForEveryone = input?.for_everyone && (isAdmin || isGroupAdmin);
+
+        if (canDeleteForEveryone) {
+            // Hard delete - remove for everyone
+            await pool.query(
+                `DELETE FROM messages WHERE id = $1`,
+                [messageId]
+            );
+        } else if (isSender) {
+            // Soft delete - only for the sender
+            await pool.query(
+                `UPDATE messages 
+                 SET content = '[Message deleted]', is_archived = true, updated_at = NOW()
+                 WHERE id = $1`,
+                [messageId]
+            );
+        } else {
+            // Soft delete for other users
+            await pool.query(
+                `INSERT INTO message_deletions (message_id, user_id)
+                 VALUES ($1, $2)
+                 ON CONFLICT (message_id, user_id) DO NOTHING`,
+                [messageId, userId]
+            );
+        }
+    }
+
+    // ─── Find Message ───────────────────────────────────────────────────────
 
     static async findMessageById(id: string): Promise<Message | null> {
         const { rows } = await pool.query(
@@ -338,7 +447,7 @@ export class MessagesService {
              LEFT JOIN users s ON s.id = m.sender_id
              LEFT JOIN message_groups mg ON mg.id = m.group_id
              LEFT JOIN users r ON r.id = m.recipient_id
-             WHERE m.id = $1`,
+             WHERE m.id = $1 AND m.is_archived = false`,
             [id]
         );
 
@@ -346,12 +455,14 @@ export class MessagesService {
 
         const message = rows[0];
 
+        // Get attachments
         const { rows: attachments } = await pool.query(
             `SELECT * FROM message_attachments WHERE message_id = $1`,
             [id]
         );
         message.attachments = attachments;
 
+        // Get statuses
         const { rows: statuses } = await pool.query(
             `SELECT ms.*, u.full_name AS user_name
              FROM message_status ms
@@ -361,8 +472,21 @@ export class MessagesService {
         );
         message.statuses = statuses;
 
+        // Get edit history
+        const { rows: editHistory } = await pool.query(
+            `SELECT meh.*, u.full_name AS edited_by_name
+             FROM message_edit_history meh
+             LEFT JOIN users u ON u.id = meh.edited_by
+             WHERE meh.message_id = $1
+             ORDER BY meh.edited_at ASC`,
+            [id]
+        );
+        message.edit_history = editHistory;
+
         return message;
     }
+
+    // ─── Get Messages ───────────────────────────────────────────────────────
 
     static async getMessages(
         filters: MessageFilters = {},
@@ -378,6 +502,16 @@ export class MessagesService {
         `;
         const params: unknown[] = [];
         let paramCount = 1;
+
+        // Exclude messages the user has soft-deleted
+        if (userId) {
+            query += ` AND NOT EXISTS (
+                SELECT 1 FROM message_deletions md 
+                WHERE md.message_id = m.id AND md.user_id = $${paramCount}
+            )`;
+            params.push(userId);
+            paramCount++;
+        }
 
         if (filters.search) {
             query += ` AND m.content ILIKE $${paramCount}`;
@@ -484,12 +618,22 @@ export class MessagesService {
                 [message.id]
             );
             message.statuses = statuses;
+
+            const { rows: editHistory } = await pool.query(
+                `SELECT meh.*, u.full_name AS edited_by_name
+                 FROM message_edit_history meh
+                 LEFT JOIN users u ON u.id = meh.edited_by
+                 WHERE meh.message_id = $1
+                 ORDER BY meh.edited_at ASC`,
+                [message.id]
+            );
+            message.edit_history = editHistory;
         }
 
         return { messages: rows, total };
     }
 
-    // ─── NEW: Get bidirectional DM conversation between two users ────────────
+    // ─── Get Conversation (DM) ─────────────────────────────────────────────
 
     static async getConversation(
         currentUserId: string,
@@ -503,6 +647,10 @@ export class MessagesService {
              FROM messages m
              WHERE m.is_archived = false
                AND m.group_id IS NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM message_deletions md 
+                   WHERE md.message_id = m.id AND md.user_id = $1
+               )
                AND (
                  (m.sender_id = $1 AND m.recipient_id = $2)
                  OR
@@ -512,15 +660,19 @@ export class MessagesService {
         );
         const total = countRows[0]?.total ?? 0;
 
-        // Fetch paginated messages ordered oldest → newest for chat layout
+        // Fetch paginated messages ordered oldest → newest
         const { rows } = await pool.query(
             `SELECT ${MESSAGE_SELECT}
              FROM messages m
-             LEFT JOIN users s  ON s.id  = m.sender_id
+             LEFT JOIN users s ON s.id = m.sender_id
              LEFT JOIN message_groups mg ON mg.id = m.group_id
-             LEFT JOIN users r  ON r.id  = m.recipient_id
+             LEFT JOIN users r ON r.id = m.recipient_id
              WHERE m.is_archived = false
                AND m.group_id IS NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM message_deletions md 
+                   WHERE md.message_id = m.id AND md.user_id = $1
+               )
                AND (
                  (m.sender_id = $1 AND m.recipient_id = $2)
                  OR
@@ -531,7 +683,7 @@ export class MessagesService {
             [currentUserId, otherUserId, limit, offset]
         );
 
-        // Hydrate attachments + statuses
+        // Hydrate attachments + statuses + edit history
         for (const message of rows) {
             const { rows: attachments } = await pool.query(
                 `SELECT * FROM message_attachments WHERE message_id = $1`,
@@ -547,10 +699,96 @@ export class MessagesService {
                 [message.id]
             );
             message.statuses = statuses;
+
+            const { rows: editHistory } = await pool.query(
+                `SELECT meh.*, u.full_name AS edited_by_name
+                 FROM message_edit_history meh
+                 LEFT JOIN users u ON u.id = meh.edited_by
+                 WHERE meh.message_id = $1
+                 ORDER BY meh.edited_at ASC`,
+                [message.id]
+            );
+            message.edit_history = editHistory;
         }
 
         return { messages: rows, total };
     }
+
+// ─── Get Conversations List ─────────────────────────────────────────────
+
+static async getConversationsList(
+    userId: string
+): Promise<Conversation[]> {
+    const { rows } = await pool.query(
+        `SELECT * FROM (
+            SELECT DISTINCT ON (
+                CASE WHEN m.sender_id = $1 THEN m.recipient_id ELSE m.sender_id END
+            )
+                CASE 
+                    WHEN m.sender_id = $1 THEN m.recipient_id
+                    ELSE m.sender_id
+                END AS user_id,
+                u.full_name AS user_name,
+                u.email AS user_email,
+                u.online_status,
+                u.last_seen,
+                m.created_at AS last_message_at,
+                (
+                    SELECT COUNT(*)::int FROM message_status ms
+                    WHERE ms.message_id IN (
+                        SELECT id FROM messages m2
+                        WHERE m2.is_archived = false
+                        AND m2.group_id IS NULL
+                        AND (
+                            (m2.sender_id = $1 AND m2.recipient_id = CASE WHEN m.sender_id = $1 THEN m.recipient_id ELSE m.sender_id END)
+                            OR
+                            (m2.sender_id = CASE WHEN m.sender_id = $1 THEN m.recipient_id ELSE m.sender_id END AND m2.recipient_id = $1)
+                        )
+                    )
+                    AND ms.user_id = $1
+                    AND ms.is_read = false
+                ) AS unread_count,
+                (
+                    SELECT row_to_json(m3)
+                    FROM (
+                        SELECT ${MESSAGE_SELECT}
+                        FROM messages m3
+                        LEFT JOIN users s ON s.id = m3.sender_id
+                        LEFT JOIN message_groups mg ON mg.id = m3.group_id
+                        LEFT JOIN users r ON r.id = m3.recipient_id
+                        WHERE m3.is_archived = false
+                        AND m3.group_id IS NULL
+                        AND (
+                            (m3.sender_id = $1 AND m3.recipient_id = CASE WHEN m.sender_id = $1 THEN m.recipient_id ELSE m.sender_id END)
+                            OR
+                            (m3.sender_id = CASE WHEN m.sender_id = $1 THEN m.recipient_id ELSE m.sender_id END AND m3.recipient_id = $1)
+                        )
+                        ORDER BY m3.created_at DESC
+                        LIMIT 1
+                    ) m3
+                ) AS last_message
+            FROM messages m
+            JOIN users u ON u.id = CASE WHEN m.sender_id = $1 THEN m.recipient_id ELSE m.sender_id END
+            WHERE m.is_archived = false
+            AND m.group_id IS NULL
+            AND (m.sender_id = $1 OR m.recipient_id = $1)
+            AND NOT EXISTS (
+                SELECT 1 FROM message_deletions md 
+                WHERE md.message_id = m.id AND md.user_id = $1
+            )
+            ORDER BY
+                CASE WHEN m.sender_id = $1 THEN m.recipient_id ELSE m.sender_id END,
+                m.created_at DESC
+        ) conversations
+        ORDER BY last_message_at DESC`,
+        [userId]
+    );
+
+        return rows.map(row => ({
+        ...row,
+        last_message: row.last_message ?? null,
+    }));
+}
 
     // ─── Read / Archive ──────────────────────────────────────────────────────
 
@@ -561,7 +799,11 @@ export class MessagesService {
              JOIN messages m ON m.id = ms.message_id
              WHERE ms.user_id = $1 
              AND ms.is_read = false 
-             AND m.is_archived = false`,
+             AND m.is_archived = false
+             AND NOT EXISTS (
+                 SELECT 1 FROM message_deletions md 
+                 WHERE md.message_id = m.id AND md.user_id = $1
+             )`,
             [userId]
         );
 
@@ -574,14 +816,37 @@ export class MessagesService {
              AND ms.is_read = false 
              AND m.is_archived = false
              AND m.group_id IS NOT NULL
+             AND NOT EXISTS (
+                 SELECT 1 FROM message_deletions md 
+                 WHERE md.message_id = m.id AND md.user_id = $1
+             )
              GROUP BY mg.id, mg.name
              ORDER BY mg.name ASC`,
+            [userId]
+        );
+
+        const { rows: senderRows } = await pool.query(
+            `SELECT u.id as sender_id, u.full_name as sender_name, COUNT(*)::int as count
+             FROM message_status ms
+             JOIN messages m ON m.id = ms.message_id
+             JOIN users u ON u.id = m.sender_id
+             WHERE ms.user_id = $1 
+             AND ms.is_read = false 
+             AND m.is_archived = false
+             AND m.group_id IS NULL
+             AND NOT EXISTS (
+                 SELECT 1 FROM message_deletions md 
+                 WHERE md.message_id = m.id AND md.user_id = $1
+             )
+             GROUP BY u.id, u.full_name
+             ORDER BY u.full_name ASC`,
             [userId]
         );
 
         return {
             total: parseInt(totalRows[0]?.total || '0'),
             by_group: groupRows,
+            by_sender: senderRows,
         };
     }
 
@@ -591,11 +856,12 @@ export class MessagesService {
     ): Promise<void> {
         await pool.query(
             `UPDATE message_status 
-             SET is_read = true, read_at = NOW()
+             SET is_read = true, read_at = NOW(), status = 'read'
              WHERE message_id = $1 AND user_id = $2`,
             [messageId, userId]
         );
 
+        // Check if all recipients have read the message
         const { rows } = await pool.query(
             `SELECT COUNT(*) as total, 
                     SUM(CASE WHEN is_read THEN 1 ELSE 0 END) as read_count
@@ -613,10 +879,43 @@ export class MessagesService {
         }
     }
 
+static async markMultipleMessagesAsRead(
+    messageIds: string[],
+    userId: string
+): Promise<{ count: number }> {
+    const result = await pool.query(
+        `UPDATE message_status 
+         SET is_read = true, read_at = NOW(), status = 'read'
+         WHERE user_id = $1 AND message_id = ANY($2) AND is_read = false`,
+        [userId, messageIds]
+    );
+
+    // Update messages that are now fully read
+    for (const messageId of messageIds) {
+        const { rows } = await pool.query(
+            `SELECT COUNT(*) as total, 
+                    SUM(CASE WHEN is_read THEN 1 ELSE 0 END) as read_count
+             FROM message_status
+             WHERE message_id = $1`,
+            [messageId]
+        );
+
+        if (rows[0].total > 0 && rows[0].total === rows[0].read_count) {
+            await pool.query(
+                `UPDATE messages SET is_read = true, read_at = NOW()
+                 WHERE id = $1`,
+                [messageId]
+            );
+        }
+    }
+
+    return { count: result.rowCount ?? 0 };
+}
+
     static async markAllRead(userId: string, groupId?: string): Promise<void> {
         let query = `
             UPDATE message_status 
-            SET is_read = true, read_at = NOW()
+            SET is_read = true, read_at = NOW(), status = 'read'
             WHERE user_id = $1 AND is_read = false
         `;
         const params: unknown[] = [userId];

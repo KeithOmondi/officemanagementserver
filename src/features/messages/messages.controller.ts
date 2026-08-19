@@ -1,3 +1,5 @@
+// src/features/messages/messages.controller.ts
+
 import { Request, Response } from 'express';
 import { asyncHandler } from '../../utils/asyncHandler';
 import { AppError, sendSuccess } from '../../utils/response';
@@ -8,10 +10,15 @@ import {
     addGroupMembersSchema,
     removeGroupMemberSchema,
     sendMessageSchema,
+    editMessageSchema,
+    deleteMessageSchema,
+    markMessageReadSchema,
+    markMultipleMessagesReadSchema,
     messageFiltersSchema,
     messageIdSchema,
     groupIdSchema,
     conversationParamsSchema,
+    unreadCountSchema,
 } from './messages.validator';
 
 export const messagesController = {
@@ -135,7 +142,38 @@ export const messagesController = {
         return sendSuccess(res, message, 'Message sent', 201);
     }),
 
-    // ─── NEW: Get bidirectional DM conversation ─────────────────────────────
+    // ─── NEW: Edit Message ─────────────────────────────────────────────────
+
+    editMessage: asyncHandler(async (req: Request, res: Response) => {
+        const result = editMessageSchema.safeParse({ params: req.params, body: req.body });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
+        }
+        const message = await MessagesService.editMessage(
+            result.data.params.id,
+            result.data.body,
+            req.user!.id
+        );
+        return sendSuccess(res, message, 'Message edited successfully');
+    }),
+
+    // ─── NEW: Delete Message ──────────────────────────────────────────────
+
+    deleteMessage: asyncHandler(async (req: Request, res: Response) => {
+        const result = deleteMessageSchema.safeParse({ params: req.params, body: req.body });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
+        }
+        await MessagesService.deleteMessage(
+            result.data.params.id,
+            result.data.body,
+            req.user!.id,
+            req.user!.role
+        );
+        return sendSuccess(res, null, 'Message deleted successfully');
+    }),
+
+    // ─── Get Conversation (DM) ─────────────────────────────────────────────
 
     getConversation: asyncHandler(async (req: Request, res: Response) => {
         const result = conversationParamsSchema.safeParse({ params: req.params, query: req.query });
@@ -146,7 +184,6 @@ export const messagesController = {
         const { userId } = result.data.params;
         const { limit, offset } = result.data.query;
 
-        // Prevent fetching a "conversation with yourself"
         if (userId === req.user!.id) {
             throw new AppError(400, 'Cannot fetch conversation with yourself');
         }
@@ -161,6 +198,13 @@ export const messagesController = {
         return sendSuccess(res, { messages, total }, 'Conversation retrieved');
     }),
 
+    // ─── Get Conversations List ────────────────────────────────────────────
+
+    getConversationsList: asyncHandler(async (req: Request, res: Response) => {
+        const conversations = await MessagesService.getConversationsList(req.user!.id);
+        return sendSuccess(res, conversations, 'Conversations retrieved');
+    }),
+
     // ─── Message Status ─────────────────────────────────────────────────────
 
     getUnreadCount: asyncHandler(async (req: Request, res: Response) => {
@@ -169,7 +213,7 @@ export const messagesController = {
     }),
 
     markAsRead: asyncHandler(async (req: Request, res: Response) => {
-        const result = messageIdSchema.safeParse({ params: req.params });
+        const result = markMessageReadSchema.safeParse({ params: req.params });
         if (!result.success) {
             throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
         }
@@ -177,9 +221,24 @@ export const messagesController = {
         return sendSuccess(res, null, 'Message marked as read');
     }),
 
+    markMultipleAsRead: asyncHandler(async (req: Request, res: Response) => {
+        const result = markMultipleMessagesReadSchema.safeParse({ body: req.body });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
+        }
+        const { count } = await MessagesService.markMultipleMessagesAsRead(
+            result.data.body.message_ids,
+            req.user!.id
+        );
+        return sendSuccess(res, { count }, `${count} messages marked as read`);
+    }),
+
     markAllRead: asyncHandler(async (req: Request, res: Response) => {
-        const { groupId } = req.query;
-        await MessagesService.markAllRead(req.user!.id, groupId as string | undefined);
+        const result = unreadCountSchema.safeParse({ query: req.query });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid query');
+        }
+        await MessagesService.markAllRead(req.user!.id, result.data.query.group_id);
         return sendSuccess(res, null, 'All messages marked as read');
     }),
 

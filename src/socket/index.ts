@@ -33,18 +33,13 @@ interface TypingData {
 
 // ─── Real-time Event Emitters ──────────────────────────────────────────────
 
-/**
- * Emit document update events
- */
 export function emitDocumentUpdate(io: SocketServer, document: any, userId?: string) {
   if (userId) {
     io.to(`user:${userId}`).emit('document_updated', document);
   }
-  // Also emit to document room
-  if (document.id) {
+  if (document?.id) {
     io.to(`document:${document.id}`).emit('document_updated', document);
   }
-  // Broadcast to all
   io.emit('document_updated', document);
 }
 
@@ -58,15 +53,11 @@ export function emitDocumentDeleted(io: SocketServer, documentId: string) {
 
 export function emitMarkUpdate(io: SocketServer, markData: any, userId: string) {
   io.to(`user:${userId}`).emit('mark_updated', markData);
-  // Also emit to document room
-  if (markData.document_id) {
+  if (markData?.document_id) {
     io.to(`document:${markData.document_id}`).emit('mark_updated', markData);
   }
 }
 
-/**
- * Emit Aide request events
- */
 export function emitAideUpdate(io: SocketServer, aide: any) {
   io.emit('aide_updated', aide);
 }
@@ -79,9 +70,6 @@ export function emitAideDeleted(io: SocketServer, aideId: string) {
   io.emit('aide_deleted', aideId);
 }
 
-/**
- * Emit Notification events
- */
 export function emitNotification(io: SocketServer, notification: any, userId: string) {
   io.to(`user:${userId}`).emit('notification', notification);
 }
@@ -90,9 +78,6 @@ export function emitBroadcastNotification(io: SocketServer, notification: any) {
   io.emit('broadcast_notification', notification);
 }
 
-/**
- * Emit User status events
- */
 export function emitUserStatusUpdate(io: SocketServer, userId: string, status: 'online' | 'offline' | 'away') {
   io.emit('user_status', { userId, status });
 }
@@ -232,11 +217,14 @@ export function setupWebSocket(server: Server) {
     },
     path: '/socket.io',
     transports: ['websocket', 'polling'],
+    pingTimeout: 60000,
+    pingInterval: 25000,
   });
 
   // ── Authentication Middleware ──────────────────────────────────────────────
   io.use(async (socket, next) => {
-    const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.replace('Bearer ', '');
+    const token = socket.handshake.auth.token || 
+                  socket.handshake.headers.authorization?.replace('Bearer ', '');
     
     if (!token) {
       return next(new Error('Authentication required'));
@@ -256,7 +244,7 @@ export function setupWebSocket(server: Server) {
     const user = socket.data.user as SocketUser;
     console.log(`🔌 User connected: ${user.full_name} (${user.id})`);
 
-    // Join user's personal room for direct messages
+    // Join user's personal room
     socket.join(`user:${user.id}`);
 
     // Join group rooms
@@ -267,10 +255,12 @@ export function setupWebSocket(server: Server) {
         [user.id]
       );
 
+      for (const row of rows) {
+        socket.join(`group:${row.group_id}`);
+      }
+      
       if (rows.length > 0) {
-        const targetRooms = rows.map((row) => `group:${row.group_id}`);
-        await socket.join(targetRooms);
-        console.log(`📨 ${user.full_name} batch-joined ${rows.length} group rooms`);
+        console.log(`📨 ${user.full_name} joined ${rows.length} group rooms`);
       }
     } catch (err) {
       console.error('Error joining group rooms:', err);
@@ -279,7 +269,7 @@ export function setupWebSocket(server: Server) {
     // ── Send Message ────────────────────────────────────────────────────────
     socket.on('send_message', async (data: SendMessageData, callback) => {
       try {
-        if (!data.content) {
+        if (!data?.content) {
           return callback({ success: false, error: 'Message content is required' });
         }
 
@@ -301,28 +291,30 @@ export function setupWebSocket(server: Server) {
 
     // ── Typing Indicator ────────────────────────────────────────────────────
     socket.on('typing', (data: TypingData) => {
+      if (!data) return;
+      
+      const typingEvent = {
+        user_id: user.id,
+        user_name: user.full_name,
+        is_typing: data.is_typing,
+      };
+
       if (data.group_id) {
-        socket.to(`group:${data.group_id}`).emit('typing', {
-          user_id: user.id,
-          user_name: user.full_name,
-          is_typing: data.is_typing,
-        });
+        socket.to(`group:${data.group_id}`).emit('typing', typingEvent);
       } else if (data.recipient_id) {
-        io.to(`user:${data.recipient_id}`).emit('typing', {
-          user_id: user.id,
-          user_name: user.full_name,
-          is_typing: data.is_typing,
-        });
+        io.to(`user:${data.recipient_id}`).emit('typing', typingEvent);
       }
     });
 
     // ── Mark Message as Read ────────────────────────────────────────────────
     socket.on('mark_read', async ({ message_id }: { message_id: string }) => {
+      if (!message_id) return;
+      
       try {
         await markMessageAsRead(message_id, user.id);
         
         const message = await getMessage(message_id);
-        if (message && message.sender_id) {
+        if (message?.sender_id) {
           io.to(`user:${message.sender_id}`).emit('message_read', {
             message_id,
             user_id: user.id,
@@ -354,45 +346,51 @@ export function setupWebSocket(server: Server) {
       }
     });
 
-    // ── Join Document Room ──────────────────────────────────────────────────
+    // ── Document Rooms ──────────────────────────────────────────────────────
     socket.on('join_document_room', (documentId: string) => {
-      socket.join(`document:${documentId}`);
-      console.log(`📄 ${user.full_name} joined document room: ${documentId}`);
+      if (documentId) {
+        socket.join(`document:${documentId}`);
+        console.log(`📄 ${user.full_name} joined document: ${documentId}`);
+      }
     });
 
     socket.on('leave_document_room', (documentId: string) => {
-      socket.leave(`document:${documentId}`);
-      console.log(`📄 ${user.full_name} left document room: ${documentId}`);
+      if (documentId) {
+        socket.leave(`document:${documentId}`);
+        console.log(`📄 ${user.full_name} left document: ${documentId}`);
+      }
     });
 
-    // ── Join Aide Room ──────────────────────────────────────────────────────
+    // ── Aide Rooms ──────────────────────────────────────────────────────────
     socket.on('join_aide_room', (aideId: string) => {
-      socket.join(`aide:${aideId}`);
-      console.log(`🛡️ ${user.full_name} joined aide room: ${aideId}`);
+      if (aideId) {
+        socket.join(`aide:${aideId}`);
+        console.log(`🛡️ ${user.full_name} joined aide: ${aideId}`);
+      }
     });
 
     socket.on('leave_aide_room', (aideId: string) => {
-      socket.leave(`aide:${aideId}`);
-      console.log(`🛡️ ${user.full_name} left aide room: ${aideId}`);
+      if (aideId) {
+        socket.leave(`aide:${aideId}`);
+        console.log(`🛡️ ${user.full_name} left aide: ${aideId}`);
+      }
     });
 
     // ── Disconnect ──────────────────────────────────────────────────────────
-    socket.on('disconnect', (reason) => {
-      console.log(`🔌 User disconnected: ${user.full_name} (${user.id}) | Reason: ${reason}`);
+    socket.on('disconnect', () => {
+      console.log(`🔌 User disconnected: ${user.full_name} (${user.id})`);
       
+      // Clean up all rooms except the user's personal room
       for (const room of socket.rooms) {
-        if (room !== socket.id) {
+        if (room !== socket.id && room !== `user:${user.id}`) {
           socket.leave(room);
         }
       }
-      
-      socket.removeAllListeners();
     });
 
     // ── Error Handler ──────────────────────────────────────────────────────
     socket.on('error', (error) => {
       console.error(`Socket error for ${user.full_name}:`, error);
-      socket.disconnect(true);
     });
   });
 

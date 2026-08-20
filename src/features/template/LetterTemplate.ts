@@ -335,12 +335,13 @@ export function getLetterHTML(data: LetterData): string {
           line-height: 1.25;
         }
 
-        .body-content p {
-          margin-bottom: 5px;
-          text-align: left;
-          orphans: 2;
-          widows: 2;
-        }
+       .body-content p {
+  margin-bottom: 5px;
+  text-align: justify;
+  text-justify: inter-word;
+  orphans: 2;
+  widows: 2;
+}
 
         /* Signature Section - Reserved Box for Stamper */
         .signature-section {

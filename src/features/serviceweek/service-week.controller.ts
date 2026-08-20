@@ -98,12 +98,7 @@ export const serviceWeekController = {
       throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
     }
 
-    // NOTE: ServiceWeekExportService.generatePDF currently requires a
-    // userId — needs the same nullable-param treatment we gave the
-    // service layer, since req.user is undefined on the public route.
-  // service-week.controller.ts — generatePDF, update this one line
-const pdfBuffer = await ServiceWeekExportService.generatePDF(result.data.params.id);
-// was: ServiceWeekExportService.generatePDF(result.data.params.id, req.user?.id ?? null);
+    const pdfBuffer = await ServiceWeekExportService.generatePDF(result.data.params.id);
 
     const filename = `service-week-report-${result.data.params.id}.pdf`;
     res.setHeader('Content-Type', 'application/pdf');
@@ -140,9 +135,6 @@ const pdfBuffer = await ServiceWeekExportService.generatePDF(result.data.params.
   }),
 
   // ─── Generate Summary Report (aggregate PDF across submissions) ─────────
-  // NOTE: ServiceWeekExportService needs a new generateSummaryPDF method
-  // to accept an array of reports and produce one combined document —
-  // this doesn't exist yet, see below.
 
   generateSummaryReport: asyncHandler(async (req: Request, res: Response) => {
     const result = serviceWeekFiltersSchema.safeParse({ query: req.query });

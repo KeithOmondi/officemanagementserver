@@ -26,14 +26,6 @@ export interface ServiceWeekReport {
   prepared_designation: string;
   prepared_signature?: string;
   prepared_date?: string;
-  confirmed_by?: string;
-  confirmed_designation?: string;
-  confirmed_signature?: string;
-  confirmed_date?: string;
-  approved_by?: string;
-  approved_designation?: string;
-  approved_signature?: string;
-  approved_date?: string;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -51,12 +43,6 @@ export interface CreateServiceWeekPayload {
   prepared_by: string;
   prepared_designation: string;
   prepared_date?: string;
-  confirmed_by?: string;
-  confirmed_designation?: string;
-  confirmed_date?: string;
-  approved_by?: string;
-  approved_designation?: string;
-  approved_date?: string;
   saveAsDraft?: boolean;
 }
 
@@ -71,12 +57,6 @@ export interface UpdateServiceWeekPayload {
   prepared_by?: string;
   prepared_designation?: string;
   prepared_date?: string;
-  confirmed_by?: string;
-  confirmed_designation?: string;
-  confirmed_date?: string;
-  approved_by?: string;
-  approved_designation?: string;
-  approved_date?: string;
   status?: ServiceWeekStatus;
 }
 
@@ -132,3 +112,26 @@ export const SERVICE_WEEK_STATUS_COLORS: Record<ServiceWeekStatus, string> = {
   draft: 'bg-gray-100 text-gray-800',
   submitted: 'bg-yellow-100 text-yellow-800',
 };
+
+// ─── Form Types ────────────────────────────────────────────────────────────
+
+export interface ServiceWeekFormValues {
+  station: string;
+  division: string;
+  week_start: string;
+  week_end: string;
+  date: string;
+  judge_name: string;
+  cases: CaseReturnFormValues[];
+  prepared_by: string;
+  prepared_designation: string;
+  prepared_date: string;
+}
+
+export interface CaseReturnFormValues {
+  serial_number: number | '';
+  case_number: string;
+  cause_listed_activity: string;
+  outcome: string;
+  remarks: string;
+}

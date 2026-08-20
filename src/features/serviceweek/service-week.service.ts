@@ -14,8 +14,6 @@ const REPORT_SELECT = `
   id, station, division, week_start, week_end, date, judge_name,
   cases, status, 
   prepared_by, prepared_designation, prepared_signature, prepared_date,
-  confirmed_by, confirmed_designation, confirmed_signature, confirmed_date,
-  approved_by, approved_designation, approved_signature, approved_date,
   created_by, created_at, updated_at, submitted_at
 `;
 
@@ -36,10 +34,8 @@ export class ServiceWeekService {
         station, division, week_start, week_end, date, judge_name,
         cases, status,
         prepared_by, prepared_designation, prepared_signature, prepared_date,
-        confirmed_by, confirmed_designation, confirmed_signature, confirmed_date,
-        approved_by, approved_designation, approved_signature, approved_date,
         created_by, submitted_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       RETURNING ${REPORT_SELECT}`,
       [
         input.station,
@@ -54,14 +50,6 @@ export class ServiceWeekService {
         input.prepared_designation,
         null,
         input.prepared_date || null,
-        input.confirmed_by || null,
-        input.confirmed_designation || null,
-        null,
-        input.confirmed_date || null,
-        input.approved_by || null,
-        input.approved_designation || null,
-        null,
-        input.approved_date || null,
         null, // created_by — always null; there is no logged-in submitter on this route
         submittedAt,
       ]
@@ -126,12 +114,6 @@ export class ServiceWeekService {
     setField('prepared_by', input.prepared_by);
     setField('prepared_designation', input.prepared_designation);
     setField('prepared_date', input.prepared_date);
-    setField('confirmed_by', input.confirmed_by);
-    setField('confirmed_designation', input.confirmed_designation);
-    setField('confirmed_date', input.confirmed_date);
-    setField('approved_by', input.approved_by);
-    setField('approved_designation', input.approved_designation);
-    setField('approved_date', input.approved_date);
 
     if (input.status) {
       setField('status', input.status);
@@ -320,14 +302,6 @@ export class ServiceWeekService {
       prepared_designation: row.prepared_designation,
       prepared_signature: row.prepared_signature,
       prepared_date: row.prepared_date,
-      confirmed_by: row.confirmed_by,
-      confirmed_designation: row.confirmed_designation,
-      confirmed_signature: row.confirmed_signature,
-      confirmed_date: row.confirmed_date,
-      approved_by: row.approved_by,
-      approved_designation: row.approved_designation,
-      approved_signature: row.approved_signature,
-      approved_date: row.approved_date,
       created_by: row.created_by,
       created_at: row.created_at,
       updated_at: row.updated_at,

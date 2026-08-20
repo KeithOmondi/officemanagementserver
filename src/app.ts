@@ -40,6 +40,7 @@ import stationEngagementRoutes from './features/station-engagement/station-engag
 import principalregistryreportsRoutes from "./features/principleregistry/principal-registry-report.routes"
 import activityRoutes from "./features/activitytracking/activity-tracking.routes"
 import serviceweekRoutes from "./features/serviceweek/service-week.routes"
+import surveysRoutes from "./features/survey/surveys.routes"
 import joRoutes from "./features/jo/jo.routes"
 
 
@@ -122,6 +123,7 @@ app.use('/api/v1/station-engagement', stationEngagementRoutes);
 app.use('/api/v1/principal-registry-reports', principalregistryreportsRoutes);
 app.use('/api/v1/activity-log', activityRoutes);
 app.use('/api/v1/service-week', serviceweekRoutes);
+app.use('/api/v1/surveys', surveysRoutes);
 app.use('/api/v1/jo', joRoutes)
 // aidesRoutes defines its own '/aide/*' and '/sentry/*' sub-paths internally,
 // so it must be mounted at the '/api/v1' root — not '/api/v1/aide' — or

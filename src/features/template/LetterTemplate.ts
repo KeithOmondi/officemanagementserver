@@ -483,7 +483,6 @@ export function getLetterHTML(data: LetterData): string {
                 <img src="${escapeHtml(footerEmblemUrl)}" alt="STAJ Emblem" />
               </td>
               <td class="footer-text-cell">
-                <div class="footer-tagline-top">Social Transformation through Access to Justice</div>
                 <p>Milimani Law Courts | 3<sup>rd</sup> Floor, Chamber 337 | P.O. Box 30041-00100 | Nairobi</p>
                 <p>Tel. +254 0730 181478 | registrarhighcourt@court.go.ke | www.judiciary.go.ke</p>
                 <div class="footer-tagline-bottom">Justice Be Our Shield and Defender</div>

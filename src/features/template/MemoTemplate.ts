@@ -148,10 +148,19 @@ export function getMemoHTML(data: MemoData): string {
 
   const escaped = (value: string) => escapeHtml(value);
 
+  // ─── FIX: Convert newlines to <br/> for CC field ───
+  // ─── FIX: Give each CC recipient its own line (split on commas and/or newlines) ───
+const ccValue = (cc || "")
+  .split(/\n|,/)
+  .map((name) => name.trim())
+  .filter(Boolean)
+  .map((name) => escapeHtml(name))
+  .join('<br/>');
+
   const fields = [
     { label: "TO", value: to },
     { label: "FROM", value: from },
-    { label: "CC", value: cc || "" },
+    { label: "CC", value: ccValue },
     { label: "REF", value: ref },
     { label: "DATE", value: date },
     { label: "SUBJECT", value: subject },
@@ -164,14 +173,23 @@ export function getMemoHTML(data: MemoData): string {
     : filteredFields;
 
   const fieldsHtml = orderedFields
-    .map(
-      ({ label, value }) => `
-    <div class="field">
-      <span class="label">${label}</span>
-      <span class="colon">:</span>
-      <span class="value">${escaped(value)}</span>
-    </div>`
-    )
+    .map(({ label, value }) => {
+      // For CC field, render HTML without escaping (contains <br/>)
+      if (label === "CC") {
+        return `
+          <div class="field">
+            <span class="label">${label}</span>
+            <span class="colon">:</span>
+            <span class="value cc-value">${value}</span>
+          </div>`;
+      }
+      return `
+        <div class="field">
+          <span class="label">${label}</span>
+          <span class="colon">:</span>
+          <span class="value">${escaped(value)}</span>
+        </div>`;
+    })
     .join("");
 
   const attachmentsHtml = attachments.length > 0 ? `
@@ -233,6 +251,12 @@ export function getMemoHTML(data: MemoData): string {
     .field .label { width: 100px; flex-shrink: 0; text-transform: uppercase; }
     .field .colon { width: 20px; flex-shrink: 0; }
     .field .value { flex: 1; text-transform: uppercase; }
+    
+    /* CC field with line breaks preserved */
+    .field .value.cc-value {
+      white-space: pre-line;
+      text-transform: uppercase;
+    }
     
     .bottom-rule { border-top: 2.5px solid #000; margin: 10px 0 16px; }
     

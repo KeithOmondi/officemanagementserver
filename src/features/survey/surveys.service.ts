@@ -78,6 +78,12 @@ function validateFieldOptions(field: SurveyField, value: string | string[] | und
   if (field.type !== 'dropdown' && field.type !== 'checkbox') return null;
   if (isEmptyValue(value)) return null; // required-ness is checked separately
 
+  // ✅ FIX: If dropdown allows "Other", skip validation for custom values
+  if (field.type === 'dropdown' && field.allow_other) {
+    // For dropdown with "Other", any value is valid (including custom text)
+    return null;
+  }
+
   const options = field.options ?? [];
   const submitted = Array.isArray(value) ? value : [value as string];
   const invalid = submitted.filter((v) => !options.includes(v));

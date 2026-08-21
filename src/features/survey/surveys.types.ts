@@ -13,6 +13,7 @@ export interface SurveyField {
   help_text?: string; // Optional help text displayed below the field
   min?: number; // For text/number fields - minimum value or length. For numbered_list: minimum number of items
   max?: number; // For text/number fields - maximum value or length. For numbered_list: maximum number of items
+  allow_other?: boolean; // ONLY for 'dropdown' - allows users to type a custom answer
 }
 
 export type SurveyStatus = 'draft' | 'active' | 'closed';
@@ -57,6 +58,7 @@ export interface DraftSurveyField {
   help_text?: string; // Optional help text
   min?: number; // For text/number fields. For numbered_list: minimum number of items
   max?: number; // For text/number fields. For numbered_list: maximum number of items
+  allow_other?: boolean; // ONLY for 'dropdown' - allows users to type a custom answer
 }
 
 export interface CreateSurveyInput {

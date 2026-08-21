@@ -17,6 +17,7 @@ const draftFieldSchema = z
     help_text: z.string().max(500).optional(), // Help text displayed below the field
     min: z.number().int().optional(), // Minimum value/length for validation. For numbered_list: min items
     max: z.number().int().optional(), // Maximum value/length for validation. For numbered_list: max items
+    allow_other: z.boolean().optional(), // ONLY for 'dropdown' - allows users to type a custom answer
   })
   .refine((f) => (f.type !== 'dropdown' && f.type !== 'checkbox') || (f.options && f.options.length > 0), {
     message: 'Dropdown and checkbox fields need at least one option',
@@ -89,6 +90,19 @@ const draftFieldSchema = z
     {
       message: 'numbered_list fields need at least min or max defined (must be >= 1)',
       path: ['min'],
+    }
+  )
+  .refine(
+    (f) => {
+      // allow_other only makes sense for dropdown fields
+      if (f.allow_other && f.type !== 'dropdown') {
+        return false;
+      }
+      return true;
+    },
+    {
+      message: 'allow_other can only be used with dropdown fields',
+      path: ['allow_other'],
     }
   );
 

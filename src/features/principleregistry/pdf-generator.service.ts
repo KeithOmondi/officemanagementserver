@@ -362,29 +362,40 @@ export class PDFGeneratorService {
       const bannerColor = sectionIndex === 0 ? BANNER_BLUE : BANNER_GREEN;
       yPos = this.drawBanner(doc, section.title, leftMargin, yPos, contentWidth, bannerColor);
 
+      // If the section has no items, show a placeholder
+      if (!section.items || section.items.length === 0) {
+        doc.setFontSize(10);
+        doc.setFont('times', 'italic');
+        doc.setTextColor('#9CA3AF');
+        doc.text('No data provided', leftMargin + 6, yPos);
+        yPos += 8;
+        yPos += 3;
+        return;
+      }
+
       for (const item of section.items) {
         if (yPos > bottomLimit) {
           doc.addPage();
           yPos = 16;
         }
 
-        // Label on its own line — always. Mixing "same line" and "next line"
-        // layouts based on measured width is what caused label/value text to
-        // collide (e.g. a long label butting straight into its answer with no
-        // gap). Stacking unconditionally guarantees consistent spacing no
-        // matter how long the label or value is.
+        // Check if the item has a meaningful value
+        const hasValue = this.hasMeaningfulValue(item.value);
+        const displayValue = hasValue ? item.formattedValue || this.formatValueForDisplay(item) : 'Not provided';
+
+        // Label on its own line
         doc.setFontSize(10.5);
         doc.setFont('times', 'bold');
         doc.setTextColor(TEXT_DARK);
         const labelLines = doc.splitTextToSize(`${item.label}:`, contentWidth - 4);
         doc.text(labelLines, leftMargin + 2, yPos);
-        yPos += labelLines.length * 5 + 2; // gap between label and its answer
+        yPos += labelLines.length * 5 + 2;
 
-        const valueText = item.formattedValue || this.formatValueForDisplay(item);
+        // Value
         doc.setFontSize(10);
-        doc.setFont('times', 'normal');
-        doc.setTextColor('#33393F');
-        const valueLines = doc.splitTextToSize(valueText, contentWidth - 8);
+        doc.setFont('times', hasValue ? 'normal' : 'italic');
+        doc.setTextColor(hasValue ? '#33393F' : '#9CA3AF');
+        const valueLines = doc.splitTextToSize(displayValue, contentWidth - 8);
         doc.text(valueLines, leftMargin + 6, yPos);
         yPos += valueLines.length * 5.2;
 
@@ -395,6 +406,30 @@ export class PDFGeneratorService {
     });
 
     return yPos;
+  }
+
+  /**
+   * Check if a value has meaningful content (not empty, not just whitespace)
+   */
+  private static hasMeaningfulValue(value: any): boolean {
+    if (value === null || value === undefined) return false;
+    if (typeof value === 'string') return value.trim().length > 0 && value.trim() !== 'Not provided';
+    if (Array.isArray(value)) {
+      // Check if array has any non-empty items
+      return value.some(item => {
+        if (typeof item === 'string') return item.trim().length > 0;
+        return item !== null && item !== undefined;
+      });
+    }
+    if (typeof value === 'object') {
+      // Check if object has any non-empty values
+      return Object.values(value).some(v => {
+        if (typeof v === 'string') return v.trim().length > 0;
+        if (Array.isArray(v)) return v.length > 0;
+        return v !== null && v !== undefined;
+      });
+    }
+    return true;
   }
 
   /**
@@ -511,7 +546,11 @@ export class PDFGeneratorService {
 
     switch (type) {
       case 'list':
-        return Array.isArray(value) ? value.map((v, i) => `${i + 1}. ${v}`).join('\n') : String(value);
+        if (Array.isArray(value)) {
+          if (value.length === 0) return 'None provided';
+          return value.map((v, i) => `${i + 1}. ${v}`).join('\n');
+        }
+        return String(value);
       case 'boolean':
         return value ? 'Yes' : 'No';
       case 'date':
@@ -525,6 +564,7 @@ export class PDFGeneratorService {
         }
       case 'date_list':
         if (Array.isArray(value)) {
+          if (value.length === 0) return 'None provided';
           return value
             .map((v) => {
               try {

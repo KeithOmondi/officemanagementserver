@@ -129,13 +129,36 @@ export interface PrincipalRegistryWeeklyReport {
   updatedAt: string;
 }
 
-// --- Request DTOs ---
+// ─── UPDATE: Make all fields optional for partial updates ────────
+
+// For creation - all required
 export type CreateReportDto = Omit<
   PrincipalRegistryWeeklyReport,
   'id' | 'status' | 'createdBy' | 'createdAt' | 'updatedAt'
 >;
 
-export type UpdateReportDto = Partial<CreateReportDto>;
+// For updates - ALL fields optional (partial)
+export type UpdateReportDto = Partial<{
+  weekEndingDates: string[];
+  reportPeriodStart: string;
+  reportPeriodEnd: string;
+  departmentId: string;
+  status: ReportStatus;
+  administrativeOverview: AdministrativeOverview;
+  caseManagement: CaseManagement;
+  automationStatus: AutomationStatus;
+  serviceDeliveryChallenges: ServiceDeliveryChallenges;
+  highlights: Highlights;
+  otherInformation: OtherInformation;
+  pdfPublicId: string | null;
+  pdfSecureUrl: string | null;
+  pdfFileName: string | null;
+  pdfGeneratedAt: string | null;
+  submittedAt: string | null;
+  reviewedAt: string | null;
+  reviewedBy: string | null;
+  reviewNotes: string | null;
+}>;
 
 export interface ReviewReportDto {
   reviewNotes?: string;
@@ -179,7 +202,7 @@ export interface PDFGenerationResult {
   fileSize?: number;
   publicId?: string;
   secureUrl?: string;
-  base64?: string; // ✅ Add this
+  base64?: string;
 }
 
 // ─── PDF Report Metadata ──────────────────────────────────────────
@@ -327,6 +350,7 @@ export interface CreateReportRequest {
   status?: ReportStatus;
 }
 
+// ─── UPDATE: Make all fields optional for updates ────────────────
 export interface UpdateReportRequest {
   weekEndingDates?: string[];
   reportPeriodStart?: string;
@@ -339,6 +363,14 @@ export interface UpdateReportRequest {
   highlights?: Highlights;
   otherInformation?: OtherInformation;
   status?: ReportStatus;
+  pdfPublicId?: string | null;
+  pdfSecureUrl?: string | null;
+  pdfFileName?: string | null;
+  pdfGeneratedAt?: string | null;
+  submittedAt?: string | null;
+  reviewedAt?: string | null;
+  reviewedBy?: string | null;
+  reviewNotes?: string | null;
 }
 
 export interface ReviewReportRequest {
@@ -439,65 +471,38 @@ export const getStatusColor = (status: ReportStatus): string => {
 
 // ─── Workflow Helpers ──────────────────────────────────────────────
 
-/**
- * Check if a report can be edited (draft status only)
- */
 export const canEdit = (report: PrincipalRegistryWeeklyReport): boolean => {
   return report.status === 'draft';
 };
 
-/**
- * Check if a report can be submitted (draft status + PDF must be attached)
- */
 export const canSubmit = (report: PrincipalRegistryWeeklyReport): boolean => {
   return report.status === 'draft' && !!report.pdfSecureUrl;
 };
 
-/**
- * Check if a report can be reviewed (submitted status only)
- */
 export const canReview = (report: PrincipalRegistryWeeklyReport): boolean => {
   return report.status === 'submitted';
 };
 
-/**
- * Check if a report can be archived (reviewed status only)
- */
 export const canArchive = (report: PrincipalRegistryWeeklyReport): boolean => {
   return report.status === 'reviewed';
 };
 
-/**
- * Check if PDF can be generated (draft or submitted status)
- */
 export const canGeneratePDF = (report: PrincipalRegistryWeeklyReport): boolean => {
   return report.status === 'draft' || report.status === 'submitted';
 };
 
-/**
- * Check if PDF can be viewed (must have PDF attached)
- */
 export const canViewPDF = (report: PrincipalRegistryWeeklyReport): boolean => {
   return !!report.pdfSecureUrl;
 };
 
-/**
- * Check if PDF is attached to the report
- */
 export const hasPDFAttached = (report: PrincipalRegistryWeeklyReport): boolean => {
   return !!report.pdfSecureUrl && !!report.pdfPublicId;
 };
 
-/**
- * Get submission status label
- */
 export const getSubmissionStatusLabel = (status: SubmissionStatus): string => {
   return SUBMISSION_STATUS_LABELS[status] || status;
 };
 
-/**
- * Get submission status color
- */
 export const getSubmissionStatusColor = (status: SubmissionStatus): string => {
   return SUBMISSION_STATUS_COLORS[status] || 'gray';
 };

@@ -68,6 +68,35 @@ function normalizeDateArray(dates: any[] | null | undefined): string[] | null {
   return dates.map(date => normalizeDate(date)).filter(Boolean) as string[];
 }
 
+/**
+ * Checks if an object has any non-undefined values
+ */
+function hasValues(obj: any): boolean {
+  if (!obj || typeof obj !== 'object') return false;
+  return Object.values(obj).some(v => v !== undefined && v !== null);
+}
+
+/**
+ * Deeply removes undefined values from an object
+ */
+function removeUndefined<T extends Record<string, any>>(obj: T): Partial<T> {
+  const result: Partial<T> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      // If it's an object, recursively clean it
+      if (value && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
+        const cleaned = removeUndefined(value);
+        if (Object.keys(cleaned).length > 0) {
+          result[key as keyof T] = cleaned as any;
+        }
+      } else {
+        result[key as keyof T] = value;
+      }
+    }
+  }
+  return result;
+}
+
 function mapRowToReport(row: any): PrincipalRegistryWeeklyReport {
   return {
     id: row.id,
@@ -158,6 +187,8 @@ function mapRowToPdfMetadata(row: any): PDFReportMetadata {
     lastDownloadedAt: row.last_downloaded_at,
   };
 }
+
+// ─── Field Mappings ────────────────────────────────────────────────────────────
 
 const FIELD_TO_COLUMN: Record<string, string> = {
   weekEndingDates: 'week_ending_dates',
@@ -294,22 +325,38 @@ class PrincipalRegistryReportServiceImpl {
    * Updates a report with automatic date normalization for all date fields.
    * Handles ISO strings (e.g., "2026-08-17T00:00:00.000Z") and converts them
    * to YYYY-MM-DD format for PostgreSQL date columns.
+   * 
+   * Supports partial updates - only fields present in the input will be updated.
    */
   async update(
     id: string,
     input: UpdateReportInput
   ): Promise<PrincipalRegistryWeeklyReport | null> {
+    // First check if the report exists
+    const existing = await this.findById(id);
+    if (!existing) {
+      return null;
+    }
+
+    // Clean the input - remove undefined values and empty objects
+    const cleanedInput = removeUndefined(input);
+    
+    // If no fields to update, return the existing report
+    if (Object.keys(cleanedInput).length === 0) {
+      return existing;
+    }
+
     const setClauses: string[] = [];
     const values: any[] = [];
     let idx = 1;
 
-    // Process each field in the input
+    // Process each field in the cleaned input
     for (const [key, column] of Object.entries(FIELD_TO_COLUMN)) {
-      if (!(key in input)) continue;
+      if (!(key in cleanedInput)) continue;
       
-      let val = (input as any)[key];
+      let val = (cleanedInput as any)[key];
       
-      // Skip undefined or null values (but allow explicit null)
+      // Skip undefined values (already handled by removeUndefined)
       if (val === undefined) continue;
       
       // ─── Normalize date fields ──────────────────────────────
@@ -324,17 +371,27 @@ class PrincipalRegistryReportServiceImpl {
       
       // ─── Stringify JSON fields ──────────────────────────────
       if (JSON_FIELDS.includes(key) && val !== null) {
-        val = JSON.stringify(val);
+        // For partial updates, merge with existing data
+        if (typeof val === 'object' && !Array.isArray(val)) {
+          // Merge with existing data for JSON fields
+          const existingData = (existing as any)[key] || {};
+          val = JSON.stringify({ ...existingData, ...val });
+        } else {
+          val = JSON.stringify(val);
+        }
       }
       
       setClauses.push(`${column} = $${idx++}`);
       values.push(val);
     }
 
-    // If nothing to update, return the existing report
+    // If nothing to update after processing, return the existing report
     if (setClauses.length === 0) {
-      return this.findById(id);
+      return existing;
     }
+
+    // Add updated_at timestamp
+    setClauses.push(`updated_at = NOW()`);
 
     // Add id as the last parameter
     values.push(id);

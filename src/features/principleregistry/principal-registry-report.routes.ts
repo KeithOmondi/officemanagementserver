@@ -100,9 +100,11 @@ router.get(
   principalRegistryReportController.getSubmission
 );
 
-// Review a submission (approve/reject)
+// ─── FIX: Use consistent route pattern ──────────────────────────────────────
+// Review a submission (approve/reject) - uses :id (report ID) instead of :submissionId
+// The controller will need to be updated to accept report ID and find the latest submission
 router.patch(
-  '/submissions/:submissionId/review',
+  '/:id/submission/review',
   requireRole('dept_head', 'super_admin'),
   principalRegistryReportController.reviewSubmission
 );

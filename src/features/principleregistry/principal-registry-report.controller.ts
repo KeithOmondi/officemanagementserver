@@ -12,6 +12,16 @@ import {
   getQuestionsSchema,
   generatePdfSchema,
 } from './principal-registry-report.validator';
+import { ZodError } from 'zod';
+
+// ─── Helper to format Zod errors ──────────────────────────────────────────────
+
+function formatZodError(error: ZodError): string {
+  return error.issues.map(issue => {
+    const path = issue.path.join('.');
+    return `${path}: ${issue.message}`;
+  }).join('; ');
+}
 
 export const principalRegistryReportController = {
 
@@ -24,7 +34,7 @@ export const principalRegistryReportController = {
   getQuestions: asyncHandler(async (req: Request, res: Response) => {
     const result = getQuestionsSchema.safeParse({ query: req.query });
     if (!result.success) {
-      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid query parameters');
+      throw new AppError(400, formatZodError(result.error));
     }
 
     const { departmentId } = result.data.query;
@@ -37,12 +47,14 @@ export const principalRegistryReportController = {
   create: asyncHandler(async (req: Request, res: Response) => {
     const result = createReportSchema.safeParse({ body: req.body });
     if (!result.success) {
-      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid report data');
+      throw new AppError(400, formatZodError(result.error));
     }
+    
     const report = await PrincipalRegistryReportService.create(
       result.data.body, 
       req.user!.id
     );
+    
     return sendSuccess(res, report, 'Weekly report created successfully', 201);
   }),
 
@@ -51,8 +63,9 @@ export const principalRegistryReportController = {
   getAll: asyncHandler(async (req: Request, res: Response) => {
     const result = reportFiltersSchema.safeParse({ query: req.query });
     if (!result.success) {
-      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid filters');
+      throw new AppError(400, formatZodError(result.error));
     }
+    
     const reports = await PrincipalRegistryReportService.findAll(result.data.query);
     return sendSuccess(res, reports, 'Weekly reports retrieved successfully');
   }),
@@ -60,12 +73,14 @@ export const principalRegistryReportController = {
   getById: asyncHandler(async (req: Request, res: Response) => {
     const result = reportIdParamSchema.safeParse({ params: req.params });
     if (!result.success) {
-      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+      throw new AppError(400, formatZodError(result.error));
     }
+    
     const report = await PrincipalRegistryReportService.findById(result.data.params.id);
     if (!report) {
       throw new AppError(404, 'Report not found');
     }
+    
     return sendSuccess(res, report, 'Weekly report retrieved successfully');
   }),
 
@@ -74,16 +89,30 @@ export const principalRegistryReportController = {
   update: asyncHandler(async (req: Request, res: Response) => {
     const result = updateReportSchema.safeParse({ params: req.params, body: req.body });
     if (!result.success) {
-      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid update data');
+      throw new AppError(400, formatZodError(result.error));
     }
-    const report = await PrincipalRegistryReportService.update(
-      result.data.params.id, 
-      result.data.body
-    );
-    if (!report) {
-      throw new AppError(404, 'Report not found');
+    
+    try {
+      const report = await PrincipalRegistryReportService.update(
+        result.data.params.id, 
+        result.data.body
+      );
+      
+      if (!report) {
+        throw new AppError(404, 'Report not found');
+      }
+      
+      return sendSuccess(res, report, 'Weekly report updated successfully');
+    } catch (error: any) {
+      // Handle specific database errors
+      if (error.code === '23505') { // Unique violation
+        throw new AppError(409, 'A report with this data already exists');
+      }
+      if (error.code === '23503') { // Foreign key violation
+        throw new AppError(400, 'Invalid department or user reference');
+      }
+      throw error;
     }
-    return sendSuccess(res, report, 'Weekly report updated successfully');
   }),
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────────
@@ -91,8 +120,9 @@ export const principalRegistryReportController = {
   submit: asyncHandler(async (req: Request, res: Response) => {
     const result = reportIdParamSchema.safeParse({ params: req.params });
     if (!result.success) {
-      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+      throw new AppError(400, formatZodError(result.error));
     }
+    
     try {
       const { report, submission } = await PrincipalRegistryReportService.submitReport(
         result.data.params.id,
@@ -103,6 +133,9 @@ export const principalRegistryReportController = {
       if (error.message?.includes('Invalid status transition')) {
         throw new AppError(400, error.message);
       }
+      if (error.message?.includes('PDF')) {
+        throw new AppError(400, error.message);
+      }
       throw error;
     }
   }),
@@ -110,16 +143,19 @@ export const principalRegistryReportController = {
   review: asyncHandler(async (req: Request, res: Response) => {
     const result = reviewReportSchema.safeParse({ params: req.params, body: req.body });
     if (!result.success) {
-      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid review data');
+      throw new AppError(400, formatZodError(result.error));
     }
+    
     try {
       const report = await PrincipalRegistryReportService.review(
         result.data.params.id,
         result.data.body
       );
+      
       if (!report) {
         throw new AppError(404, 'Report not found');
       }
+      
       const actionText = result.data.body.action === 'approve' ? 'approved' : 'rejected back to draft';
       return sendSuccess(res, report, `Weekly report ${actionText} successfully`);
     } catch (error: any) {
@@ -133,16 +169,19 @@ export const principalRegistryReportController = {
   archive: asyncHandler(async (req: Request, res: Response) => {
     const result = reportIdParamSchema.safeParse({ params: req.params });
     if (!result.success) {
-      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+      throw new AppError(400, formatZodError(result.error));
     }
+    
     try {
       const report = await PrincipalRegistryReportService.setStatus(
         result.data.params.id, 
         'archived'
       );
+      
       if (!report) {
         throw new AppError(404, 'Report not found');
       }
+      
       return sendSuccess(res, report, 'Weekly report archived successfully');
     } catch (error: any) {
       if (error.message?.includes('Invalid status transition')) {
@@ -157,7 +196,7 @@ export const principalRegistryReportController = {
   generatePDF: asyncHandler(async (req: Request, res: Response) => {
     const result = generatePdfSchema.safeParse({ body: req.body });
     if (!result.success) {
-      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid PDF generation request');
+      throw new AppError(400, formatZodError(result.error));
     }
     
     const pdfResult = await PrincipalRegistryReportService.generatePDF(
@@ -175,7 +214,7 @@ export const principalRegistryReportController = {
   getPDFMetadata: asyncHandler(async (req: Request, res: Response) => {
     const result = reportIdParamSchema.safeParse({ params: req.params });
     if (!result.success) {
-      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+      throw new AppError(400, formatZodError(result.error));
     }
     
     const metadata = await PrincipalRegistryReportService.getPDFMetadata(result.data.params.id);
@@ -189,7 +228,7 @@ export const principalRegistryReportController = {
   downloadPDF: asyncHandler(async (req: Request, res: Response) => {
     const result = reportIdParamSchema.safeParse({ params: req.params });
     if (!result.success) {
-      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+      throw new AppError(400, formatZodError(result.error));
     }
     
     const metadata = await PrincipalRegistryReportService.getPDFMetadata(result.data.params.id);
@@ -213,7 +252,7 @@ export const principalRegistryReportController = {
   getSubmission: asyncHandler(async (req: Request, res: Response) => {
     const result = reportIdParamSchema.safeParse({ params: req.params });
     if (!result.success) {
-      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+      throw new AppError(400, formatZodError(result.error));
     }
     
     const submission = await PrincipalRegistryReportService.getSubmission(result.data.params.id);
@@ -223,12 +262,12 @@ export const principalRegistryReportController = {
   reviewSubmission: asyncHandler(async (req: Request, res: Response) => {
     const paramsResult = reportIdParamSchema.safeParse({ params: req.params });
     if (!paramsResult.success) {
-      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid submission ID');
+      throw new AppError(400, formatZodError(paramsResult.error));
     }
     
     const bodyResult = reviewReportSchema.safeParse({ body: req.body });
     if (!bodyResult.success) {
-      throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid review data');
+      throw new AppError(400, formatZodError(bodyResult.error));
     }
     
     const submission = await PrincipalRegistryReportService.reviewSubmission(
@@ -250,12 +289,14 @@ export const principalRegistryReportController = {
   remove: asyncHandler(async (req: Request, res: Response) => {
     const result = reportIdParamSchema.safeParse({ params: req.params });
     if (!result.success) {
-      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+      throw new AppError(400, formatZodError(result.error));
     }
+    
     const deleted = await PrincipalRegistryReportService.delete(result.data.params.id);
     if (!deleted) {
       throw new AppError(404, 'Report not found');
     }
+    
     return sendSuccess(res, null, 'Weekly report deleted successfully');
   }),
 };

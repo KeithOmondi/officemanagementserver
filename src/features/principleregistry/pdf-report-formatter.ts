@@ -15,12 +15,13 @@ import {
 
 /**
  * Format report data into PDF sections
+ * Handles partial/empty data gracefully for draft reports
  */
 export const formatReportForPDF = (report: PrincipalRegistryWeeklyReport): PDFSectionContent[] => {
   const sections: PDFSectionContent[] = [];
 
   // ─── Section 1: Administrative Overview ──────────────────────
-  const adminOverview = report.administrativeOverview;
+  const adminOverview = report.administrativeOverview || { keyActivities: [], notableIssues: [], resolutionsStatus: [] };
   sections.push({
     title: '1. Administrative Overview',
     items: [
@@ -46,7 +47,15 @@ export const formatReportForPDF = (report: PrincipalRegistryWeeklyReport): PDFSe
   });
 
   // ─── Section 2: Case Management ──────────────────────────────
-  const caseMgmt = report.caseManagement;
+  const caseMgmt = report.caseManagement || { 
+    form30PendingCount: 0, 
+    forwardedToGp: false,
+    submissionDates: null,
+    noticesSubmittedCount: null,
+    nonSubmissionReason: null,
+    expectedSubmissionDate: null,
+  };
+  
   const caseItems: PDFContentItem[] = [
     {
       label: 'Number of Form 30s - pending/status',
@@ -56,7 +65,7 @@ export const formatReportForPDF = (report: PrincipalRegistryWeeklyReport): PDFSe
     },
     {
       label: 'Applications forwarded to GP this week',
-      value: caseMgmt.forwardedToGp,
+      value: caseMgmt.forwardedToGp ?? false,
       type: 'boolean',
       formattedValue: formatBooleanForPDF(caseMgmt.forwardedToGp),
     },
@@ -96,7 +105,10 @@ export const formatReportForPDF = (report: PrincipalRegistryWeeklyReport): PDFSe
   });
 
   // ─── Section 3: Automating the Principal Registry ────────────
-  const autoStatus = report.automationStatus;
+  const autoStatus = report.automationStatus || { 
+    excelUpdateStatus: '', 
+    systemBuildStatus: '' 
+  };
   sections.push({
     title: '3. Automating the Principal Registry',
     items: [
@@ -116,11 +128,18 @@ export const formatReportForPDF = (report: PrincipalRegistryWeeklyReport): PDFSe
   });
 
   // ─── Section 4: Service Delivery Challenges ──────────────────
-  const challenges = report.serviceDeliveryChallenges;
+  const challenges = report.serviceDeliveryChallenges || {
+    hasChallenges: false,
+    challengeDetails: null,
+    proposedSolutions: [],
+    needsRhcIntervention: false,
+    interventionDetails: null,
+  };
+  
   const challengeItems: PDFContentItem[] = [
     {
       label: 'Any challenge affecting service delivery encountered within report period',
-      value: challenges.hasChallenges,
+      value: challenges.hasChallenges ?? false,
       type: 'boolean',
       formattedValue: formatBooleanForPDF(challenges.hasChallenges),
     },
@@ -144,7 +163,7 @@ export const formatReportForPDF = (report: PrincipalRegistryWeeklyReport): PDFSe
 
   challengeItems.push({
     label: "Do you need the RHC's intervention for this solution to be deployed?",
-    value: challenges.needsRhcIntervention,
+    value: challenges.needsRhcIntervention ?? false,
     type: 'boolean',
     formattedValue: formatBooleanForPDF(challenges.needsRhcIntervention),
   });
@@ -164,7 +183,7 @@ export const formatReportForPDF = (report: PrincipalRegistryWeeklyReport): PDFSe
   });
 
   // ─── Section 5: Highlights / Achievements ────────────────────
-  const highlights = report.highlights;
+  const highlights = report.highlights || { achievements: [] };
   sections.push({
     title: '5. Highlights / Achievements',
     items: [
@@ -178,7 +197,16 @@ export const formatReportForPDF = (report: PrincipalRegistryWeeklyReport): PDFSe
   });
 
   // ─── Section 6: Any Other Information ────────────────────────
-  const otherInfo = report.otherInformation;
+  const otherInfo = report.otherInformation || {
+    ctsEfilingChanges: [],
+    gpChanges: [],
+    signOff: {
+      preparedDate: '',
+      preparedByName: '',
+      preparedByDesignation: '',
+    },
+  };
+  
   sections.push({
     title: '6. Any Other Information',
     items: [
@@ -198,7 +226,12 @@ export const formatReportForPDF = (report: PrincipalRegistryWeeklyReport): PDFSe
   });
 
   // ─── Sign-off ──────────────────────────────────────────────────
-  const signOff = otherInfo.signOff;
+  const signOff = otherInfo.signOff || {
+    preparedDate: '',
+    preparedByName: '',
+    preparedByDesignation: '',
+  };
+  
   sections.push({
     title: 'Sign-off',
     items: [
@@ -234,7 +267,10 @@ export const generatePDFFileName = (report: PrincipalRegistryWeeklyReport): stri
   const weekEnding = report.weekEndingDates?.length 
     ? report.weekEndingDates[0] 
     : date;
-  return `Principal_Registry_Weekly_Report_${weekEnding}_${date}.pdf`;
+  
+  // Sanitize the week ending date for filename
+  const sanitizedWeekEnding = weekEnding.replace(/[^a-zA-Z0-9-]/g, '');
+  return `Principal_Registry_Weekly_Report_${sanitizedWeekEnding}_${date}.pdf`;
 };
 
 /**
@@ -243,9 +279,35 @@ export const generatePDFFileName = (report: PrincipalRegistryWeeklyReport): stri
 export const getWeekEndingString = (weekEndingDates: string[]): string => {
   if (!weekEndingDates || weekEndingDates.length === 0) return '';
   
-  const formattedDates = weekEndingDates.map(d => formatDateForPDF(d));
+  const formattedDates = weekEndingDates
+    .filter(d => d) // Remove empty/null dates
+    .map(d => formatDateForPDF(d));
+  
+  if (formattedDates.length === 0) return '';
   if (formattedDates.length === 1) return formattedDates[0];
   
   const last = formattedDates.pop();
   return `${formattedDates.join(', ')} and ${last}`;
+};
+
+/**
+ * Check if a section has any meaningful data
+ * Useful for conditional display in the PDF
+ */
+export const hasSectionData = (section: PDFSectionContent): boolean => {
+  if (!section.items || section.items.length === 0) return false;
+  
+  return section.items.some(item => {
+    if (item.value === null || item.value === undefined) return false;
+    if (typeof item.value === 'string') return item.value.trim().length > 0 && item.value !== 'Not provided';
+    if (Array.isArray(item.value)) return item.value.length > 0;
+    if (typeof item.value === 'object') {
+      return Object.values(item.value).some(v => {
+        if (typeof v === 'string') return v.trim().length > 0 && v !== 'Not provided';
+        if (Array.isArray(v)) return v.length > 0;
+        return v !== null && v !== undefined;
+      });
+    }
+    return true;
+  });
 };

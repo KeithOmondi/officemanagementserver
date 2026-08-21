@@ -33,14 +33,14 @@ router.delete('/public/:permanentSlug/draft', SurveyController.deleteDraft);
 
 router.use(protect);
 
-router.post('/', requireRole('staff', 'super_admin'), SurveyController.create);
-router.get('/', requireRole('staff', 'super_admin'), SurveyController.list);
-router.get('/:id', requireRole('staff', 'super_admin'), SurveyController.getById);
-router.patch('/:id', requireRole('staff', 'super_admin'), SurveyController.update);
-router.delete('/:id', requireRole('staff', 'super_admin'), SurveyController.remove);
+router.post('/', requireRole('super_admin', 'dept_head'), SurveyController.create);
+router.get('/', requireRole('super_admin', 'dept_head'), SurveyController.list);
+router.get('/:id', requireRole('super_admin', 'dept_head'), SurveyController.getById);
+router.patch('/:id', requireRole('super_admin', 'dept_head'), SurveyController.update);
+router.delete('/:id', requireRole('super_admin', 'dept_head'), SurveyController.remove);
 
-router.get('/:id/responses', requireRole('staff', 'super_admin'), SurveyController.responses);
-router.get('/:id/export/excel', requireRole('staff', 'super_admin'), SurveyController.exportExcel);
-router.get('/:id/export/word', requireRole('staff', 'super_admin'), SurveyController.exportWord);
+router.get('/:id/responses', requireRole('super_admin', 'dept_head'), SurveyController.responses);
+router.get('/:id/export/excel', requireRole('super_admin', 'dept_head'), SurveyController.exportExcel);
+router.get('/:id/export/word', requireRole('super_admin', 'dept_head'), SurveyController.exportWord);
 
 export default router;

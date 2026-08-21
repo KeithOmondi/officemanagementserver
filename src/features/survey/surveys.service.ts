@@ -175,13 +175,15 @@ export class SurveyService {
   }
 
   /** Throws 403 unless requester created the survey or holds an elevated role. */
-  private static assertOwnerOrAdmin(survey: Survey, requester: { id: string; role?: string }): void {
-    const isOwner = survey.created_by === requester.id;
-    const isAdmin = requester.role === 'admin' || requester.role === 'super_admin';
-    if (!isOwner && !isAdmin) {
-      throw new AppError(403, 'You do not have permission to access this survey');
-    }
+private static assertOwnerOrAdmin(survey: Survey, requester: { id: string; role?: string }): void {
+  const isOwner = survey.created_by === requester.id;
+  const isAdmin = requester.role === 'admin' || 
+                  requester.role === 'super_admin' || 
+                  requester.role === 'dept_head'; // ← Add this line
+  if (!isOwner && !isAdmin) {
+    throw new AppError(403, 'You do not have permission to access this survey');
   }
+}
 
   static async update(
     id: string,

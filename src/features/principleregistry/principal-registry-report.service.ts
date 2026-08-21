@@ -14,21 +14,59 @@ import {
   PDFReportMetadata,
   PDFGenerationResult,
 } from './principal-registry-report.types';
-// Input types are inferred straight from the Zod schemas rather than
-// hand-written in principal-registry-report.types.ts, so the compile-time
-// shape (e.g. optional + nullable fields) always matches what safeParse
-// actually produces at runtime.
-import {
-  CreateReportInput,
-  ReviewReportInput,
-  UpdateReportInput,
-  GeneratePdfInput,
-} from './principal-registry-report.validator';
+import { CreateReportInput, GeneratePdfInput, ReviewReportInput, UpdateReportInput } from './principal-registry-report.validator';
 
 const TABLE = 'principal_registry_weekly_reports';
 const QUESTIONS_TABLE = 'principal_registry_report_questions';
 const SUBMISSIONS_TABLE = 'principal_registry_report_submissions';
 const PDF_METADATA_TABLE = 'principal_registry_report_pdfs';
+
+// ─── Helper Functions ──────────────────────────────────────────────────────────
+
+/**
+ * Normalizes a date value to YYYY-MM-DD format for PostgreSQL date columns
+ * Handles ISO strings, Date objects, and already-formatted strings
+ */
+function normalizeDate(value: any): string | null {
+  if (!value) return null;
+  
+  // If it's already a Date object
+  if (value instanceof Date) {
+    return value.toISOString().split('T')[0];
+  }
+  
+  // If it's a string
+  if (typeof value === 'string') {
+    // If it has time (ISO format), extract date part
+    if (value.includes('T')) {
+      return value.split('T')[0];
+    }
+    // If it's already YYYY-MM-DD, return as is
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      return value;
+    }
+    // Try to parse and format
+    try {
+      const parsed = new Date(value);
+      if (!isNaN(parsed.getTime())) {
+        return parsed.toISOString().split('T')[0];
+      }
+    } catch {
+      // Return as is if parsing fails
+      return value;
+    }
+  }
+  
+  return value;
+}
+
+/**
+ * Normalizes an array of dates
+ */
+function normalizeDateArray(dates: any[] | null | undefined): string[] | null {
+  if (!dates || !Array.isArray(dates)) return null;
+  return dates.map(date => normalizeDate(date)).filter(Boolean) as string[];
+}
 
 function mapRowToReport(row: any): PrincipalRegistryWeeklyReport {
   return {
@@ -143,6 +181,25 @@ const FIELD_TO_COLUMN: Record<string, string> = {
   reviewNotes: 'review_notes',
 };
 
+// ─── Date fields that need normalization ──────────────────────────────────────
+
+const DATE_FIELDS = [
+  'reportPeriodStart',
+  'reportPeriodEnd',
+  'submittedAt',
+  'reviewedAt',
+  'pdfGeneratedAt',
+];
+
+const JSON_FIELDS = [
+  'administrativeOverview',
+  'caseManagement',
+  'automationStatus',
+  'serviceDeliveryChallenges',
+  'highlights',
+  'otherInformation',
+];
+
 class PrincipalRegistryReportServiceImpl {
   // ─── Questions ──────────────────────────────────────────────────
   
@@ -172,9 +229,9 @@ class PrincipalRegistryReportServiceImpl {
       RETURNING *;
     `;
     const values = [
-      input.weekEndingDates,
-      input.reportPeriodStart,
-      input.reportPeriodEnd,
+      normalizeDateArray(input.weekEndingDates),
+      normalizeDate(input.reportPeriodStart),
+      normalizeDate(input.reportPeriodEnd),
       input.departmentId,
       input.status ?? 'draft',
       JSON.stringify(input.administrativeOverview),
@@ -233,6 +290,11 @@ class PrincipalRegistryReportServiceImpl {
     };
   }
 
+  /**
+   * Updates a report with automatic date normalization for all date fields.
+   * Handles ISO strings (e.g., "2026-08-17T00:00:00.000Z") and converts them
+   * to YYYY-MM-DD format for PostgreSQL date columns.
+   */
   async update(
     id: string,
     input: UpdateReportInput
@@ -241,30 +303,40 @@ class PrincipalRegistryReportServiceImpl {
     const values: any[] = [];
     let idx = 1;
 
-    const jsonFields = [
-      'administrativeOverview',
-      'caseManagement',
-      'automationStatus',
-      'serviceDeliveryChallenges',
-      'highlights',
-      'otherInformation',
-    ];
-
+    // Process each field in the input
     for (const [key, column] of Object.entries(FIELD_TO_COLUMN)) {
-      if (key in input) {
-        let val = (input as any)[key];
-        if (jsonFields.includes(key) && val !== undefined && val !== null) {
-          val = JSON.stringify(val);
-        }
-        setClauses.push(`${column} = $${idx++}`);
-        values.push(val);
+      if (!(key in input)) continue;
+      
+      let val = (input as any)[key];
+      
+      // Skip undefined or null values (but allow explicit null)
+      if (val === undefined) continue;
+      
+      // ─── Normalize date fields ──────────────────────────────
+      if (DATE_FIELDS.includes(key)) {
+        val = normalizeDate(val);
       }
+      
+      // ─── Normalize weekEndingDates array ────────────────────
+      if (key === 'weekEndingDates' && val !== null) {
+        val = normalizeDateArray(val);
+      }
+      
+      // ─── Stringify JSON fields ──────────────────────────────
+      if (JSON_FIELDS.includes(key) && val !== null) {
+        val = JSON.stringify(val);
+      }
+      
+      setClauses.push(`${column} = $${idx++}`);
+      values.push(val);
     }
 
+    // If nothing to update, return the existing report
     if (setClauses.length === 0) {
       return this.findById(id);
     }
 
+    // Add id as the last parameter
     values.push(id);
 
     const query = `
@@ -274,8 +346,13 @@ class PrincipalRegistryReportServiceImpl {
       RETURNING *;
     `;
 
-    const { rows } = await pool.query(query, values);
-    return rows[0] ? mapRowToReport(rows[0]) : null;
+    try {
+      const { rows } = await pool.query(query, values);
+      return rows[0] ? mapRowToReport(rows[0]) : null;
+    } catch (error) {
+      console.error('Error updating report:', error);
+      throw error;
+    }
   }
 
   async delete(id: string): Promise<boolean> {

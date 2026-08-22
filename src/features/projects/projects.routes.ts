@@ -2,30 +2,35 @@
 import { Router } from 'express';
 import { projectController } from './projects.controller';
 import { protect } from '../../middleware/auth.middleware';
+import { upload } from '../../middleware/upload';
 
 const router = Router();
 
 router.use(protect);
 
-// ─── Task Routes ─────────────────────────────────────────────────────────────
-// IMPORTANT: these must be declared before any `/:id` project routes below,
-// otherwise Express matches literal segments like "tasks" or "tasks/stats"
-// as the `:id` param on GET /:id, and the ID validation rejects them
-// (this was causing "Invalid ID" / 400 on GET /projects/tasks).
+// ═══════════════════════════════════════════════════════════════════════════
+//  TASK ROUTES - Must be before /:id project routes
+// ═══════════════════════════════════════════════════════════════════════════
 
-// Read
+// ─── Read ────────────────────────────────────────────────────────────────────
 router.get('/tasks', projectController.getAllTasks);
 router.get('/tasks/stats', projectController.getTaskStats);
+router.get('/tasks/overdue', projectController.getOverdueTasks);
+router.get('/tasks/assigned/:assigneeId', projectController.getTasksByAssignee);
+router.get('/tasks/by-status', projectController.getTasksByStatus);
 router.get('/tasks/:id', projectController.getTaskById);
 
-// Create
+// ─── Create ──────────────────────────────────────────────────────────────────
 router.post('/tasks', projectController.createTask);
 
-// Update
+// ─── Update ──────────────────────────────────────────────────────────────────
 router.put('/tasks/:id', projectController.updateTask);
 router.patch('/tasks/:id', projectController.updateTask);
 
-// Delete
+// ─── Bulk Update ─────────────────────────────────────────────────────────────
+router.patch('/tasks/bulk', projectController.bulkUpdateTasks);
+
+// ─── Delete ──────────────────────────────────────────────────────────────────
 router.delete('/tasks/:id', projectController.deleteTask);
 
 // ─── Subtask Routes ──────────────────────────────────────────────────────────
@@ -42,24 +47,38 @@ router.put('/tasks/:taskId/comments/:commentId', projectController.updateComment
 router.patch('/tasks/:taskId/comments/:commentId', projectController.updateComment);
 router.delete('/tasks/:taskId/comments/:commentId', projectController.deleteComment);
 
-// ─── Project Routes ───────────────────────────────────────────────────────────
+// ─── File Upload Routes ──────────────────────────────────────────────────────
 
-// Read
+// Upload file to a task
+router.post(
+    '/tasks/:taskId/files',
+    upload.single('file'),
+    projectController.uploadFile
+);
+
+// Delete file
+router.delete('/files/:fileId', projectController.deleteFile);
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  PROJECT ROUTES
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ─── Read ────────────────────────────────────────────────────────────────────
 router.get('/', projectController.getAllProjects);
 router.get('/:id', projectController.getProjectById);
 router.get('/:id/members', projectController.getProjectMembers);
 
-// Create
+// ─── Create ──────────────────────────────────────────────────────────────────
 router.post('/', projectController.createProject);
 
-// Update
+// ─── Update ──────────────────────────────────────────────────────────────────
 router.put('/:id', projectController.updateProject);
 router.patch('/:id', projectController.updateProject);
 
-// Delete
+// ─── Delete ──────────────────────────────────────────────────────────────────
 router.delete('/:id', projectController.deleteProject);
 
-// Members
+// ─── Members ──────────────────────────────────────────────────────────────────
 router.post('/:id/members', projectController.addProjectMember);
 router.delete('/:id/members/:userId', projectController.removeProjectMember);
 

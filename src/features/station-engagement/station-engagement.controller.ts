@@ -160,32 +160,41 @@ export const stationEngagementController = {
    * Send a report to super admin for review (changes status from draft/rejected to submitted)
    * Requires that a PDF is attached to the report
    */
-  sendToAdmin: asyncHandler(async (req: Request, res: Response) => {
-    const paramsResult = idSchema.safeParse({ params: req.params });
-    if (!paramsResult.success) {
-      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
-    }
+sendToAdmin: asyncHandler(async (req: Request, res: Response) => {
+  console.log('🔍 [sendToAdmin] req.params:', req.params);
+  console.log('🔍 [sendToAdmin] req.body:', req.body);
 
-    // Parse optional body
-    const bodyResult = submitReportSchema.safeParse({ body: req.body });
-    if (!bodyResult.success) {
-      throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
-    }
+  const paramsResult = idSchema.safeParse({ params: req.params });
+  if (!paramsResult.success) {
+    console.error('❌ [sendToAdmin] Invalid params:', paramsResult.error.issues);
+    throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+  }
+  console.log('✅ [sendToAdmin] params validated:', paramsResult.data.params);
 
-    const payload: SubmitReportToAdminPayload = {
-      reportId: paramsResult.data.params.id,
-      sendNotification: bodyResult.data.body?.send_notification ?? true,
-      notes: bodyResult.data.body?.notes ?? undefined,
-    };
+  // Parse optional body — use just the body sub-schema, not the whole submitReportSchema
+  const bodyResult = submitReportSchema.shape.body.safeParse(req.body);
+  if (!bodyResult.success) {
+    console.error('❌ [sendToAdmin] Invalid body:', bodyResult.error.issues);
+    throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+  }
+  console.log('✅ [sendToAdmin] body validated:', bodyResult.data);
 
-    const report = await StationEngagementService.sendToAdmin(
-      paramsResult.data.params.id,
-      req.user!.id,
-      payload
-    );
+  const payload: SubmitReportToAdminPayload = {
+    reportId: paramsResult.data.params.id,
+    sendNotification: bodyResult.data?.send_notification ?? true,
+    notes: bodyResult.data?.notes ?? undefined,
+  };
+  console.log('🔍 [sendToAdmin] payload built:', payload);
 
-    return sendSuccess(res, report, 'Report sent to super admin successfully');
-  }),
+  const report = await StationEngagementService.sendToAdmin(
+    paramsResult.data.params.id,
+    req.user!.id,
+    payload
+  );
+  console.log('✅ [sendToAdmin] report sent successfully:', report?.id);
+
+  return sendSuccess(res, report, 'Report sent to super admin successfully');
+}),
 
   // ─── Submit Report (Legacy - keep for compatibility) ──────────────────
 

@@ -2,9 +2,9 @@
 
 import { AppError } from '../../utils/response';
 import { StationEngagementService } from './station-engagement.service';
-import type { 
-  StationEngagementReport, 
-  Engagement, 
+import type {
+  StationEngagementReport,
+  Engagement,
   UnengagedStation,
   EscalationItem,
   PDFGenerationOptions,
@@ -13,8 +13,6 @@ import type {
 import * as ExcelJS from 'exceljs';
 import PDFDocument from 'pdfkit';
 import https from 'https';
-import fs from 'fs';
-import path from 'path';
 import { pool } from '../../config/db';
 
 // ─── Type Definitions ────────────────────────────────────────────────────
@@ -37,7 +35,6 @@ export interface ReportExportData {
 
 const LOGO_URL = "https://res.cloudinary.com/do0yflasl/image/upload/v1784363826/ORHC_L_crclut.jpg";
 
-// ✅ Mode display mapping (including walk_in)
 const MODE_DISPLAY_MAP: Record<string, string> = {
   phone_call: 'Phone Call',
   whatsapp: 'WhatsApp',
@@ -48,7 +45,6 @@ const MODE_DISPLAY_MAP: Record<string, string> = {
   walk_in: 'Walk-in',
 };
 
-// ✅ Status color mapping for visual indicators
 const STATUS_COLORS: Record<string, string> = {
   draft: '#9e9e9e',
   submitted: '#1a237e',
@@ -79,9 +75,8 @@ export class StationEngagementExportService {
   // ─── PDF Generation ──────────────────────────────────────────────────
 
   /**
-   * Generate PDF for a report
-   * ✅ This can be called regardless of report status
-   * Supports preview mode for in-browser preview
+   * Generate PDF for a report. Can be called regardless of report status.
+   * Supports preview mode for in-browser preview.
    */
   static async generatePDF(
     reportId: string,
@@ -93,7 +88,6 @@ export class StationEngagementExportService {
       throw new AppError(404, 'Engagement report not found');
     }
 
-    // Get user display name for support person
     let supportPersonName = report.support_person_id || 'N/A';
     try {
       const { rows } = await pool.query(
@@ -107,18 +101,16 @@ export class StationEngagementExportService {
       // Fallback to ID if name lookup fails
     }
 
-    // Fetch logo from URL
     const logoBuffer = await this.fetchImage(LOGO_URL);
 
-    // ✅ Preview mode - return base64 for browser preview
     if (options?.previewOnly) {
       const previewBuffer = await this.generatePDFBuffer(
-        report, 
-        logoBuffer, 
-        supportPersonName, 
+        report,
+        logoBuffer,
+        supportPersonName,
         { ...options, previewMode: true }
       );
-      
+
       return {
         success: true,
         previewData: previewBuffer.toString('base64'),
@@ -129,11 +121,10 @@ export class StationEngagementExportService {
       };
     }
 
-    // ✅ Full PDF generation
     const pdfBuffer = await this.generatePDFBuffer(
-      report, 
-      logoBuffer, 
-      supportPersonName, 
+      report,
+      logoBuffer,
+      supportPersonName,
       options
     );
 
@@ -154,7 +145,7 @@ export class StationEngagementExportService {
       const doc = new PDFDocument({
         size: options?.pageSize || 'A4',
         margin: options?.margin?.top || 50,
-        font: 'Times-Roman',
+        font: 'Helvetica',
       });
 
       const buffers: Buffer[] = [];
@@ -163,21 +154,8 @@ export class StationEngagementExportService {
       doc.on('error', reject);
 
       try {
-        // ✅ Add watermark if preview
-        if (isPreview && options?.showWatermark !== false) {
-          doc.save();
-          doc.opacity(0.15);
-          doc.fontSize(80)
-             .font('Times-Bold')
-             .fillColor('#000000')
-             .text('PREVIEW', 0, 250, { align: 'center', width: doc.page.width });
-          doc.opacity(1);
-          doc.restore();
-        }
-
         // ─── Header ───────────────────────────────────────────────────
 
-        // Logo - Centered at top with proper spacing
         if (logoBuffer) {
           try {
             const logoWidth = 80;
@@ -185,64 +163,60 @@ export class StationEngagementExportService {
             doc.image(logoBuffer, logoX, 30, { width: logoWidth });
             doc.moveDown(2.5);
           } catch (error) {
+            console.error('Failed to load logo:', error);
             doc.moveDown(1);
           }
         } else {
           doc.moveDown(1);
         }
 
-        // Office Header - Times-Roman
         doc.fillColor('#1a237e')
            .fontSize(18)
-           .font('Times-Bold')
+           .font('Helvetica-Bold')
            .text('OFFICE OF THE REGISTRAR', { align: 'center' })
-           .fontSize(15)
+           .fontSize(14)
            .fillColor('#283593')
+           .font('Helvetica-Bold')
            .text('HIGH COURT OF KENYA', { align: 'center' });
 
         doc.moveDown(0.4);
 
-        // Sub Header
         doc.fillColor('#4a4a4a')
            .fontSize(12)
-           .font('Times-Bold')
+           .font('Helvetica-Bold')
            .text('SUCCESSION COURT ENGAGEMENT REPORT', { align: 'center' });
 
         doc.moveDown(0.3);
 
-        // Categories and stations
         doc.fillColor('#6b7280')
            .fontSize(10)
-           .font('Times-Roman')
+           .font('Helvetica')
            .text(
              `Categories: ${report.categories.join(', ')}  ·  ${report.total_stations_assigned} stations assigned`,
              { align: 'center' }
            );
 
-        // ✅ Show status badge with color
         doc.moveDown(0.3);
         const statusColor = STATUS_COLORS[report.status] || '#6b7280';
         doc.fillColor(statusColor)
            .fontSize(10)
-           .font('Times-Bold')
+           .font('Helvetica-Bold')
            .text(`Status: ${report.status.toUpperCase()}`, { align: 'center' });
 
         doc.moveDown(0.6);
         doc.strokeColor('#1a237e').lineWidth(1.5).moveTo(50, doc.y).lineTo(550, doc.y).stroke();
         doc.moveDown(0.8);
 
-        // Status field box row
         const topFieldY = doc.y;
         const fieldGap = 10;
         const fieldWidth = (500 - fieldGap * 2) / 3;
-        
-        // Field 1: Support Person
-        this.drawFieldBox(doc, 50, topFieldY, fieldWidth, 34, 'Submitted By:', supportPersonName);
-        
-        // Field 2: Status with color
+
+        const reportWithDisplay = report as StationEngagementReport & { submitted_by_display?: string };
+        const submitterName = reportWithDisplay.submitted_by_display || report.submitted_by || supportPersonName || 'N/A';
+
+        this.drawFieldBox(doc, 50, topFieldY, fieldWidth, 34, 'Submitted By', submitterName);
         this.drawFieldBox(doc, 50 + fieldWidth + fieldGap, topFieldY, fieldWidth, 34, 'Status', report.status.toUpperCase());
-        
-        // Field 3: Last Updated or Submission Date
+
         let dateDisplay = 'N/A';
         if (report.submitted_at) {
           dateDisplay = new Date(report.submitted_at).toLocaleDateString('en-KE', {
@@ -267,41 +241,77 @@ export class StationEngagementExportService {
 
         if (report.engagements && report.engagements.length > 0) {
           this.drawSectionHeader(doc, 'B', `STATION ENGAGEMENT LOG (${report.engagements.length})`);
-          report.engagements.forEach((engagement) => {
-            this.ensureSpace(doc, 190);
+          report.engagements.forEach((engagement, index) => {
+            if (doc.y > 650) {
+              doc.addPage();
+            }
             this.drawEngagementCard(doc, engagement);
+            if (index < report.engagements.length - 1) {
+              doc.moveDown(0.5);
+            }
           });
           doc.moveDown(0.5);
+        } else {
+          doc.moveDown(0.5);
+          doc.fontSize(10)
+             .font('Helvetica')
+             .fillColor('#6b7280')
+             .text('No engagements logged for this week.', 50, doc.y);
+          doc.moveDown(1);
         }
 
         // ─── C. Stations Not Yet Engaged ─────────────────────────────
 
         if (report.unengaged_stations && report.unengaged_stations.length > 0) {
-          doc.addPage();
+          if (doc.y > 700) {
+            doc.addPage();
+          }
           this.drawSectionHeader(doc, 'C', `STATIONS NOT YET ENGAGED (${report.unengaged_stations.length})`);
           report.unengaged_stations.forEach((station) => {
-            this.ensureSpace(doc, 70);
+            if (doc.y > 700) {
+              doc.addPage();
+            }
             this.drawUnengagedCard(doc, station);
           });
           doc.moveDown(0.5);
+        } else {
+          doc.moveDown(0.5);
+          doc.fontSize(10)
+             .font('Helvetica')
+             .fillColor('#6b7280')
+             .text('All assigned stations were engaged this week.', 50, doc.y);
+          doc.moveDown(1);
         }
 
         // ─── D. Escalations ───────────────────────────────────────────
 
         if (report.escalations && report.escalations.length > 0) {
-          doc.addPage();
+          if (doc.y > 700) {
+            doc.addPage();
+          }
           this.drawSectionHeader(doc, 'D', `ESCALATIONS FOR THE REGISTRAR'S ATTENTION (${report.escalations.length})`);
           report.escalations.forEach((escalation) => {
-            this.ensureSpace(doc, 150);
+            if (doc.y > 700) {
+              doc.addPage();
+            }
             this.drawEscalationCard(doc, escalation);
           });
           doc.moveDown(0.5);
+        } else {
+          doc.moveDown(0.5);
+          doc.fontSize(10)
+             .font('Helvetica')
+             .fillColor('#6b7280')
+             .text('No additional escalation items.', 50, doc.y);
+          doc.moveDown(1);
         }
 
         // ─── E / F. Patterns & Priorities ────────────────────────────
 
         if (report.recurring_patterns || report.priorities) {
-          doc.addPage();
+          if (doc.y > 700) {
+            doc.addPage();
+          }
 
           if (report.recurring_patterns) {
             this.drawSectionHeader(doc, 'E', 'RECURRING OR CROSS-STATION PATTERNS');
@@ -317,16 +327,16 @@ export class StationEngagementExportService {
 
         // ─── Footer ───────────────────────────────────────────────────
 
-        doc.addPage();
-        doc.moveDown(3);
+        if (doc.y > 700) {
+          doc.addPage();
+        }
+        doc.moveDown(2);
 
-        // Footer divider line
         doc.strokeColor('#1a237e').lineWidth(1.5).moveTo(50, doc.y).lineTo(550, doc.y).stroke();
         doc.moveDown(0.5);
 
-        // Footer text - centered
         doc.fontSize(8)
-           .font('Times-Roman')
+           .font('Helvetica')
            .fillColor('#333333')
            .text(
              'This report is a confidential document of the Office of the Registrar, High Court of Kenya.',
@@ -357,7 +367,6 @@ export class StationEngagementExportService {
              { align: 'center' }
            );
 
-        // ✅ Preview watermark at bottom
         if (isPreview) {
           doc.fontSize(7)
              .fillColor('#c62828')
@@ -387,7 +396,7 @@ export class StationEngagementExportService {
   private static drawSectionHeader(doc: PDFKit.PDFDocument, letter: string, title: string): void {
     doc.fillColor(this.ACCENT)
        .fontSize(10)
-       .font('Times-Bold')
+       .font('Helvetica-Bold')
        .text(`${letter}. ${title}`, 50, doc.y, { width: 500 });
     doc.moveDown(0.5);
   }
@@ -397,17 +406,18 @@ export class StationEngagementExportService {
     x: number, y: number, width: number, height: number,
     label: string, value: string
   ): void {
-    doc.font('Times-Bold').fontSize(7).fillColor(this.LABEL_GRAY)
+    doc.font('Helvetica-Bold').fontSize(7).fillColor(this.LABEL_GRAY)
        .text(label.toUpperCase(), x, y, { width });
 
     const boxY = y + 11;
     const boxHeight = height - 11;
+
     doc.roundedRect(x, boxY, width, boxHeight, 3)
        .strokeColor(this.BORDER_GRAY)
        .lineWidth(0.75)
        .stroke();
 
-    doc.font('Times-Roman').fontSize(8.5).fillColor(this.TEXT_DARK)
+    doc.font('Helvetica').fontSize(8.5).fillColor(this.TEXT_DARK)
        .text(value || '\u2014', x + 6, boxY + 6, {
          width: width - 12,
          height: boxHeight - 10,
@@ -421,7 +431,7 @@ export class StationEngagementExportService {
        .strokeColor(this.BORDER_GRAY)
        .lineWidth(0.75)
        .stroke();
-    doc.font('Times-Roman').fontSize(9).fillColor(this.TEXT_DARK)
+    doc.font('Helvetica').fontSize(9).fillColor(this.TEXT_DARK)
        .text(text, x + 8, y + 8, { width: width - 16, align: 'left' });
     doc.y = y + height;
   }
@@ -542,17 +552,17 @@ export class StationEngagementExportService {
   // ─── Generate Preview ────────────────────────────────────────────────
 
   /**
-   * Generate a PDF preview (not downloaded, returns base64 for browser preview)
-   * ✅ This can be called regardless of report status
+   * Generate a PDF preview (not downloaded, returns base64 for browser preview).
+   * Can be called regardless of report status.
    */
   static async generatePreview(
     reportId: string,
     userId: string,
     options?: PDFGenerationOptions
   ): Promise<PDFGenerationResult> {
-    const result = await this.generatePDF(reportId, userId, { 
-      ...options, 
-      previewOnly: true 
+    const result = await this.generatePDF(reportId, userId, {
+      ...options,
+      previewOnly: true
     });
     return result as PDFGenerationResult;
   }
@@ -578,45 +588,42 @@ export class StationEngagementExportService {
       properties: { tabColor: { argb: 'FF1a237e' } },
     });
 
-    // Cover Sheet Content
     coverSheet.mergeCells('A1:F1');
     const titleCell = coverSheet.getCell('A1');
     titleCell.value = 'OFFICE OF THE REGISTRAR';
-    titleCell.font = { name: 'Times New Roman', size: 18, bold: true, color: { argb: 'FF1a237e' } };
+    titleCell.font = { name: 'Helvetica', size: 18, bold: true, color: { argb: 'FF1a237e' } };
     titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
 
     coverSheet.mergeCells('A2:F2');
     const subtitleCell = coverSheet.getCell('A2');
     subtitleCell.value = 'HIGH COURT OF KENYA';
-    subtitleCell.font = { name: 'Times New Roman', size: 14, bold: true, color: { argb: 'FF283593' } };
+    subtitleCell.font = { name: 'Helvetica', size: 14, bold: true, color: { argb: 'FF283593' } };
     subtitleCell.alignment = { horizontal: 'center', vertical: 'middle' };
 
     coverSheet.mergeCells('A3:F3');
     const reportTitleCell = coverSheet.getCell('A3');
     reportTitleCell.value = 'SUCCESSION COURT ENGAGEMENT REPORT';
-    reportTitleCell.font = { name: 'Times New Roman', size: 12, bold: true };
+    reportTitleCell.font = { name: 'Helvetica', size: 12, bold: true };
     reportTitleCell.alignment = { horizontal: 'center', vertical: 'middle' };
 
     coverSheet.mergeCells('A4:F4');
     const periodCell = coverSheet.getCell('A4');
     periodCell.value = `Reporting Period: ${new Date(report.week_start).toLocaleDateString('en-KE')} - ${new Date(report.week_end).toLocaleDateString('en-KE')}`;
-    periodCell.font = { name: 'Times New Roman', size: 10 };
+    periodCell.font = { name: 'Helvetica', size: 10 };
     periodCell.alignment = { horizontal: 'center', vertical: 'middle' };
 
-    // ✅ Status badge on cover sheet
     coverSheet.mergeCells('A5:F5');
     const statusCell = coverSheet.getCell('A5');
     statusCell.value = `Status: ${report.status.toUpperCase()}`;
-    statusCell.font = { name: 'Times New Roman', size: 10, bold: true, color: { argb: STATUS_COLORS[report.status] || 'FF1a237e' } };
+    statusCell.font = { name: 'Helvetica', size: 10, bold: true, color: { argb: STATUS_COLORS[report.status] || 'FF1a237e' } };
     statusCell.alignment = { horizontal: 'center', vertical: 'middle' };
 
-    // Metadata Table with styled background
     const metadataStartRow = 8;
     const metadata = [
       ['Report ID', report.id || 'N/A'],
       ['Status', report.status ? report.status.toUpperCase() : 'N/A'],
       ['Categories', report.categories?.join(', ') || 'N/A'],
-      ['Support Person ID', report.support_person_id || 'N/A'],
+      ['Support Person', report.support_person_id || 'N/A'],
       ['Total Stations Assigned', report.total_stations_assigned ?? 0],
       ['Created At', report.created_at ? new Date(report.created_at).toLocaleString('en-KE') : 'N/A'],
       ['Last Updated', report.updated_at ? new Date(report.updated_at).toLocaleString('en-KE') : 'N/A'],
@@ -628,26 +635,24 @@ export class StationEngagementExportService {
       const row = metadataStartRow + index;
       const labelCell = coverSheet.getCell(`A${row}`);
       labelCell.value = key + ':';
-      labelCell.font = { bold: true, size: 10, name: 'Times New Roman' };
+      labelCell.font = { bold: true, size: 10, name: 'Helvetica' };
       labelCell.alignment = { horizontal: 'right', vertical: 'middle' };
-      
+
       const valueCell = coverSheet.getCell(`B${row}`);
       valueCell.value = value;
-      valueCell.font = { size: 10, name: 'Times New Roman' };
+      valueCell.font = { size: 10, name: 'Helvetica' };
       valueCell.alignment = { horizontal: 'left', vertical: 'middle' };
     });
 
-    // Executive Summary
     const summaryStartRow = metadataStartRow + metadata.length + 2;
     coverSheet.getCell(`A${summaryStartRow}`).value = 'EXECUTIVE SUMMARY';
-    coverSheet.getCell(`A${summaryStartRow}`).font = { name: 'Times New Roman', size: 12, bold: true, color: { argb: 'FF1a237e' } };
+    coverSheet.getCell(`A${summaryStartRow}`).font = { name: 'Helvetica', size: 12, bold: true, color: { argb: 'FF1a237e' } };
     coverSheet.mergeCells(`A${summaryStartRow}:F${summaryStartRow}`);
 
     coverSheet.getCell(`A${summaryStartRow + 1}`).value = report.executive_summary || 'No executive summary provided.';
     coverSheet.mergeCells(`A${summaryStartRow + 1}:F${summaryStartRow + 4}`);
     coverSheet.getCell(`A${summaryStartRow + 1}`).alignment = { wrapText: true, vertical: 'top' };
 
-    // Column widths
     coverSheet.getColumn('A').width = 25;
     coverSheet.getColumn('B').width = 50;
     coverSheet.getColumn('C').width = 20;
@@ -668,11 +673,10 @@ export class StationEngagementExportService {
         'Resolution', 'Urgency', 'Escalation Reason'
       ];
 
-      // Header with styling
       engagementHeaders.forEach((header, index) => {
         const cell = engagementSheet.getCell(1, index + 1);
         cell.value = header;
-        cell.font = { name: 'Times New Roman', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.font = { name: 'Helvetica', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1a237e' } };
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
         cell.border = {
@@ -683,11 +687,10 @@ export class StationEngagementExportService {
         };
       });
 
-      // Data rows with alternating colors
       report.engagements.forEach((engagement, index) => {
         const row = index + 2;
         const rowColor = index % 2 === 0 ? 'FFFFFFFF' : 'FFF5F5F5';
-        
+
         const data = [
           engagement.station_id || 'N/A',
           engagement.station_name || 'N/A',
@@ -707,7 +710,7 @@ export class StationEngagementExportService {
         data.forEach((value, colIndex) => {
           const cell = engagementSheet.getCell(row, colIndex + 1);
           cell.value = value;
-          cell.font = { name: 'Times New Roman', size: 9 };
+          cell.font = { name: 'Helvetica', size: 9 };
           cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: rowColor } };
           cell.alignment = { wrapText: true, vertical: 'top' };
           cell.border = {
@@ -736,7 +739,7 @@ export class StationEngagementExportService {
       headers.forEach((header, index) => {
         const cell = unengagedSheet.getCell(1, index + 1);
         cell.value = header;
-        cell.font = { name: 'Times New Roman', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.font = { name: 'Helvetica', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFBF360C' } };
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
         cell.border = {
@@ -762,7 +765,7 @@ export class StationEngagementExportService {
         data.forEach((value, colIndex) => {
           const cell = unengagedSheet.getCell(row, colIndex + 1);
           cell.value = value;
-          cell.font = { name: 'Times New Roman', size: 9 };
+          cell.font = { name: 'Helvetica', size: 9 };
           cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: rowColor } };
           cell.alignment = { wrapText: true, vertical: 'top' };
           cell.border = {
@@ -790,7 +793,7 @@ export class StationEngagementExportService {
       headers.forEach((header, index) => {
         const cell = escalationSheet.getCell(1, index + 1);
         cell.value = header;
-        cell.font = { name: 'Times New Roman', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.font = { name: 'Helvetica', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC62828' } };
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
         cell.border = {
@@ -817,7 +820,7 @@ export class StationEngagementExportService {
         data.forEach((value, colIndex) => {
           const cell = escalationSheet.getCell(row, colIndex + 1);
           cell.value = value;
-          cell.font = { name: 'Times New Roman', size: 9 };
+          cell.font = { name: 'Helvetica', size: 9 };
           cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: rowColor } };
           cell.alignment = { wrapText: true, vertical: 'top' };
           cell.border = {
@@ -826,8 +829,7 @@ export class StationEngagementExportService {
             left: { style: 'thin' },
             right: { style: 'thin' },
           };
-          
-          // Color urgency cells
+
           if (colIndex === 3 && escalation.urgency) {
             const urgencyColors: Record<string, string> = {
               high: 'FFC62828',
@@ -835,7 +837,7 @@ export class StationEngagementExportService {
               low: 'FF2E7D32',
             };
             cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: urgencyColors[escalation.urgency] || rowColor } };
-            cell.font = { color: { argb: 'FFFFFFFF' }, bold: true, name: 'Times New Roman' };
+            cell.font = { color: { argb: 'FFFFFFFF' }, bold: true, name: 'Helvetica' };
           }
         });
       });
@@ -851,11 +853,10 @@ export class StationEngagementExportService {
       properties: { tabColor: { argb: 'FF1a237e' } },
     });
 
-    // Summary header
     summarySheet.mergeCells('A1:B1');
     const summaryHeader = summarySheet.getCell('A1');
     summaryHeader.value = 'REPORT SUMMARY';
-    summaryHeader.font = { name: 'Times New Roman', size: 14, bold: true, color: { argb: 'FF1a237e' } };
+    summaryHeader.font = { name: 'Helvetica', size: 14, bold: true, color: { argb: 'FF1a237e' } };
     summaryHeader.alignment = { horizontal: 'center', vertical: 'middle' };
 
     const summaryData = [
@@ -878,23 +879,23 @@ export class StationEngagementExportService {
       const isHeader = index === 0;
       const cellA = summarySheet.getCell(`A${rowNum}`);
       const cellB = summarySheet.getCell(`B${rowNum}`);
-      
+
       cellA.value = row[0];
-      cellA.font = { bold: isHeader, size: isHeader ? 11 : 10, name: 'Times New Roman' };
+      cellA.font = { bold: isHeader, size: isHeader ? 11 : 10, name: 'Helvetica' };
       cellA.alignment = { horizontal: 'left', vertical: 'middle' };
       if (isHeader) {
         cellA.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1a237e' } };
-        cellA.font = { color: { argb: 'FFFFFFFF' }, bold: true, name: 'Times New Roman' };
+        cellA.font = { color: { argb: 'FFFFFFFF' }, bold: true, name: 'Helvetica' };
       }
-      
+
       cellB.value = row[1];
-      cellB.font = { bold: isHeader, size: isHeader ? 11 : 10, name: 'Times New Roman' };
+      cellB.font = { bold: isHeader, size: isHeader ? 11 : 10, name: 'Helvetica' };
       cellB.alignment = { horizontal: 'right', vertical: 'middle' };
       if (isHeader) {
         cellB.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1a237e' } };
-        cellB.font = { color: { argb: 'FFFFFFFF' }, bold: true, name: 'Times New Roman' };
+        cellB.font = { color: { argb: 'FFFFFFFF' }, bold: true, name: 'Helvetica' };
       }
-      
+
       if (!isHeader && typeof row[1] === 'number') {
         cellB.numFmt = '#,##0';
       }
@@ -912,38 +913,36 @@ export class StationEngagementExportService {
     footerSheet.mergeCells('A1:C1');
     const footerTitle = footerSheet.getCell('A1');
     footerTitle.value = 'Office of the Registrar, High Court of Kenya';
-    footerTitle.font = { name: 'Times New Roman', size: 12, bold: true, color: { argb: 'FF1a237e' } };
+    footerTitle.font = { name: 'Helvetica', size: 12, bold: true, color: { argb: 'FF1a237e' } };
     footerTitle.alignment = { horizontal: 'center', vertical: 'middle' };
 
     footerSheet.mergeCells('A2:C2');
     const footerMotto = footerSheet.getCell('A2');
     footerMotto.value = 'Social Transformation through Access to Justice';
-    footerMotto.font = { name: 'Times New Roman', size: 10, italic: true };
+    footerMotto.font = { name: 'Helvetica', size: 10, italic: true };
     footerMotto.alignment = { horizontal: 'center', vertical: 'middle' };
 
     footerSheet.mergeCells('A3:C3');
     const footerContact = footerSheet.getCell('A3');
     footerContact.value = 'Milimani Law Courts | 3rd Floor, Chamber 337 | P.O. Box 30041-00100 | Nairobi';
-    footerContact.font = { name: 'Times New Roman', size: 9 };
+    footerContact.font = { name: 'Helvetica', size: 9 };
     footerContact.alignment = { horizontal: 'center', vertical: 'middle' };
 
     footerSheet.mergeCells('A4:C4');
     const footerEmail = footerSheet.getCell('A4');
     footerEmail.value = 'Tel. +254 0730 181478 | registrarhighcourt@court.go.ke | www.judiciary.go.ke';
-    footerEmail.font = { name: 'Times New Roman', size: 9 };
+    footerEmail.font = { name: 'Helvetica', size: 9 };
     footerEmail.alignment = { horizontal: 'center', vertical: 'middle' };
 
     footerSheet.mergeCells('A5:C5');
     const footerDate = footerSheet.getCell('A5');
     footerDate.value = `Generated on: ${new Date().toLocaleString('en-KE', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`;
-    footerDate.font = { name: 'Times New Roman', size: 8, color: { argb: 'FF666666' } };
+    footerDate.font = { name: 'Helvetica', size: 8, color: { argb: 'FF666666' } };
     footerDate.alignment = { horizontal: 'center', vertical: 'middle' };
 
     footerSheet.getColumn('A').width = 25;
     footerSheet.getColumn('B').width = 25;
     footerSheet.getColumn('C').width = 25;
-
-    // ─── Export ────────────────────────────────────────────────────────
 
     const buffer = await workbook.xlsx.writeBuffer();
     return Buffer.from(buffer);
@@ -961,7 +960,6 @@ export class StationEngagementExportService {
       this.generateExcel(reportId, userId),
     ]);
 
-    // Handle case where generatePDF returns PDFGenerationResult (preview)
     const pdfBuffer = Buffer.isBuffer(pdf) ? pdf : Buffer.from((pdf as PDFGenerationResult).previewData || '', 'base64');
 
     return { pdf: pdfBuffer, excel };

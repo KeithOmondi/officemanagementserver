@@ -21,7 +21,7 @@ const dateStringSchema = z.preprocess(
     }
     return val;
   },
-  z.string().datetime({ message: 'Invalid date format' }).optional()
+  z.string().date({ message: 'Invalid date format' }).optional()  // .date() not .datetime()
 );
 
 // In projects.validator.ts

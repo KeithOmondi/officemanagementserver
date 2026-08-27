@@ -26,6 +26,8 @@ import type {
     StampType,
     ConferenceStatus,
     ConferenceType,
+    UtilitySyncStatus,
+    SyncedUtilityItem,
 } from './helpdesk.documents.types';
 import { EStampService } from '../e-stamp/e-stamp.service';
 import { embedSignatureBlockIntoPDF } from '../../utils/signatureBlock';
@@ -34,7 +36,7 @@ import { sendHelpdeskApproved} from '../../utils/sendMail';
 
 const FOLDER = 'orhc/helpdesk-documents';
 
-// ─── SELECT Fragment (UPDATED: Added conference fields) ──────────────────
+// ─── SELECT Fragment (UPDATED: Added utility sync fields) ──────────────────
 
 const DOC_SELECT = `
     d.id, d.ref, d.subject, d.entity_type, d.entity_id, d.format,
@@ -69,11 +71,15 @@ const DOC_SELECT = `
     d.stamp_position_width, d.stamp_position_height,
     -- NEW: Final Generated PDF fields
     d.stamped_file_url, d.stamped_file_public_id, d.stamped_file_size,
+    -- ─── NEW: Utility sync fields ────────────────────────────────────────────
+    d.utility_sync_status, d.utility_synced_at, d.utility_synced_by,
+    d.utility_sync_result,
     u.full_name as uploaded_by_name,
     au.full_name as approved_by_name,
     ru.full_name as returned_by_name,
     su.full_name as signed_by_name,
-    stu.full_name as stamped_by_name
+    stu.full_name as stamped_by_name,
+    syncer.full_name as utility_synced_by_name
 `;
 
 // ─── Helper: Clean input for database ─────────────────────────────────────────
@@ -174,6 +180,10 @@ export class HelpdeskDocumentsService {
 
         const result = await uploadToCloudinary(file, FOLDER);
 
+        // Determine initial utility sync status
+        const isUtilityDoc = ['consolidated_utility_memo', 'consolidated_fuel_memo', 'utility_memo'].includes(cleaned.entity_type);
+        const initialSyncStatus: UtilitySyncStatus = isUtilityDoc ? 'pending' : 'not_applicable';
+
         try {
             const { rows } = await pool.query(
                 `INSERT INTO helpdesk_documents
@@ -186,11 +196,12 @@ export class HelpdeskDocumentsService {
                      conference_type, start_date, end_date, number_of_pax,
                      venue, location, budget_estimate, conference_status,
                      internal_approval_status, requester_status,
-                     is_stamped, stamp_type)
+                     is_stamped, stamp_type,
+                     utility_sync_status)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 
                          $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, 
                          $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, 
-                         $31, $32, $33, $34, $35)
+                         $31, $32, $33, $34, $35, $36)
                  RETURNING id`,
                 [
                     cleaned.ref.trim(),
@@ -228,6 +239,7 @@ export class HelpdeskDocumentsService {
                     'pending_approval',
                     false, // is_stamped
                     cleaned.stamp_type || null, // stamp_type
+                    initialSyncStatus, // utility_sync_status
                 ]
             );
 
@@ -361,6 +373,16 @@ export class HelpdeskDocumentsService {
             if (input.rejection_reason !== undefined) {
                 updates.push(`rejection_reason = $${p}`);
                 values.push(input.rejection_reason);
+                p++;
+            }
+
+            // ─── NEW: Utility sync fields ──────────────────────────────────────
+            if (input.sync_utilities !== undefined) {
+                // This will be handled after the update
+            }
+            if (input.utility_sync_status !== undefined) {
+                updates.push(`utility_sync_status = $${p}`);
+                values.push(input.utility_sync_status);
                 p++;
             }
 
@@ -520,6 +542,15 @@ export class HelpdeskDocumentsService {
 
             const updatedDoc = await this.findById(id);
             if (!updatedDoc) throw new AppError(500, 'Failed to retrieve updated document');
+
+            // ─── NEW: Sync utilities if requested ──────────────────────────────
+            if (input.sync_utilities && updatedDoc) {
+                const memoTypes = ['consolidated_utility_memo', 'consolidated_fuel_memo'];
+                if (memoTypes.includes(updatedDoc.entity_type) && updatedDoc.status === 'approved') {
+                    await this.syncUtilityItemsWithDocument(updatedDoc, 'approved');
+                }
+            }
+
             return updatedDoc;
 
         } catch (err) {
@@ -535,6 +566,245 @@ export class HelpdeskDocumentsService {
         }
     }
 
+    // ─── NEW: Sync Utility Items with Document ────────────────────────────────
+
+    /**
+     * Syncs utility items with document status.
+     * This is the source of truth for utility approval status.
+     */
+    private static async syncUtilityItemsWithDocument(
+        document: HelpdeskDocument,
+        action: 'approved' | 'rejected' | 'returned' | 'sent'
+    ): Promise<{ total: number; updated: number; failed: SyncedUtilityItem[] }> {
+        // Only sync for consolidated memo types
+        const memoTypes = ['consolidated_utility_memo', 'consolidated_fuel_memo', 'utility_memo'];
+        if (!memoTypes.includes(document.entity_type)) {
+            return { total: 0, updated: 0, failed: [] };
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            // Find the consolidated memo associated with this document
+            const { rows: memoRows } = await client.query(
+                `SELECT id, utility_item_ids, type, period FROM consolidated_memos 
+                 WHERE entity_id = $1 AND is_active = true`,
+                [document.entity_id]
+            );
+
+            if (memoRows.length === 0) {
+                console.log(`[DocumentSync] No memo found for entity_id: ${document.entity_id}`);
+                await client.query('COMMIT');
+                return { total: 0, updated: 0, failed: [] };
+            }
+
+            const memo = memoRows[0];
+            const itemIds = memo.utility_item_ids || [];
+
+            if (itemIds.length === 0) {
+                await client.query('COMMIT');
+                return { total: 0, updated: 0, failed: [] };
+            }
+
+            // Map document action to utility approval status
+            let newApprovalStatus: string;
+            let shouldResetMemoId = false;
+
+            switch (action) {
+                case 'approved':
+                    newApprovalStatus = 'approved';
+                    break;
+                case 'rejected':
+                    newApprovalStatus = 'rejected';
+                    shouldResetMemoId = true;
+                    break;
+                case 'returned':
+                    newApprovalStatus = 'pending';
+                    shouldResetMemoId = true;
+                    break;
+                case 'sent':
+                    newApprovalStatus = 'sent';
+                    break;
+                default:
+                    await client.query('COMMIT');
+                    return { total: 0, updated: 0, failed: [] };
+            }
+
+            // Get current status of items before update
+            const { rows: currentItems } = await client.query(
+                `SELECT id, utility_type, amount, period, approval_status
+                 FROM utilities_items 
+                 WHERE id = ANY($1::uuid[]) AND is_active = true`,
+                [itemIds]
+            );
+
+            // Build sync result
+            const syncedItems: SyncedUtilityItem[] = [];
+            const failedItems: SyncedUtilityItem[] = [];
+
+            // Update all utility items in this memo
+            const updateQuery = `
+                UPDATE utilities_items 
+                SET approval_status = $1, 
+                    updated_at = NOW()
+                WHERE id = ANY($2::uuid[]) AND is_active = true
+                RETURNING id, utility_type, amount, period, request_id
+            `;
+
+            const { rows: updatedRows } = await client.query(updateQuery, [
+                newApprovalStatus,
+                itemIds
+            ]);
+
+            // If rejected or returned, also reset memo_id
+            if (shouldResetMemoId) {
+                await client.query(
+                    `UPDATE utilities_items 
+                     SET memo_id = NULL, memo_sent_at = NULL
+                     WHERE id = ANY($1::uuid[]) AND is_active = true`,
+                    [itemIds]
+                );
+            }
+
+            // Build sync result details
+            const updatedIds = new Set(updatedRows.map((r: any) => r.id));
+            
+            for (const item of currentItems) {
+                const isUpdated = updatedIds.has(item.id);
+                const newStatus = isUpdated ? newApprovalStatus : item.approval_status;
+                
+                // Get judge name for the item
+                const { rows: judgeRows } = await client.query(
+                    `SELECT judge_name, pj_number FROM utilities_requests WHERE id = $1`,
+                    [item.request_id]
+                );
+                
+                const syncItem: SyncedUtilityItem = {
+                    id: item.id,
+                    utility_type: item.utility_type,
+                    amount: Number(item.amount),
+                    period: item.period,
+                    judge_name: judgeRows[0]?.judge_name || 'Unknown',
+                    pj_number: judgeRows[0]?.pj_number || null,
+                    previous_status: item.approval_status,
+                    new_status: isUpdated ? newApprovalStatus : item.approval_status,
+                    synced_at: new Date().toISOString(),
+                };
+
+                if (isUpdated) {
+                    syncedItems.push(syncItem);
+                } else {
+                    failedItems.push(syncItem);
+                }
+            }
+
+            // Update document sync status
+            const syncResult = {
+                total_items: itemIds.length,
+                updated_items: syncedItems,
+                failed_items: failedItems,
+            };
+
+            await client.query(
+                `UPDATE helpdesk_documents
+                 SET utility_sync_status = $1,
+                     utility_synced_at = NOW(),
+                     utility_synced_by = $2,
+                     utility_sync_result = $3,
+                     updated_at = NOW()
+                 WHERE id = $4 AND is_active = true`,
+                [
+                    failedItems.length === 0 ? 'synced' : 'failed',
+                    document.uploaded_by || null,
+                    JSON.stringify(syncResult),
+                    document.id
+                ]
+            );
+
+            // Add to approval history
+            await this.addApprovalHistory(
+                document.id,
+                document.uploaded_by || 'system',
+                'utility_synced',
+                undefined,
+                `Synced ${syncedItems.length} utility items to status: ${newApprovalStatus}`
+            );
+
+            await client.query('COMMIT');
+
+            console.log(`[DocumentSync] Updated ${syncedItems.length} utility items to status: ${newApprovalStatus} for document ${document.id}`);
+
+            return {
+                total: itemIds.length,
+                updated: syncedItems.length,
+                failed: failedItems,
+            };
+
+        } catch (error) {
+            await client.query('ROLLBACK');
+            console.error('[DocumentSync] Error syncing utility items:', error);
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    // ─── NEW: Public method to trigger utility sync ───────────────────────────
+
+    static async syncUtilitiesForDocument(
+        id: string,
+        userId: string,
+        force: boolean = false
+    ): Promise<{ total: number; updated: number; failed: SyncedUtilityItem[] }> {
+        const doc = await this.findById(id);
+        if (!doc) {
+            throw new AppError(404, 'Document not found');
+        }
+
+        const memoTypes = ['consolidated_utility_memo', 'consolidated_fuel_memo', 'utility_memo'];
+        if (!memoTypes.includes(doc.entity_type)) {
+            throw new AppError(400, 'This document is not a utility memo and cannot sync utilities');
+        }
+
+        // Only sync if document is approved, rejected, or returned
+        if (!force && !['approved', 'rejected', 'returned'].includes(doc.status)) {
+            throw new AppError(400, `Document status ${doc.status} does not require utility sync`);
+        }
+
+        // Map status to action
+        let action: 'approved' | 'rejected' | 'returned' | 'sent';
+        switch (doc.status) {
+            case 'approved':
+                action = 'approved';
+                break;
+            case 'rejected':
+                action = 'rejected';
+                break;
+            case 'returned':
+                action = 'returned';
+                break;
+            default:
+                action = 'sent';
+        }
+
+        const result = await this.syncUtilityItemsWithDocument(doc, action);
+        
+        // Update sync status on document
+        const syncStatus: UtilitySyncStatus = result.failed.length === 0 ? 'synced' : 'failed';
+        await pool.query(
+            `UPDATE helpdesk_documents
+             SET utility_sync_status = $1,
+                 utility_synced_at = NOW(),
+                 utility_synced_by = $2,
+                 updated_at = NOW()
+             WHERE id = $3 AND is_active = true`,
+            [syncStatus, userId, id]
+        );
+
+        return result;
+    }
+
     // ─── Find One ─────────────────────────────────────────────────────────────
 
     static async findById(id: string): Promise<HelpdeskDocument | null> {
@@ -548,6 +818,7 @@ export class HelpdeskDocumentsService {
              LEFT JOIN users ru ON d.returned_by = ru.id
              LEFT JOIN users su ON d.signed_by = su.id
              LEFT JOIN users stu ON d.stamped_by = stu.id
+             LEFT JOIN users syncer ON d.utility_synced_by = syncer.id
              WHERE d.id = $1 AND d.is_active = true`,
             [id]
         );
@@ -575,6 +846,7 @@ export class HelpdeskDocumentsService {
             LEFT JOIN users ru ON d.returned_by = ru.id
             LEFT JOIN users su ON d.signed_by = su.id
             LEFT JOIN users stu ON d.stamped_by = stu.id
+            LEFT JOIN users syncer ON d.utility_synced_by = syncer.id
             WHERE d.is_active = true
         `;
         const params: unknown[] = [];
@@ -741,6 +1013,16 @@ export class HelpdeskDocumentsService {
             query += ` AND d.status = 'pending_approval'`;
         }
 
+        // ─── NEW: Utility sync filters ──────────────────────────────────────────
+        if (filters.utility_sync_status) {
+            query += ` AND d.utility_sync_status = $${p}`;
+            params.push(filters.utility_sync_status);
+            p++;
+        }
+        if (filters.needs_utility_sync) {
+            query += ` AND d.utility_sync_status = 'pending'`;
+        }
+
         // ─── Stamp filters ──────────────────────────────────────────────────
         if (filters.is_stamped !== undefined) {
             query += ` AND d.is_stamped = $${p}`;
@@ -783,7 +1065,7 @@ export class HelpdeskDocumentsService {
     static async findByEntity(
         entityType: DocumentEntityType,
         entityId: string,
-        filters: { status?: string; limit?: number; offset?: number } = {}
+        filters: { status?: string; limit?: number; offset?: number; utility_sync_status?: UtilitySyncStatus } = {}
     ): Promise<HelpdeskDocument[]> {
         let query = `
             SELECT ${DOC_SELECT}
@@ -793,6 +1075,7 @@ export class HelpdeskDocumentsService {
             LEFT JOIN users ru ON d.returned_by = ru.id
             LEFT JOIN users su ON d.signed_by = su.id
             LEFT JOIN users stu ON d.stamped_by = stu.id
+            LEFT JOIN users syncer ON d.utility_synced_by = syncer.id
             WHERE d.is_active = true
               AND d.entity_type = $1
               AND d.entity_id = $2
@@ -803,6 +1086,11 @@ export class HelpdeskDocumentsService {
         if (filters.status) {
             query += ` AND d.status = $${p}`;
             params.push(filters.status);
+            p++;
+        }
+        if (filters.utility_sync_status) {
+            query += ` AND d.utility_sync_status = $${p}`;
+            params.push(filters.utility_sync_status);
             p++;
         }
 
@@ -903,6 +1191,18 @@ export class HelpdeskDocumentsService {
         `;
         const { rows: stampStatsRows } = await pool.query(stampStatsQuery, params);
 
+        // ─── NEW: Utility sync stats ────────────────────────────────────────────
+        const utilitySyncQuery = `
+            SELECT 
+                COUNT(CASE WHEN d.utility_sync_status = 'synced' THEN 1 END) as synced,
+                COUNT(CASE WHEN d.utility_sync_status = 'pending' THEN 1 END) as pending_sync,
+                COUNT(CASE WHEN d.utility_sync_status = 'failed' THEN 1 END) as failed_sync,
+                COUNT(CASE WHEN d.utility_sync_status = 'not_applicable' THEN 1 END) as not_applicable
+            FROM helpdesk_documents d
+            ${whereClause}
+        `;
+        const { rows: utilitySyncRows } = await pool.query(utilitySyncQuery, params);
+
         return {
             total,
             pending_approval: statusCounts.pending_approval || 0,
@@ -929,6 +1229,12 @@ export class HelpdeskDocumentsService {
             stamped_count: Number(stampStatsRows[0]?.stamped_count) || 0,
             signed_count: Number(stampStatsRows[0]?.signed_count) || 0,
             signed_and_stamped_count: Number(stampStatsRows[0]?.signed_and_stamped_count) || 0,
+            utility_sync_stats: {
+                total_utility_documents: Number(utilitySyncRows[0]?.synced || 0) + Number(utilitySyncRows[0]?.pending_sync || 0) + Number(utilitySyncRows[0]?.failed_sync || 0),
+                synced: Number(utilitySyncRows[0]?.synced) || 0,
+                pending: Number(utilitySyncRows[0]?.pending_sync) || 0,
+                failed: Number(utilitySyncRows[0]?.failed_sync) || 0,
+            },
         };
     }
 
@@ -966,7 +1272,12 @@ export class HelpdeskDocumentsService {
                 COUNT(CASE WHEN d.requester_status = 'in_revision' THEN 1 END) as requester_in_revision,
                 COUNT(CASE WHEN d.is_signed = true THEN 1 END) as signed_count,
                 COUNT(CASE WHEN d.is_stamped = true THEN 1 END) as stamped_count,
-                COUNT(CASE WHEN d.is_signed = true AND d.is_stamped = true THEN 1 END) as signed_and_stamped_count
+                COUNT(CASE WHEN d.is_signed = true AND d.is_stamped = true THEN 1 END) as signed_and_stamped_count,
+                -- ─── NEW: Utility sync summary ──────────────────────────────────
+                COUNT(CASE WHEN d.utility_sync_status = 'synced' THEN 1 END) as utility_synced,
+                COUNT(CASE WHEN d.utility_sync_status = 'pending' THEN 1 END) as utility_pending,
+                COUNT(CASE WHEN d.utility_sync_status = 'failed' THEN 1 END) as utility_failed,
+                COUNT(CASE WHEN d.utility_sync_status = 'not_applicable' THEN 1 END) as utility_not_applicable
             FROM helpdesk_documents d
             ${whereClause}
         `;
@@ -1040,6 +1351,12 @@ export class HelpdeskDocumentsService {
             signed_count: Number(summary.signed_count) || 0,
             stamped_count: Number(summary.stamped_count) || 0,
             signed_and_stamped_count: Number(summary.signed_and_stamped_count) || 0,
+            utility_sync_summary: {
+                synced: Number(summary.utility_synced) || 0,
+                pending: Number(summary.utility_pending) || 0,
+                failed: Number(summary.utility_failed) || 0,
+                not_applicable: Number(summary.utility_not_applicable) || 0,
+            },
         };
     }
 
@@ -1072,6 +1389,7 @@ export class HelpdeskDocumentsService {
                  SET status = 'pending_approval',
                      internal_approval_status = 'pending',
                      requester_status = 'pending_approval',
+                     utility_sync_status = 'pending',
                      updated_at = NOW()
                  WHERE id = $1 AND is_active = true`,
                 [id]
@@ -1170,6 +1488,7 @@ export class HelpdeskDocumentsService {
     /**
      * Internal Approve - Super admin approves internally with signature AND STAMP embedding
      * Requester still sees 'pending_approval' until send back
+     * UPDATED: Syncs utility items to 'sent' status when approved internally
      */
     static async internalApprove(
         id: string,
@@ -1394,6 +1713,15 @@ export class HelpdeskDocumentsService {
 
             const updatedDoc = await this.findById(id);
             if (!updatedDoc) throw new AppError(500, 'Failed to retrieve updated document');
+
+            // ─── NEW: Sync utility items to 'sent' status on internal approval ────
+            if (input.sync_utilities !== false) {
+                const memoTypes = ['consolidated_utility_memo', 'consolidated_fuel_memo'];
+                if (memoTypes.includes(updatedDoc.entity_type)) {
+                    await this.syncUtilityItemsWithDocument(updatedDoc, 'sent');
+                }
+            }
+
             return updatedDoc;
 
         } catch (err) {
@@ -1532,8 +1860,7 @@ export class HelpdeskDocumentsService {
     }
 
     /**
-     * Cancel Internal Approval - Reset internal approval decision
-     */
+     * Cancel Internal Approval - Reset internal approval decision     */
     static async cancelInternalApproval(
         id: string,
         input: CancelInternalApprovalRequest
@@ -1592,6 +1919,7 @@ export class HelpdeskDocumentsService {
 
     /**
      * Send Back to Requester - This is when the requester finally sees the status
+     * UPDATED: Syncs utility items when document is approved or rejected
      */
     static async sendBackToRequester(
         id: string,
@@ -1677,6 +2005,28 @@ export class HelpdeskDocumentsService {
                 await this.sendApprovalNotification(updatedDoc, doc.uploaded_by, finalStatus);
             }
 
+            // ─── NEW: Sync utility items when document is approved or rejected ──
+            if (input.sync_utilities !== false && updatedDoc) {
+                const memoTypes = ['consolidated_utility_memo', 'consolidated_fuel_memo'];
+                if (memoTypes.includes(updatedDoc.entity_type)) {
+                    let action: 'approved' | 'rejected' | 'returned';
+                    switch (finalStatus) {
+                        case 'approved':
+                            action = 'approved';
+                            break;
+                        case 'rejected':
+                            action = 'rejected';
+                            break;
+                        case 'changes_requested':
+                            action = 'returned';
+                            break;
+                        default:
+                            action = 'returned';
+                    }
+                    await this.syncUtilityItemsWithDocument(updatedDoc, action);
+                }
+            }
+
             return updatedDoc;
         } catch (err) {
             await client.query('ROLLBACK');
@@ -1760,6 +2110,7 @@ export class HelpdeskDocumentsService {
 
     /**
      * Resubmit After Changes - Requester resubmits after making changes
+     * UPDATED: Resets utility sync status when document is resubmitted
      */
     static async resubmitAfterChanges(
         id: string,
@@ -1790,6 +2141,8 @@ export class HelpdeskDocumentsService {
                      last_resubmitted_by = $2,
                      is_internal_approval_complete = false,
                      is_sent_back_to_requester = false,
+                     utility_sync_status = 'pending',
+                     utility_sync_result = NULL,
                      updated_at = NOW()
                  WHERE id = $3 AND is_active = true`,
                 [
@@ -1857,7 +2210,9 @@ export class HelpdeskDocumentsService {
                 COUNT(CASE WHEN d.internal_approval_status = 'changes_requested_internal' THEN 1 END) as changes_requested_internal,
                 COUNT(CASE WHEN d.is_internal_approval_complete = true THEN 1 END) as ready_to_send_back,
                 MIN(d.created_at) as oldest_pending,
-                AVG(EXTRACT(EPOCH FROM (NOW() - d.created_at)) / 3600) as avg_review_hours
+                AVG(EXTRACT(EPOCH FROM (NOW() - d.created_at)) / 3600) as avg_review_hours,
+                -- ─── NEW: Utility sync pending count ──────────────────────────────
+                COUNT(CASE WHEN d.utility_sync_status = 'pending' THEN 1 END) as pending_utility_sync
             FROM helpdesk_documents d
             ${whereClause}
         `;
@@ -1902,6 +2257,7 @@ export class HelpdeskDocumentsService {
             urgent_pending: Number(urgentRows[0]?.urgent) || 0,
             oldest_pending_days: oldestPendingDays,
             average_review_time_hours: result.avg_review_hours ? Number(result.avg_review_hours) : undefined,
+            pending_utility_sync: Number(result.pending_utility_sync) || 0,
         };
     }
 
@@ -1942,6 +2298,7 @@ export class HelpdeskDocumentsService {
             stamped_at: doc.stamped_at,
             stamp_type: doc.stamp_type as StampType | undefined,
             stamped_file_url: doc.stamped_file_url || null,
+            utility_sync_status: doc.utility_sync_status as UtilitySyncStatus || 'not_applicable',
         }));
     }
 
@@ -1992,6 +2349,14 @@ export class HelpdeskDocumentsService {
         updates.push(`entity_id = $${p}`);
         values.push(entityId);
         p++;
+
+        // ─── NEW: Update utility sync status if linking to a utility entity ────
+        const isUtilityDoc = ['consolidated_utility_memo', 'consolidated_fuel_memo', 'utility_memo'].includes(entityType);
+        if (isUtilityDoc) {
+            updates.push(`utility_sync_status = $${p}`);
+            values.push('pending');
+            p++;
+        }
 
         if (requestType !== undefined) {
             updates.push(`request_type = $${p}`);
@@ -2349,7 +2714,7 @@ export class HelpdeskDocumentsService {
     private static async addApprovalHistory(
         documentId: string,
         fromUserId: string,
-        action: 'submitted' | 'approved' | 'rejected' | 'returned' | 'previewed' | 'sent_back' | 'resubmitted' | 'signed' | 'stamped',
+        action: 'submitted' | 'approved' | 'rejected' | 'returned' | 'previewed' | 'sent_back' | 'resubmitted' | 'signed' | 'stamped' | 'utility_synced',
         toUserId?: string,
         comments?: string
     ): Promise<void> {

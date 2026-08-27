@@ -1,3 +1,5 @@
+// src/features/helpdesk/helpdesk.documents.schema.ts
+
 import { z } from 'zod';
 
 // ─── Base Enums ──────────────────────────────────────────────────────────────
@@ -42,6 +44,15 @@ const documentStatusEnum = z.enum(['draft', 'pending_approval', 'approved', 'rej
 // ─── Stamp Type Enum ─────────────────────────────────────────────────────────
 
 const stampTypeEnum = z.enum(['approved', 'received', 'official']);
+
+// ─── NEW: Utility Sync Status Enum ──────────────────────────────────────────
+
+const utilitySyncStatusEnum = z.enum([
+    'pending',        // Document is pending, utility items not synced
+    'synced',         // Utility items have been synced with document status
+    'failed',         // Sync attempt failed
+    'not_applicable', // Not a utility document
+]);
 
 // ─── Two-Step Approval Enums ─────────────────────────────────────────────────
 
@@ -161,6 +172,9 @@ export const uploadHelpdeskDocumentSchema = z.object({
         // ─── NEW: Stamp type on initial creation ──────────────────────────────────
         stamp_type: stampTypeEnum.optional().nullable(),
         
+        // ─── NEW: Utility sync status on creation ──────────────────────────────────
+        utility_sync_status: utilitySyncStatusEnum.optional().default('not_applicable'),
+        
         // ─── Aide Request Fields ──────────────────────────────────────────────
         officer_rank: z.string().pipe(officerRankEnum).optional().nullable(),
         officer_name: z.string().max(100).optional().nullable(),
@@ -253,6 +267,10 @@ export const listHelpdeskDocumentsSchema = z.object({
         ready_to_send_back: z.string().transform((val) => val === 'true').optional(),
         my_requester_documents: z.string().transform((val) => val === 'true').optional(),
         
+        // ─── NEW: Utility Sync Filters ──────────────────────────────────────────
+        utility_sync_status: utilitySyncStatusEnum.optional(),
+        needs_utility_sync: z.string().transform((val) => val === 'true').optional(),
+        
         // ─── Aide Request Filters ──────────────────────────────────────────────
         officer_rank: z.string().pipe(officerRankEnum).optional(),
         officer_name: z.string().optional(),
@@ -306,6 +324,18 @@ export const updateDocumentFileSchema = z.object({
         rejection_reason: z.string().max(500).optional(),
         returned_by: z.string().uuid().optional(),
         returned_by_name: z.string().max(100).optional(),
+        
+        // ─── NEW: Utility sync fields ────────────────────────────────────────────
+        sync_utilities: z.preprocess(
+            (val) => {
+                if (val === 'true') return true;
+                if (val === 'false') return false;
+                return val;
+            },
+            z.boolean().optional()
+        ),
+        utility_sync_status: utilitySyncStatusEnum.optional(),
+        
         // ─── Signature fields ──────────────────────────────────────────────────
         is_signed: z.preprocess(
             (val) => {
@@ -318,6 +348,7 @@ export const updateDocumentFileSchema = z.object({
         signed_by: z.string().uuid().optional(),
         signed_by_name: z.string().max(100).optional(),
         signed_at: z.string().datetime().optional(),
+        
         // ─── Stamp fields ──────────────────────────────────────────────────────
         is_stamped: z.preprocess(
             (val) => {
@@ -399,6 +430,8 @@ export const updateDocumentStatusSchema = z.object({
         rejection_reason: z.string().max(500).optional(),
         approved_by: z.string().uuid().optional(),
         approved_by_name: z.string().max(100).optional(),
+        // ─── NEW: Control utility sync ──────────────────────────────────────────
+        sync_utilities: z.boolean().optional().default(true),
     }),
 });
 
@@ -496,6 +529,10 @@ export const linkDocumentSchema = z.object({
         request_type: requestTypeEnum.optional(),
         judge_name: z.string().max(100).optional(),
         
+        // ─── NEW: Utility sync fields ────────────────────────────────────────────
+        sync_utilities: z.boolean().optional().default(true),
+        utility_sync_status: utilitySyncStatusEnum.optional(),
+        
         // ─── Aide Request Fields ──────────────────────────────────────────────
         officer_rank: z.string().pipe(officerRankEnum).optional().nullable(),
         officer_name: z.string().max(100).optional().nullable(),
@@ -562,6 +599,8 @@ export const getDocumentsByEntitySchema = z.object({
         status: documentStatusEnum.optional(),
         limit: z.string().regex(/^\d+$/).optional().transform(Number),
         offset: z.string().regex(/^\d+$/).optional().transform(Number),
+        // ─── NEW: Utility sync filter ──────────────────────────────────────────
+        utility_sync_status: utilitySyncStatusEnum.optional(),
     }).optional(),
 });
 
@@ -599,6 +638,9 @@ export const bulkLinkDocumentsSchema = z.object({
         entity_id: z.string().optional(), // ✅ Allow any string
         request_type: requestTypeEnum.optional(),
         judge_name: z.string().max(100).optional(),
+        
+        // ─── NEW: Utility sync fields ────────────────────────────────────────────
+        sync_utilities: z.boolean().optional().default(true),
         
         // ─── Aide Request Fields ──────────────────────────────────────────────
         officer_rank: z.string().pipe(officerRankEnum).optional().nullable(),
@@ -653,6 +695,8 @@ export const bulkUpdateStatusSchema = z.object({
         document_ids: z.array(z.string().uuid()).min(1, 'At least one document ID is required'),
         status: documentStatusEnum,
         comments: z.string().max(500).optional(),
+        // ─── NEW: Control utility sync ──────────────────────────────────────────
+        sync_utilities: z.boolean().optional().default(true),
     }),
 });
 
@@ -670,6 +714,7 @@ export const batchUploadSchema = z.object({
                 request_type: requestTypeEnum.optional(),
                 judge_name: z.string().max(100).optional(),
                 stamp_type: stampTypeEnum.optional().nullable(), // Added to batch upload as well
+                utility_sync_status: utilitySyncStatusEnum.optional().default('not_applicable'),
                 
                 // ─── Aide Request Fields ──────────────────────────────────────────────
                 officer_rank: z.string().pipe(officerRankEnum).optional().nullable(),
@@ -753,6 +798,9 @@ export const internalApproveDocumentSchema = z.object({
         comments: z.string().max(500).optional(),
         generate_e_stamp: z.boolean().default(true),
         
+        // ─── NEW: Control utility sync ────────────────────────────────────────────
+        sync_utilities: z.boolean().optional().default(true),
+        
         // ─── Signature position ──────────────────────────────────────────────────
         signature_position_x: z.number().optional(),
         signature_position_y: z.number().optional(),
@@ -781,6 +829,8 @@ export const internalRejectDocumentSchema = z.object({
         rejected_by: z.string().uuid().optional(),
         rejected_by_name: z.string().max(100).optional(),
         comments: z.string().max(500).optional(),
+        // ─── NEW: Control utility sync ────────────────────────────────────────────
+        sync_utilities: z.boolean().optional().default(true),
     }),
 });
 
@@ -797,6 +847,8 @@ export const internalRequestChangesSchema = z.object({
         requested_by: z.string().uuid().optional(),
         requested_by_name: z.string().max(100).optional(),
         comments: z.string().max(500).optional(),
+        // ─── NEW: Control utility sync ────────────────────────────────────────────
+        sync_utilities: z.boolean().optional().default(false), // Don't sync on changes requested
     }),
 });
 
@@ -812,6 +864,8 @@ export const internalCancelApprovalSchema = z.object({
         cancelled_by: z.string().uuid().optional(),
         cancelled_by_name: z.string().max(100).optional(),
         reason: z.string().max(500).optional(),
+        // ─── NEW: Control utility sync ────────────────────────────────────────────
+        reset_utility_sync: z.boolean().optional().default(true),
     }),
 });
 
@@ -830,6 +884,8 @@ export const sendBackToRequesterSchema = z.object({
         comments: z.string().max(500).optional(),
         requester_message: z.string().max(500).optional(),
         notify_requester: z.boolean().default(true),
+        // ─── NEW: Control utility sync ────────────────────────────────────────────
+        sync_utilities: z.boolean().optional().default(true),
     }),
 });
 
@@ -846,6 +902,8 @@ export const resubmitDocumentSchema = z.object({
         submitted_by_name: z.string().max(100).optional(),
         comments: z.string().max(500).optional(),
         file_update: z.boolean().default(false),
+        // ─── NEW: Reset utility sync on resubmit ─────────────────────────────────
+        reset_utility_sync: z.boolean().optional().default(true),
     }),
 });
 
@@ -863,6 +921,8 @@ export const pendingInternalApprovalsSchema = z.object({
         search: z.string().optional(),
         limit: z.string().regex(/^\d+$/).optional().transform(Number),
         offset: z.string().regex(/^\d+$/).optional().transform(Number),
+        // ─── NEW: Utility sync filter ────────────────────────────────────────────
+        needs_utility_sync: z.string().transform((val) => val === 'true').optional(),
     }),
 });
 
@@ -877,6 +937,8 @@ export const requesterDashboardSchema = z.object({
         search: z.string().optional(),
         limit: z.string().regex(/^\d+$/).optional().transform(Number),
         offset: z.string().regex(/^\d+$/).optional().transform(Number),
+        // ─── NEW: Utility sync filter ────────────────────────────────────────────
+        utility_sync_status: utilitySyncStatusEnum.optional(),
     }),
 });
 
@@ -897,6 +959,20 @@ export const internalApprovalSummarySchema = z.object({
 export const requesterSummarySchema = z.object({
     query: z.object({
         user_id: z.string().uuid().optional(),
+    }),
+});
+
+/**
+ * POST /api/helpdesk/documents/:id/sync-utilities
+ * Manually trigger utility sync for a document
+ */
+export const syncUtilitiesSchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Document ID must be a valid UUID'),
+    }),
+    body: z.object({
+        force: z.boolean().optional().default(false),
+        comments: z.string().max(500).optional(),
     }),
 });
 
@@ -936,6 +1012,10 @@ export type ResubmitDocumentBody = z.infer<typeof resubmitDocumentSchema>['body'
 export type PendingInternalApprovalsQuery = z.infer<typeof pendingInternalApprovalsSchema>['query'];
 export type RequesterDashboardQuery = z.infer<typeof requesterDashboardSchema>['query'];
 
+// ─── NEW: Utility Sync Types ──────────────────────────────────────────────────
+export type UtilitySyncStatus = z.infer<typeof utilitySyncStatusEnum>;
+export type SyncUtilitiesBody = z.infer<typeof syncUtilitiesSchema>['body'];
+
 // ─── NEW: Stamp Type ──────────────────────────────────────────────────────────
 export type StampType = z.infer<typeof stampTypeEnum>;
 
@@ -949,6 +1029,7 @@ export {
     documentEntityEnum,
     documentStatusEnum,
     stampTypeEnum,
+    utilitySyncStatusEnum,
     internalApprovalStatusEnum,
     requesterVisibleStatusEnum,
     requestTypeEnum,

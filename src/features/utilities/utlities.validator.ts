@@ -18,8 +18,10 @@ export const utilityStatusEnum = z.enum([
   'Payment NA',
 ]);
 
+// ─── UPDATED: Added 'in_memo' ──────────────────────────────────────────────
 export const utilityApprovalStatusEnum = z.enum([
   'pending',
+  'in_memo',     // Currently in a draft memo
   'sent',
   'approved',
   'rejected',
@@ -34,6 +36,23 @@ export const memoStatusEnum = z.enum([
 ]);
 
 export const consolidatedMemoTypeEnum = z.enum(['all', 'fuel']);
+
+// ─── NEW: Document status enum for sync ────────────────────────────────────
+export const documentStatusEnum = z.enum([
+  'draft',
+  'pending_approval',
+  'approved',
+  'rejected',
+  'returned',
+]);
+
+// ─── NEW: Document sync status enum ────────────────────────────────────────
+export const documentSyncStatusEnum = z.enum([
+  'pending',
+  'synced',
+  'failed',
+  'not_applicable',
+]);
 
 // ─── Date Schema ─────────────────────────────────────────────────────────
 
@@ -119,6 +138,10 @@ export const updateUtilityItemSchema = z.object({
     requisition_number: z.string().optional(),
     approval_status: utilityApprovalStatusEnum.optional(),
     memo_id: z.string().uuid('Memo ID must be a valid UUID').nullable().optional(),
+    // ─── NEW: Document sync fields ──────────────────────────────────────────
+    document_sync_status: documentSyncStatusEnum.optional(),
+    last_document_id: z.string().uuid('Document ID must be a valid UUID').nullable().optional(),
+    last_document_status: documentStatusEnum.nullable().optional(),
   }).strict(),
 });
 
@@ -164,6 +187,9 @@ export const utilityFiltersSchema = z.object({
     status: utilityStatusEnum.optional(),
     approval_status: utilityApprovalStatusEnum.optional(),
     period: z.string().optional(),
+    // ─── NEW: Document sync filters ──────────────────────────────────────────
+    document_sync_status: documentSyncStatusEnum.optional(),
+    has_document: z.string().regex(/^(true|false)$/).optional().transform(val => val === 'true'),
     limit: z.string().regex(/^\d+$/).optional().transform(Number),
     offset: z.string().regex(/^\d+$/).optional().transform(Number),
   }).strict(),
@@ -180,6 +206,8 @@ export const generateMemoSchema = z.object({
     utility_item_ids: z.array(z.string().uuid('Each item ID must be a valid UUID'))
       .min(1, 'At least one utility item must be selected'),
     title: z.string().max(255).optional(),
+    // ─── NEW: Exclude items that already have documents ──────────────────────
+    exclude_items_with_documents: z.boolean().optional().default(true),
   }).strict(),
 });
 
@@ -206,6 +234,9 @@ export const memoFiltersSchema = z.object({
     period: z.string().optional(),
     type: consolidatedMemoTypeEnum.optional(),
     status: memoStatusEnum.optional(),
+    // ─── NEW: Document filters for memos ──────────────────────────────────────
+    has_document: z.string().regex(/^(true|false)$/).optional().transform(val => val === 'true'),
+    document_status: documentStatusEnum.optional(),
     limit: z.string().regex(/^\d+$/).optional().transform(Number),
     offset: z.string().regex(/^\d+$/).optional().transform(Number),
   }).strict(),
@@ -232,6 +263,43 @@ export const getUtilitiesByApprovalStatusSchema = z.object({
     period: z.string().optional(),
     utility_type: utilityTypeEnum.optional(),
     judge_name: z.string().optional(),
+    limit: z.string().regex(/^\d+$/).optional().transform(Number),
+    offset: z.string().regex(/^\d+$/).optional().transform(Number),
+  }).strict(),
+});
+
+// ============================================================
+// ─── NEW: Document Sync Schemas ──────────────────────────────────────────────
+// ============================================================
+
+export const syncUtilitiesWithDocumentSchema = z.object({
+  body: z.object({
+    memo_id: z.string().uuid('Memo ID must be a valid UUID'),
+    document_status: documentStatusEnum,
+    document_id: z.string().uuid('Document ID must be a valid UUID'),
+    document_ref: z.string().min(1, 'Document reference is required'),
+    document_entity_type: z.enum(['consolidated_utility_memo', 'consolidated_fuel_memo']),
+    document_entity_id: z.string().min(1, 'Document entity ID is required'),
+  }).strict(),
+});
+
+// ─── NEW: Check items availability for memo ──────────────────────────────────
+
+export const checkMemoAvailabilitySchema = z.object({
+  query: z.object({
+    period: z.string().min(1).max(50),
+    utility_type: utilityTypeEnum.optional(),
+    exclude_with_documents: z.string().regex(/^(true|false)$/).optional().transform(val => val === 'true'),
+  }).strict(),
+});
+
+// ─── NEW: Get items with document status ────────────────────────────────────
+
+export const getItemsWithDocumentStatusSchema = z.object({
+  query: z.object({
+    document_status: documentStatusEnum.optional(),
+    period: z.string().optional(),
+    utility_type: utilityTypeEnum.optional(),
     limit: z.string().regex(/^\d+$/).optional().transform(Number),
     offset: z.string().regex(/^\d+$/).optional().transform(Number),
   }).strict(),
@@ -298,7 +366,13 @@ export type GetPendingUtilitiesInput = z.infer<typeof getPendingUtilitiesSchema>
 export type GetUtilitiesByApprovalStatusInput = z.infer<typeof getUtilitiesByApprovalStatusSchema>['query'];
 export type BulkUpdateUtilityItemsInput = z.infer<typeof bulkUpdateUtilityItemsSchema>['body'];
 
+// ─── NEW: Document Sync Types ────────────────────────────────────────────────
+export type SyncUtilitiesWithDocumentInput = z.infer<typeof syncUtilitiesWithDocumentSchema>['body'];
+export type CheckMemoAvailabilityInput = z.infer<typeof checkMemoAvailabilitySchema>['query'];
+export type GetItemsWithDocumentStatusInput = z.infer<typeof getItemsWithDocumentStatusSchema>['query'];
+
 // Path Parameter Types
 export type UtilityItemIdInput = z.infer<typeof utilityItemIdSchema>['params'];
 export type MemoIdInput = z.infer<typeof memoIdSchema>['params'];
 
+// ─── NEW: Export enums ──────────────────────────────────────────────────────

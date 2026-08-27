@@ -1,5 +1,5 @@
 // ============================================================
-// utilities.service.ts
+// utilities.service.ts - UPDATED with Document Sync Support
 // ============================================================
 
 import { pool } from '../../config/db';
@@ -21,6 +21,9 @@ import type {
     UtilityApprovalStatus,
     ConsolidatedMemoType,
     UtilityStatus,
+    DocumentStatus,
+    SyncUtilityItemsInput,
+    DocumentReference,
 } from './utilities.types';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -29,14 +32,18 @@ const UTILITY_REQUEST_SELECT = `
     id, pj_number, judge_name, created_by, created_at, updated_at
 `;
 
+// ─── UPDATED: Added document sync fields ─────────────────────────────────────
 const UTILITY_ITEM_SELECT = `
     id, request_id, utility_type, requisition_number, amount::float8 AS amount, period, description,
     date_received, date_forwarded_dass, date_paid, status,
     supporting_document_url, 
     approval_status, memo_id, memo_sent_at,
+    document_sync_status, document_synced_at, document_sync_error,
+    last_document_id, last_document_status,
     created_at, updated_at
 `;
 
+// ─── UPDATED: Added document reference fields ────────────────────────────────
 const CONSOLIDATED_MEMO_SELECT = `
     id, type, entity_id, title, period, generated_at, sent_at, approved_at, rejected_at,
     status, utility_item_ids, total_amount::float8 AS total_amount,
@@ -109,11 +116,22 @@ export class UtilitiesService {
             if (filters.period) {
                 items = items.filter((item) => item.period === filters.period);
             }
+            // ─── NEW: Document sync filters ──────────────────────────────────────
+            if (filters.document_sync_status) {
+                items = items.filter((item) => item.document_sync_status === filters.document_sync_status);
+            }
+            if (filters.has_document !== undefined) {
+                if (filters.has_document) {
+                    items = items.filter((item) => item.last_document_id !== null);
+                } else {
+                    items = items.filter((item) => item.last_document_id === null);
+                }
+            }
             
             request.items = items;
         }
 
-        const result = (filters.status || filters.approval_status || filters.period) 
+        const result = (filters.status || filters.approval_status || filters.period || filters.document_sync_status) 
             ? rows.filter((r) => r.items.length > 0) 
             : rows;
         return result;
@@ -171,8 +189,8 @@ export class UtilitiesService {
                     `INSERT INTO utilities_items (
                         request_id, utility_type, requisition_number, amount, period, description,
                         date_received, date_forwarded_dass, date_paid, status,
-                        approval_status
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                        approval_status, document_sync_status
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
                     [
                         requestId,
                         item.utility_type,
@@ -185,6 +203,7 @@ export class UtilitiesService {
                         item.date_paid || null,
                         item.status || 'Awaiting',
                         item.approval_status || 'pending',
+                        'not_applicable', // document_sync_status
                     ]
                 );
             }
@@ -220,8 +239,8 @@ export class UtilitiesService {
             `INSERT INTO utilities_items (
                 request_id, utility_type, requisition_number, amount, period, description,
                 date_received, date_forwarded_dass, date_paid, status,
-                approval_status
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                approval_status, document_sync_status
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
             [
                 requestId,
                 input.utility_type,
@@ -234,6 +253,7 @@ export class UtilitiesService {
                 input.date_paid || null,
                 input.status || 'Awaiting',
                 'pending',
+                'not_applicable',
             ]
         );
 
@@ -280,6 +300,10 @@ export class UtilitiesService {
         setField('requisition_number', input.requisition_number);
         setField('approval_status', input.approval_status);
         setField('memo_id', input.memo_id);
+        // ─── NEW: Document sync fields ──────────────────────────────────────────
+        setField('document_sync_status', input.document_sync_status);
+        setField('last_document_id', input.last_document_id);
+        setField('last_document_status', input.last_document_status);
 
         if (fields.length === 0) {
             return request;
@@ -417,6 +441,15 @@ export class UtilitiesService {
         }
 
         const { rows } = await pool.query(query, params);
+        
+        // ─── NEW: Add document reference for each memo ──────────────────────────
+        for (const memo of rows) {
+            const docRef = await this.getDocumentReferenceForMemo(memo.id);
+            memo.document_reference = docRef;
+            memo.has_document = !!docRef;
+            memo.document_status = docRef?.document_status || null;
+        }
+        
         return rows;
     }
 
@@ -426,7 +459,15 @@ export class UtilitiesService {
              WHERE id = $1 AND is_active = true`,
             [id]
         );
-        return rows[0] || null;
+        if (rows.length === 0) return null;
+        
+        const memo = rows[0];
+        const docRef = await this.getDocumentReferenceForMemo(memo.id);
+        memo.document_reference = docRef;
+        memo.has_document = !!docRef;
+        memo.document_status = docRef?.document_status || null;
+        
+        return memo;
     }
 
     static async findMemoByEntityId(entityId: string): Promise<ConsolidatedMemo | null> {
@@ -435,9 +476,40 @@ export class UtilitiesService {
              WHERE entity_id = $1 AND is_active = true`,
             [entityId]
         );
+        if (rows.length === 0) return null;
+        
+        const memo = rows[0];
+        const docRef = await this.getDocumentReferenceForMemo(memo.id);
+        memo.document_reference = docRef;
+        memo.has_document = !!docRef;
+        memo.document_status = docRef?.document_status || null;
+        
+        return memo;
+    }
+
+    // ─── NEW: Get document reference for a memo ──────────────────────────────
+    private static async getDocumentReferenceForMemo(memoId: string): Promise<DocumentReference | null> {
+        const { rows } = await pool.query(
+            `SELECT 
+                id as document_id,
+                ref as document_ref,
+                status as document_status,
+                entity_type as document_entity_type,
+                entity_id as document_entity_id,
+                created_at,
+                updated_at
+             FROM helpdesk_documents
+             WHERE entity_id = $1 
+               AND entity_type IN ('consolidated_utility_memo', 'consolidated_fuel_memo')
+               AND is_active = true
+             ORDER BY created_at DESC
+             LIMIT 1`,
+            [memoId]
+        );
         return rows[0] || null;
     }
 
+    // ─── UPDATED: generateMemo with document check ──────────────────────────
     static async generateMemo(
         input: GenerateMemoInput,
         userId: string
@@ -447,15 +519,42 @@ export class UtilitiesService {
         try {
             await client.query('BEGIN');
 
-            // Validate all items exist and are pending
+            // ─── Validate items are available ──────────────────────────────────────
+            // Check for: pending, rejected, or in_memo (only if they're in a draft that expired)
+            let statusFilter = "approval_status IN ('pending', 'rejected')";
+            
+            // If excluding items with documents, add that filter
+            if (input.exclude_items_with_documents !== false) {
+                // Items with last_document_status = 'approved' cannot be reused
+                // Items with last_document_status = 'rejected' or 'returned' can be reused
+                statusFilter += ` AND (last_document_status IS NULL OR last_document_status NOT IN ('approved', 'pending_approval'))`;
+            }
+
             const { rows: items } = await client.query(
-                `SELECT id, amount, period FROM utilities_items 
-                 WHERE id = ANY($1) AND is_active = true AND approval_status = 'pending'`,
+                `SELECT id, amount, period, approval_status, last_document_status, memo_id
+                 FROM utilities_items 
+                 WHERE id = ANY($1) AND is_active = true AND ${statusFilter}`,
                 [input.utility_item_ids]
             );
 
             if (items.length !== input.utility_item_ids.length) {
-                throw new AppError(400, 'Some selected items are not available (they may have been sent already)');
+                const foundIds = new Set(items.map((i: any) => i.id));
+                const missingIds = input.utility_item_ids.filter(id => !foundIds.has(id));
+                throw new AppError(400, `Some selected items are not available: ${missingIds.join(', ')}`);
+            }
+
+            // Check if any items are already in a memo
+            const itemsInMemo = items.filter((item: any) => item.memo_id !== null);
+            if (itemsInMemo.length > 0) {
+                const memoIds = [...new Set(itemsInMemo.map((i: any) => i.memo_id))];
+                const { rows: memoRows } = await client.query(
+                    `SELECT id, status FROM consolidated_memos WHERE id = ANY($1) AND is_active = true`,
+                    [memoIds]
+                );
+                const activeMemos = memoRows.filter((m: any) => ['draft', 'sent'].includes(m.status));
+                if (activeMemos.length > 0) {
+                    throw new AppError(400, `Some items are already in active memos: ${activeMemos.map((m: any) => m.id).join(', ')}`);
+                }
             }
 
             // Verify all items have the same period
@@ -497,10 +596,13 @@ export class UtilitiesService {
 
             const memoId = rows[0].id;
 
-            // Update utility items to reference the memo
+            // ─── UPDATE: Set to 'in_memo' instead of 'sent' ──────────────────────
             await client.query(
                 `UPDATE utilities_items 
-                 SET memo_id = $1, approval_status = 'sent', memo_sent_at = NOW(), updated_at = NOW()
+                 SET memo_id = $1, 
+                     approval_status = 'in_memo', 
+                     memo_sent_at = NULL, 
+                     updated_at = NOW()
                  WHERE id = ANY($2)`,
                 [memoId, input.utility_item_ids]
             );
@@ -519,6 +621,7 @@ export class UtilitiesService {
         }
     }
 
+    // ─── UPDATED: sendMemoForApproval ──────────────────────────────────────────
     static async sendMemoForApproval(id: string): Promise<ConsolidatedMemo> {
         const memo = await this.findMemoById(id);
         if (!memo) {
@@ -545,7 +648,9 @@ export class UtilitiesService {
             // Update utility items to reflect sent status
             await client.query(
                 `UPDATE utilities_items 
-                 SET approval_status = 'sent', memo_sent_at = NOW(), updated_at = NOW()
+                 SET approval_status = 'sent', 
+                     memo_sent_at = NOW(), 
+                     updated_at = NOW()
                  WHERE memo_id = $1`,
                 [id]
             );
@@ -564,6 +669,7 @@ export class UtilitiesService {
         }
     }
 
+    // ─── UPDATED: approveMemo with document sync ──────────────────────────────
     static async approveMemo(
         id: string,
         approvedBy: string,
@@ -592,9 +698,12 @@ export class UtilitiesService {
             );
 
             // Update utility items to reflect approved status
+            // Also set document_sync_status to 'pending' since document will be created
             await client.query(
                 `UPDATE utilities_items 
-                 SET approval_status = 'approved', updated_at = NOW()
+                 SET approval_status = 'approved', 
+                     document_sync_status = 'pending',
+                     updated_at = NOW()
                  WHERE memo_id = $1`,
                 [id]
             );
@@ -613,6 +722,7 @@ export class UtilitiesService {
         }
     }
 
+    // ─── UPDATED: rejectMemo with document sync ──────────────────────────────
     static async rejectMemo(
         id: string,
         rejectedBy: string,
@@ -641,9 +751,14 @@ export class UtilitiesService {
             );
 
             // Reset utility items to pending so they can be resent
+            // Also clear document sync fields
             await client.query(
                 `UPDATE utilities_items 
-                 SET approval_status = 'pending', memo_id = NULL, memo_sent_at = NULL, updated_at = NOW()
+                 SET approval_status = 'rejected', 
+                     memo_id = NULL, 
+                     memo_sent_at = NULL, 
+                     document_sync_status = 'not_applicable',
+                     updated_at = NOW()
                  WHERE memo_id = $1`,
                 [id]
             );
@@ -662,6 +777,7 @@ export class UtilitiesService {
         }
     }
 
+    // ─── UPDATED: cancelMemo with document sync ──────────────────────────────
     static async cancelMemo(id: string): Promise<ConsolidatedMemo> {
         const memo = await this.findMemoById(id);
         if (!memo) {
@@ -688,7 +804,11 @@ export class UtilitiesService {
             // Reset utility items to pending so they can be resent
             await client.query(
                 `UPDATE utilities_items 
-                 SET approval_status = 'pending', memo_id = NULL, memo_sent_at = NULL, updated_at = NOW()
+                 SET approval_status = 'pending', 
+                     memo_id = NULL, 
+                     memo_sent_at = NULL, 
+                     document_sync_status = 'not_applicable',
+                     updated_at = NOW()
                  WHERE memo_id = $1`,
                 [id]
             );
@@ -708,11 +828,247 @@ export class UtilitiesService {
     }
 
     // ============================================================
+    // ─── NEW: DOCUMENT SYNC METHODS ──────────────────────────────────────────
+    // ============================================================
+
+    /**
+     * Sync utility items with document status
+     * Called when a document is approved/rejected/returned
+     */
+    static async syncUtilitiesWithDocument(
+        input: SyncUtilityItemsInput
+    ): Promise<{ success: boolean; updatedCount: number; message: string }> {
+        const client = await pool.connect();
+
+        try {
+            await client.query('BEGIN');
+
+            // Find the memo
+            const { rows: memoRows } = await client.query(
+                `SELECT id, utility_item_ids, status FROM consolidated_memos 
+                 WHERE id = $1 AND is_active = true`,
+                [input.memo_id]
+            );
+
+            if (memoRows.length === 0) {
+                throw new AppError(404, 'Memo not found');
+            }
+
+            const memo = memoRows[0];
+            const itemIds = memo.utility_item_ids || [];
+
+            if (itemIds.length === 0) {
+                await client.query('COMMIT');
+                return { success: true, updatedCount: 0, message: 'No items to sync' };
+            }
+
+            // Map document status to utility approval status
+            let newApprovalStatus: string;
+            let shouldResetMemo = false;
+
+            switch (input.document_status) {
+                case 'approved':
+                    newApprovalStatus = 'approved';
+                    break;
+                case 'rejected':
+                    newApprovalStatus = 'rejected';
+                    shouldResetMemo = true;
+                    break;
+                case 'returned':
+                    newApprovalStatus = 'pending';
+                    shouldResetMemo = true;
+                    break;
+                case 'pending_approval':
+                    newApprovalStatus = 'sent';
+                    break;
+                case 'draft':
+                    newApprovalStatus = 'in_memo';
+                    break;
+                default:
+                    newApprovalStatus = 'pending';
+                    shouldResetMemo = true;
+            }
+
+            // Update utility items
+            const result = await client.query(
+                `UPDATE utilities_items 
+                 SET approval_status = $1,
+                     document_sync_status = 'synced',
+                     document_synced_at = NOW(),
+                     document_sync_error = NULL,
+                     last_document_id = $2,
+                     last_document_status = $3,
+                     updated_at = NOW()
+                 WHERE id = ANY($4::uuid[]) AND is_active = true
+                 RETURNING id`,
+                [
+                    newApprovalStatus,
+                    input.document_id,
+                    input.document_status,
+                    itemIds
+                ]
+            );
+
+            // If rejected or returned, also reset memo_id
+            if (shouldResetMemo) {
+                await client.query(
+                    `UPDATE utilities_items 
+                     SET memo_id = NULL, 
+                         memo_sent_at = NULL
+                     WHERE id = ANY($1::uuid[]) AND is_active = true`,
+                    [itemIds]
+                );
+            }
+
+            // Update memo document reference
+            await client.query(
+                `UPDATE consolidated_memos 
+                 SET updated_at = NOW()
+                 WHERE id = $1`,
+                [input.memo_id]
+            );
+
+            await client.query('COMMIT');
+
+            return {
+                success: true,
+                updatedCount: result.rowCount || 0,
+                message: `Synced ${result.rowCount || 0} items to status: ${newApprovalStatus}`
+            };
+
+        } catch (error) {
+            await client.query('ROLLBACK');
+            console.error('[syncUtilitiesWithDocument] Error:', error);
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    /**
+     * Get items available for memo generation
+     */
+    static async getItemsAvailableForMemo(
+        period: string,
+        utilityType?: string,
+        excludeWithDocuments: boolean = true
+    ): Promise<UtilityItem[]> {
+        let query = `
+            SELECT ui.*, ur.judge_name, ur.pj_number
+            FROM utilities_items ui
+            JOIN utilities_requests ur ON ur.id = ui.request_id
+            WHERE ui.is_active = true 
+                AND ui.period = $1
+                AND ui.approval_status IN ('pending', 'rejected')
+                AND (ui.memo_id IS NULL OR ui.memo_id NOT IN (
+                    SELECT id FROM consolidated_memos 
+                    WHERE status IN ('draft', 'sent') 
+                    AND is_active = true
+                ))
+        `;
+        const params: unknown[] = [period];
+        let paramCount = 2;
+
+        if (excludeWithDocuments) {
+            query += ` AND (ui.last_document_status IS NULL OR ui.last_document_status NOT IN ('approved', 'pending_approval'))`;
+        }
+
+        if (utilityType) {
+            query += ` AND ui.utility_type = $${paramCount}`;
+            params.push(utilityType);
+            paramCount++;
+        }
+
+        query += ` ORDER BY ur.judge_name, ui.created_at`;
+
+        const { rows } = await pool.query(query, params);
+        return rows;
+    }
+
+    /**
+     * Get utility items with document status
+     */
+    static async getItemsWithDocumentStatus(
+        documentStatus?: DocumentStatus,
+        period?: string,
+        utilityType?: string,
+        limit?: number,
+        offset?: number
+    ): Promise<UtilityItem[]> {
+        let query = `
+            SELECT ui.*, ur.judge_name, ur.pj_number
+            FROM utilities_items ui
+            JOIN utilities_requests ur ON ur.id = ui.request_id
+            WHERE ui.is_active = true 
+                AND ui.last_document_id IS NOT NULL
+        `;
+        const params: unknown[] = [];
+        let paramCount = 1;
+
+        if (documentStatus) {
+            query += ` AND ui.last_document_status = $${paramCount}`;
+            params.push(documentStatus);
+            paramCount++;
+        }
+        if (period) {
+            query += ` AND ui.period = $${paramCount}`;
+            params.push(period);
+            paramCount++;
+        }
+        if (utilityType) {
+            query += ` AND ui.utility_type = $${paramCount}`;
+            params.push(utilityType);
+            paramCount++;
+        }
+
+        query += ` ORDER BY ui.updated_at DESC`;
+        if (limit) {
+            query += ` LIMIT $${paramCount}`;
+            params.push(limit);
+            paramCount++;
+        }
+        if (offset) {
+            query += ` OFFSET $${paramCount}`;
+            params.push(offset);
+        }
+
+        const { rows } = await pool.query(query, params);
+        return rows;
+    }
+
+    /**
+     * Get memo with document reference
+     */
+    static async getMemoWithDocument(id: string): Promise<{
+        memo: ConsolidatedMemo | null;
+        document: any | null;
+    }> {
+        const memo = await this.findMemoById(id);
+        if (!memo) {
+            return { memo: null, document: null };
+        }
+
+        const docRef = await this.getDocumentReferenceForMemo(memo.id);
+        
+        let document = null;
+        if (docRef) {
+            const { rows } = await pool.query(
+                `SELECT * FROM helpdesk_documents WHERE id = $1 AND is_active = true`,
+                [docRef.document_id]
+            );
+            document = rows[0] || null;
+        }
+
+        return { memo, document };
+    }
+
+    // ============================================================
     // UTILITY QUERY HELPERS
     // ============================================================
 
     /**
      * Get pending utilities (not yet sent for approval)
+     * ─── UPDATED: Excludes items with approved documents ──────────────────────
      */
     static async getPendingUtilities(
         period?: string,
@@ -725,7 +1081,9 @@ export class UtilitiesService {
         let query = `
             SELECT ${UTILITY_ITEM_SELECT}
             FROM utilities_items
-            WHERE is_active = true AND approval_status = 'pending'
+            WHERE is_active = true 
+                AND approval_status IN ('pending', 'rejected')
+                AND (last_document_status IS NULL OR last_document_status NOT IN ('approved', 'pending_approval'))
         `;
         const params: unknown[] = [];
         let paramCount = 1;
@@ -818,12 +1176,15 @@ export class UtilitiesService {
 
     /**
      * Get memo summary statistics
+     * ─── UPDATED: Added document stats ─────────────────────────────────────────
      */
     static async getMemoSummary(period?: string): Promise<{
         totalMemos: number;
         byStatus: Record<string, number>;
         totalAmount: number;
         pendingItems: number;
+        memosWithDocuments: number;
+        memosWithoutDocuments: number;
     }> {
         let query = `
             SELECT 
@@ -867,11 +1228,29 @@ export class UtilitiesService {
         const { rows: pendingRows } = await pool.query(pendingQuery, pendingParams);
         const pendingItems = pendingRows[0]?.count || 0;
 
+        // ─── NEW: Get document stats ──────────────────────────────────────────────
+        let docQuery = `
+            SELECT 
+                COUNT(CASE WHEN d.id IS NOT NULL THEN 1 END) as with_documents,
+                COUNT(CASE WHEN d.id IS NULL THEN 1 END) as without_documents
+            FROM consolidated_memos cm
+            LEFT JOIN helpdesk_documents d ON d.entity_id = cm.id 
+                AND d.entity_type IN ('consolidated_utility_memo', 'consolidated_fuel_memo')
+                AND d.is_active = true
+            WHERE cm.is_active = true
+        `;
+        if (period) {
+            docQuery += ` AND cm.period = $1`;
+        }
+        const { rows: docRows } = await pool.query(docQuery, period ? [period] : []);
+
         return {
             totalMemos,
             byStatus,
             totalAmount,
             pendingItems,
+            memosWithDocuments: Number(docRows[0]?.with_documents) || 0,
+            memosWithoutDocuments: Number(docRows[0]?.without_documents) || 0,
         };
     }
 
@@ -924,6 +1303,15 @@ export class UtilitiesService {
         byApprovalStatus: Record<UtilityApprovalStatus, number>;
         byType: Record<string, number>;
         totalAmount: number;
+        // ─── NEW: Document sync stats ──────────────────────────────────────────
+        documentSyncStats: {
+            synced: number;
+            pending: number;
+            failed: number;
+            notApplicable: number;
+        };
+        itemsWithApprovedDocuments: number;
+        itemsWithRejectedDocuments: number;
     }> {
         // Get total requests
         const { rows: requestRows } = await pool.query(
@@ -959,6 +1347,25 @@ export class UtilitiesService {
              GROUP BY utility_type`
         );
 
+        // ─── NEW: Document sync stats ──────────────────────────────────────────────
+        const { rows: syncRows } = await pool.query(
+            `SELECT 
+                document_sync_status,
+                COUNT(*)::int as count
+             FROM utilities_items 
+             WHERE is_active = true 
+             GROUP BY document_sync_status`
+        );
+
+        const { rows: docStatusRows } = await pool.query(
+            `SELECT 
+                last_document_status,
+                COUNT(*)::int as count
+             FROM utilities_items 
+             WHERE is_active = true AND last_document_id IS NOT NULL
+             GROUP BY last_document_status`
+        );
+
         const byStatus = statusRows.reduce((acc, row) => {
             acc[row.status] = row.count;
             return acc;
@@ -976,6 +1383,28 @@ export class UtilitiesService {
 
         const totalAmount = typeRows.reduce((sum, row) => sum + Number(row.total), 0);
 
+        const documentSyncStats = {
+            synced: 0,
+            pending: 0,
+            failed: 0,
+            notApplicable: 0,
+        };
+        syncRows.forEach((row) => {
+            if (row.document_sync_status in documentSyncStats) {
+                documentSyncStats[row.document_sync_status as keyof typeof documentSyncStats] = row.count;
+            }
+        });
+
+        let itemsWithApprovedDocuments = 0;
+        let itemsWithRejectedDocuments = 0;
+        docStatusRows.forEach((row) => {
+            if (row.last_document_status === 'approved') {
+                itemsWithApprovedDocuments += row.count;
+            } else if (row.last_document_status === 'rejected') {
+                itemsWithRejectedDocuments += row.count;
+            }
+        });
+
         return {
             totalRequests: requestRows[0]?.count || 0,
             totalItems: itemRows[0]?.count || 0,
@@ -983,20 +1412,84 @@ export class UtilitiesService {
             byApprovalStatus,
             byType,
             totalAmount,
+            documentSyncStats,
+            itemsWithApprovedDocuments,
+            itemsWithRejectedDocuments,
         };
     }
 
     /**
      * Get available periods for memo generation
+     * ─── UPDATED: Excludes periods where all items have approved documents ──────
      */
     static async getAvailablePeriods(): Promise<string[]> {
         const { rows } = await pool.query(
             `SELECT DISTINCT period 
              FROM utilities_items 
-             WHERE is_active = true AND approval_status = 'pending'
+             WHERE is_active = true 
+               AND approval_status IN ('pending', 'rejected')
+               AND (last_document_status IS NULL OR last_document_status NOT IN ('approved', 'pending_approval'))
              ORDER BY period DESC`
         );
         return rows.map((row) => row.period).filter(Boolean);
+    }
+
+    /**
+     * Check if items are available for memo
+     */
+    static async checkItemsAvailability(
+        itemIds: string[],
+        excludeWithDocuments: boolean = true
+    ): Promise<{
+        available: string[];
+        unavailable: Array<{ id: string; reason: string }>;
+    }> {
+        if (itemIds.length === 0) {
+            return { available: [], unavailable: [] };
+        }
+
+        let query = `
+            SELECT id, approval_status, memo_id, last_document_status
+            FROM utilities_items 
+            WHERE id = ANY($1) AND is_active = true
+        `;
+        const { rows } = await pool.query(query, [itemIds]);
+
+        const available: string[] = [];
+        const unavailable: Array<{ id: string; reason: string }> = [];
+
+        for (const item of rows) {
+            let isAvailable = false;
+            let reason = '';
+
+            if (item.approval_status === 'pending' || item.approval_status === 'rejected') {
+                if (excludeWithDocuments && item.last_document_status === 'approved') {
+                    reason = 'Item already has an approved document';
+                } else if (item.memo_id !== null) {
+                    const { rows: memoRows } = await pool.query(
+                        `SELECT status FROM consolidated_memos WHERE id = $1 AND is_active = true`,
+                        [item.memo_id]
+                    );
+                    if (memoRows.length > 0 && ['draft', 'sent'].includes(memoRows[0].status)) {
+                        reason = `Item is in an active memo (${memoRows[0].status})`;
+                    } else {
+                        isAvailable = true;
+                    }
+                } else {
+                    isAvailable = true;
+                }
+            } else {
+                reason = `Item has status: ${item.approval_status}`;
+            }
+
+            if (isAvailable) {
+                available.push(item.id);
+            } else {
+                unavailable.push({ id: item.id, reason: reason || 'Item is not available' });
+            }
+        }
+
+        return { available, unavailable };
     }
 
 } // end UtilitiesService

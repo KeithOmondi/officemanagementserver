@@ -1,5 +1,5 @@
 // ============================================================
-// utilities.routes.ts - UPDATED with Memo Support
+// utilities.routes.ts - UPDATED with Document Sync Support
 // ============================================================
 
 import { Router } from 'express';
@@ -40,6 +40,7 @@ router.delete('/:id', requireRole('super_admin', 'dept_head', 'staff'), utilitie
 router.get('/memos', utilitiesController.getAllMemos);
 router.get('/memos/:id', utilitiesController.getMemoById);
 router.get('/memos/entity/:entityId', utilitiesController.getMemoByEntityId);
+router.get('/memos/:id/with-document', utilitiesController.getMemoWithDocument);
 
 // ─── Generate and manage memos ──────────────────────────────────────────────
 router.post('/memos/generate', requireRole('dept_head', 'super_admin', 'staff'), utilitiesController.generateMemo);
@@ -47,6 +48,46 @@ router.post('/memos/:id/send', requireRole('dept_head', 'super_admin', 'staff'),
 router.post('/memos/:id/approve', requireRole('dept_head', 'super_admin'), utilitiesController.approveMemo);
 router.post('/memos/:id/reject', requireRole('dept_head', 'super_admin'), utilitiesController.rejectMemo);
 router.post('/memos/:id/cancel', requireRole('dept_head', 'super_admin', 'staff'), utilitiesController.cancelMemo);
+
+// ============================================================
+// ─── NEW: DOCUMENT SYNC ROUTES ──────────────────────────────────────────────
+// ============================================================
+
+/**
+ * POST /api/utilities/sync-with-document
+ * Sync utility items with document status (called by document service)
+ * This is an internal webhook-like endpoint
+ */
+router.post(
+    '/sync-with-document',
+    requireRole('super_admin', 'dept_head'),
+    utilitiesController.syncUtilitiesWithDocument
+);
+
+/**
+ * GET /api/utilities/available-items
+ * Get items available for memo generation
+ * Filters by period, utility type, and excludes items with approved documents
+ */
+router.get('/available-items', utilitiesController.getAvailableItemsForMemo);
+
+/**
+ * GET /api/utilities/items-with-document-status
+ * Get utility items filtered by document status
+ * Useful for seeing which items are linked to approved/rejected documents
+ */
+router.get('/items-with-document-status', utilitiesController.getItemsWithDocumentStatus);
+
+/**
+ * POST /api/utilities/check-items-availability
+ * Check if specific items are available for memo generation
+ * Returns which items are available and why others are not
+ */
+router.post(
+    '/check-items-availability',
+    requireRole('dept_head', 'super_admin', 'staff'),
+    utilitiesController.checkItemsAvailability
+);
 
 // ============================================================
 // UTILITY QUERY HELPERS

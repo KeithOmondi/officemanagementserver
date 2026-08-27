@@ -1,5 +1,5 @@
 // ============================================================
-// utilities.controller.ts - FIXED
+// utilities.controller.ts - UPDATED with Document Sync Support
 // ============================================================
 
 import { Request, Response } from 'express';
@@ -9,7 +9,28 @@ import { AppError, sendSuccess } from '../../utils/response';
 
 import { getRealtimeService } from '../../middleware/realtime.middleware';
 import { UtilitiesService } from './utlities.service';
-import { addUtilityItemSchema, bulkUpdateUtilityItemsSchema, createUtilitySchema, deleteUtilityItemSchema, deleteUtilitySchema, generateMemoSchema, getPendingUtilitiesSchema, memoFiltersSchema, memoIdSchema, memoSummarySchema, sendMemoForApprovalSchema, updateUtilityItemSchema, updateUtilitySchema, utilityApprovalStatusEnum, utilityFiltersSchema, utilityTypeEnum } from './utlities.validator';
+import {
+    addUtilityItemSchema,
+    bulkUpdateUtilityItemsSchema,
+    createUtilitySchema,
+    deleteUtilityItemSchema,
+    deleteUtilitySchema,
+    generateMemoSchema,
+    getPendingUtilitiesSchema,
+    memoFiltersSchema,
+    memoIdSchema,
+    memoSummarySchema,
+    sendMemoForApprovalSchema,
+    updateUtilityItemSchema,
+    updateUtilitySchema,
+    utilityApprovalStatusEnum,
+    utilityFiltersSchema,
+    utilityTypeEnum,
+    syncUtilitiesWithDocumentSchema,
+    checkMemoAvailabilitySchema,
+    getItemsWithDocumentStatusSchema,
+    documentStatusEnum,
+} from './utlities.validator';
 
 // ─── Helper: Safe realtime emit ──────────────────────────────────────────────
 
@@ -339,6 +360,118 @@ export const utilitiesController = {
     }),
 
     // ============================================================
+    // ─── NEW: DOCUMENT SYNC ENDPOINTS ──────────────────────────────────────
+    // ============================================================
+
+    /**
+     * POST /api/utilities/sync-with-document
+     * Sync utility items with document status (called by document service)
+     */
+    syncUtilitiesWithDocument: asyncHandler(async (req: Request, res: Response) => {
+        const result = syncUtilitiesWithDocumentSchema.safeParse({ body: req.body });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
+        }
+        
+        const syncResult = await UtilitiesService.syncUtilitiesWithDocument(result.data.body);
+        
+        safeRealtimeBroadcast(req, 'utilities_synced_with_document', {
+            memo_id: result.data.body.memo_id,
+            document_status: result.data.body.document_status,
+            updated_count: syncResult.updatedCount,
+        });
+        
+        return sendSuccess(res, syncResult, syncResult.message);
+    }),
+
+    /**
+     * GET /api/utilities/available-items
+     * Get items available for memo generation
+     */
+    getAvailableItemsForMemo: asyncHandler(async (req: Request, res: Response) => {
+        const result = checkMemoAvailabilitySchema.safeParse({ query: req.query });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid parameters');
+        }
+        
+        const { period, utility_type, exclude_with_documents } = result.data.query;
+        const items = await UtilitiesService.getItemsAvailableForMemo(
+            period,
+            utility_type,
+            exclude_with_documents ?? true
+        );
+        
+        return sendSuccess(res, items, 'Available items retrieved');
+    }),
+
+    /**
+     * GET /api/utilities/items-with-document-status
+     * Get utility items filtered by document status
+     */
+    getItemsWithDocumentStatus: asyncHandler(async (req: Request, res: Response) => {
+        const result = getItemsWithDocumentStatusSchema.safeParse({ query: req.query });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid parameters');
+        }
+        
+        const { document_status, period, utility_type, limit, offset } = result.data.query;
+        const items = await UtilitiesService.getItemsWithDocumentStatus(
+            document_status,
+            period,
+            utility_type,
+            limit,
+            offset
+        );
+        
+        return sendSuccess(res, items, 'Items with document status retrieved');
+    }),
+
+    /**
+     * GET /api/utilities/memos/:id/with-document
+     * Get a memo with its associated document
+     */
+    getMemoWithDocument: asyncHandler(async (req: Request, res: Response) => {
+        const result = memoIdSchema.safeParse({ params: req.params });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid ID');
+        }
+        
+        const { memo, document } = await UtilitiesService.getMemoWithDocument(result.data.params.id);
+        if (!memo) {
+            throw new AppError(404, 'Memo not found');
+        }
+        
+        return sendSuccess(res, { memo, document }, 'Memo with document retrieved');
+    }),
+
+    /**
+     * POST /api/utilities/check-items-availability
+     * Check if specific items are available for memo generation
+     */
+    checkItemsAvailability: asyncHandler(async (req: Request, res: Response) => {
+        const schema = z.object({
+            body: z.object({
+                item_ids: z.array(z.string().uuid('Each item ID must be a valid UUID'))
+                    .min(1, 'At least one item ID is required'),
+                exclude_with_documents: z.boolean().optional().default(true),
+            }).strict(),
+        });
+        
+        const result = schema.safeParse({ body: req.body });
+        if (!result.success) {
+            throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
+        }
+        
+        const { item_ids, exclude_with_documents } = result.data.body;
+        const availability = await UtilitiesService.checkItemsAvailability(
+            item_ids,
+            exclude_with_documents
+        );
+        
+        return sendSuccess(res, availability, 'Item availability checked');
+    }),
+
+    // ============================================================
     // UTILITY QUERY HELPERS
     // ============================================================
 
@@ -489,9 +622,11 @@ export const utilitiesController = {
         const enums = {
             utilityTypes: ['Electricity', 'Water', 'Internet', 'Fuel', 'Other'],
             utilityStatuses: ['Awaiting', 'Awaiting Documentation', 'Awaiting Funding', 'In Process', 'Approved', 'Paid', 'Payment NA'],
-            approvalStatuses: ['pending', 'sent', 'approved', 'rejected'],
+            approvalStatuses: ['pending', 'in_memo', 'sent', 'approved', 'rejected'],
             memoStatuses: ['draft', 'sent', 'approved', 'rejected', 'cancelled'],
             memoTypes: ['all', 'fuel'],
+            documentSyncStatuses: ['pending', 'synced', 'failed', 'not_applicable'],
+            documentStatuses: ['draft', 'pending_approval', 'approved', 'rejected', 'returned'],
         };
         return sendSuccess(res, enums, 'Utility enums retrieved');
     }),

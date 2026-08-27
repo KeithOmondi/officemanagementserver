@@ -63,7 +63,7 @@ export type InternalApprovalStatus =
     | 'approved_internal'          // Super admin approved (waiting to send back)
     | 'rejected_internal'          // Super admin rejected (waiting to send back)
     | 'changes_requested_internal' // Super admin wants changes (waiting to send back)
-    | 'changes_ready';             // Changes have been made, ready for re-preview
+    | 'changes_ready';             // Changes have been made, ready for re-review
 
 /**
  * External/Requester visible status (what the requester sees)
@@ -75,6 +75,32 @@ export type RequesterVisibleStatus =
     | 'rejected'            // Requester sees: Document rejected ✗
     | 'changes_requested'   // Requester sees: Changes requested
     | 'in_revision';        // Requester sees: Being revised
+
+// ─── NEW: Utility Sync Status ─────────────────────────────────────────────────
+
+/**
+ * Tracks the sync status between a document and its associated utility items
+ */
+export type UtilitySyncStatus = 
+    | 'pending'      // Document is still pending, utility items are not synced
+    | 'synced'       // Utility items have been synced with document status
+    | 'failed'       // Sync attempt failed
+    | 'not_applicable'; // Not a utility document
+
+/**
+ * Represents a utility item that has been synced with a document
+ */
+export interface SyncedUtilityItem {
+    id: string;
+    utility_type: string;
+    amount: number;
+    period: string;
+    judge_name: string;
+    pj_number: string | null;
+    previous_status: string;
+    new_status: string;
+    synced_at: string;
+}
 
 export interface HelpdeskDocument {
     id: string;
@@ -138,6 +164,28 @@ export interface HelpdeskDocument {
     is_sent_back_to_requester: boolean; // Document has been sent back to requester
     is_requester_notified: boolean; // Requester has been notified
 
+    // ─── NEW: Utility Sync Fields ──────────────────────────────────────────────
+    /**
+     * Whether utility items have been synced with this document
+     */
+    utility_sync_status: UtilitySyncStatus;
+    /**
+     * When the utility items were last synced
+     */
+    utility_synced_at?: string;
+    /**
+     * Who performed the sync
+     */
+    utility_synced_by?: string;
+    /**
+     * Detailed sync results
+     */
+    utility_sync_result?: {
+        total_items: number;
+        updated_items: SyncedUtilityItem[];
+        failed_items: Array<{ id: string; reason: string }>;
+    };
+
     // ─── Signature Fields ──────────────────────────────────────────────────────
     is_signed: boolean;                    // Whether the document has been signed
     signed_by?: string;                    // ID of the user who signed
@@ -190,12 +238,23 @@ export interface HelpdeskDocument {
     // ─── Legacy fields ──────────────────────────────────────────────────────
     rank?: string | null;
     reporting_date?: string | null;
+
+    // ─── NEW: Memo Reference ────────────────────────────────────────────────────
+    /**
+     * Reference to the consolidated memo if this is a utility document
+     */
+    memo_reference?: {
+        memo_id: string;
+        memo_type: 'all' | 'fuel';
+        period: string;
+        total_amount: number;
+    };
 }
 
 export interface ApprovalHistoryEntry {
     id: string;
     document_id: string;
-    action: 'submitted' | 'approved' | 'rejected' | 'returned' | 'previewed' | 'sent_back' | 'resubmitted' | 'signed' | 'stamped';
+    action: 'submitted' | 'approved' | 'rejected' | 'returned' | 'previewed' | 'sent_back' | 'resubmitted' | 'signed' | 'stamped' | 'utility_synced';
     from_user_id: string;
     from_user_name: string;
     to_user_id?: string;
@@ -205,6 +264,12 @@ export interface ApprovalHistoryEntry {
     // For two-step workflow
     internal_action?: boolean; // Whether this was an internal action (super admin only)
     requester_visible?: boolean; // Whether this action is visible to requester
+    // ─── NEW: Utility sync metadata ──────────────────────────────────────────────
+    utility_sync_metadata?: {
+        total_items: number;
+        updated_count: number;
+        failed_count: number;
+    };
 }
 
 export interface Comment {
@@ -230,6 +295,14 @@ export interface CreateHelpdeskDocumentInput {
     
     // ─── NEW: Stamp field for initial creation ────────────────────────────────
     stamp_type?: StampType | null; // Pre-select a specific stamp type if needed at creation
+
+    // ─── NEW: Utility memo reference ────────────────────────────────────────────
+    memo_reference?: {
+        memo_id: string;
+        memo_type: 'all' | 'fuel';
+        period: string;
+        total_amount: number;
+    };
 
     // ─── Aide Request Fields ──────────────────────────────────────────────
     officer_rank?: string | null;
@@ -267,7 +340,13 @@ export interface UpdateDocumentStatusInput {
     e_stamp_public_id?: string;
     approved_by?: string;
     approved_by_name?: string;
+    // ─── NEW: Control utility sync ──────────────────────────────────────────────
+    sync_utilities?: boolean; // Whether to sync utility items on status change
 }
+
+// src/features/helpdesk/helpdesk.documents.types.ts
+
+// Find the UpdateDocumentFileInput interface and add these two missing properties:
 
 export interface UpdateDocumentFileInput {
     status?: DocumentStatus;
@@ -280,11 +359,17 @@ export interface UpdateDocumentFileInput {
     rejection_reason?: string;
     returned_by?: string;
     returned_by_name?: string;
+    
+    // ─── NEW: Utility sync fields ────────────────────────────────────────────
+    sync_utilities?: boolean;          // Whether to sync utility items
+    utility_sync_status?: UtilitySyncStatus; // Sync status to set
+    
     // ─── Signature fields ──────────────────────────────────────────────────────
     is_signed?: boolean;
     signed_by?: string;
     signed_by_name?: string;
     signed_at?: string;
+    
     // ─── NEW: Stamp fields ────────────────────────────────────────────────────
     is_stamped?: boolean;
     stamped_by?: string;
@@ -295,6 +380,7 @@ export interface UpdateDocumentFileInput {
     stamp_position_y?: number;
     stamp_position_width?: number;
     stamp_position_height?: number;
+    
     // ─── NEW: Final generated PDF fields ──────────────────────────────────────
     stamped_file_url?: string;
     stamped_file_public_id?: string;
@@ -324,6 +410,10 @@ export interface HelpdeskDocumentFilters {
     pending_internal_approval?: boolean; // For super admin dashboard
     ready_to_send_back?: boolean; // Super admin has decided, ready to send back
     my_requester_documents?: boolean; // For requester dashboard
+    
+    // ─── NEW: Utility Sync Filters ────────────────────────────────────────────
+    utility_sync_status?: UtilitySyncStatus;
+    needs_utility_sync?: boolean; // Documents that haven't been synced yet
     
     // ─── Aide Request Filters ──────────────────────────────────────────────
     officer_rank?: string;
@@ -381,6 +471,8 @@ export interface InternalApprovalRequest {
     stamp_position_width?: number;
     stamp_position_height?: number;
     stamp_type?: StampType; // Allow admin to choose/override the stamp type during approval
+    // ─── NEW: Control utility sync ────────────────────────────────────────────
+    sync_utilities?: boolean; // Whether to sync utility items on approval
 }
 
 /**
@@ -409,6 +501,8 @@ export interface SendBackToRequesterRequest {
     final_status: 'approved' | 'rejected' | 'changes_requested';
     // Optional: additional message for requester
     requester_message?: string;
+    // ─── NEW: Control utility sync ────────────────────────────────────────────
+    sync_utilities?: boolean; // Whether to sync utility items when sending back
 }
 
 /**
@@ -422,6 +516,8 @@ export interface ResubmitAfterChangesRequest {
     file_update?: boolean; // Whether the file was updated
     // Optional: new file to upload
     file?: Express.Multer.File;
+    // ─── NEW: Reset utility sync ──────────────────────────────────────────────
+    reset_utility_sync?: boolean; // Reset utility items to pending on resubmit
 }
 
 /**
@@ -468,6 +564,8 @@ export interface PendingInternalApprovalsSummary {
     urgent_pending: number;
     oldest_pending_days: number;
     average_review_time_hours?: number;
+    // ─── NEW: Utility sync stats ──────────────────────────────────────────────
+    pending_utility_sync: number;    // Documents waiting for utility sync
 }
 
 /**
@@ -504,12 +602,14 @@ export interface RequesterDocumentView {
     stamp_type?: StampType;
     // ─── NEW: Final file info ──────────────────────────────────────────────────
     stamped_file_url?: string | null; // Requester will download/view this if approved
+    // ─── NEW: Utility sync status ──────────────────────────────────────────────
+    utility_sync_status: UtilitySyncStatus;
 }
 
 // ─── Notification Types ──────────────────────────────────────────────────────
 
 export interface SuperAdminNotification {
-    type: 'new_document_submitted' | 'document_previewed' | 'document_internally_approved' | 'document_sent_back';
+    type: 'new_document_submitted' | 'document_previewed' | 'document_internally_approved' | 'document_sent_back' | 'utility_sync_completed';
     document_id: string;
     document_ref: string;
     document_subject: string;
@@ -526,10 +626,16 @@ export interface SuperAdminNotification {
     rejection_reason?: string;
     priority: 'low' | 'normal' | 'high' | 'urgent';
     timestamp: string;
+    // ─── NEW: Utility sync info ────────────────────────────────────────────────
+    utility_sync_info?: {
+        total_items: number;
+        updated_items: number;
+        failed_items: number;
+    };
 }
 
 export interface RequesterNotification {
-    type: 'document_approved' | 'document_rejected' | 'document_changes_requested' | 'document_status_updated';
+    type: 'document_approved' | 'document_rejected' | 'document_changes_requested' | 'document_status_updated' | 'utility_items_updated';
     document_id: string;
     document_ref: string;
     document_subject: string;
@@ -562,6 +668,8 @@ export interface TwoStepApprovalConfig {
     daily_digest_enabled: boolean;
     daily_digest_time: string; // e.g., "09:00"
     urgent_threshold_hours: number; // Hours after which pending becomes urgent
+    // ─── NEW: Utility sync config ──────────────────────────────────────────────
+    auto_sync_utilities: boolean; // Whether to auto-sync utilities on approval/rejection
 }
 
 // ─── Document Summary Types ──────────────────────────────────────────────────
@@ -590,6 +698,13 @@ export interface DocumentSummary {
     // ─── NEW: Stamp summary ────────────────────────────────────────────────────
     stamped_count: number;
     signed_and_stamped_count: number;
+    // ─── NEW: Utility sync summary ──────────────────────────────────────────────
+    utility_sync_summary: {
+        synced: number;
+        pending: number;
+        failed: number;
+        not_applicable: number;
+    };
 }
 
 export interface DocumentStats {
@@ -620,6 +735,13 @@ export interface DocumentStats {
     stamped_count: number;
     signed_count: number;
     signed_and_stamped_count: number;
+    // ─── NEW: Utility sync stats ──────────────────────────────────────────────
+    utility_sync_stats: {
+        total_utility_documents: number;
+        synced: number;
+        pending: number;
+        failed: number;
+    };
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -942,6 +1064,26 @@ export function isStampType(value: string): value is StampType {
     return ['approved', 'received', 'official'].includes(value);
 }
 
+// ─── NEW: Utility Sync Type Guards ───────────────────────────────────────────
+
+export function isUtilityDocument(entityType: DocumentEntityType): boolean {
+    return ['consolidated_utility_memo', 'consolidated_fuel_memo', 'utility_memo'].includes(entityType);
+}
+
+export function isConsolidatedUtilityDocument(entityType: DocumentEntityType): boolean {
+    return ['consolidated_utility_memo', 'consolidated_fuel_memo'].includes(entityType);
+}
+
+export function getUtilitySyncStatusLabel(status: UtilitySyncStatus): string {
+    const labels: Record<UtilitySyncStatus, string> = {
+        pending: 'Pending Sync',
+        synced: 'Synced ✓',
+        failed: 'Sync Failed',
+        not_applicable: 'N/A',
+    };
+    return labels[status] || status;
+}
+
 // ─── Helper Functions ────────────────────────────────────────────────────────
 
 export function getEntityDisplayName(entityType: DocumentEntityType): string {
@@ -1260,6 +1402,12 @@ export function buildDocumentFilters(filters: HelpdeskDocumentFilters): Record<s
     if (filters.ready_to_send_back !== undefined) result.ready_to_send_back = filters.ready_to_send_back;
     if (filters.my_requester_documents !== undefined) result.my_requester_documents = filters.my_requester_documents;
     
+    // ─── NEW: Utility sync filters ────────────────────────────────────────────
+    if (filters.utility_sync_status) result.utility_sync_status = filters.utility_sync_status;
+    if (filters.needs_utility_sync !== undefined) {
+        result.needs_utility_sync = filters.needs_utility_sync;
+    }
+    
     // Aide Request Filters
     if (filters.officer_rank) result.officer_rank = filters.officer_rank;
     if (filters.officer_name) result.officer_name = filters.officer_name;
@@ -1375,6 +1523,12 @@ export const TWO_STEP_APPROVAL_TABLE_COLUMNS = `
     signature_position_y FLOAT,
     signature_position_width FLOAT,
     signature_position_height FLOAT,
+
+    -- ─── NEW: Utility Sync fields ────────────────────────────────────────────
+    utility_sync_status VARCHAR(50) DEFAULT 'not_applicable',
+    utility_synced_at TIMESTAMP,
+    utility_synced_by UUID,
+    utility_sync_result JSONB,
 
     -- ─── NEW: Stamp fields ──────────────────────────────────────────────────────
     is_stamped BOOLEAN DEFAULT FALSE,

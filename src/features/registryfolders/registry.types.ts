@@ -147,4 +147,4 @@ export const CATEGORY_COLORS: Record<RegistryCategory, string> = {
     legal: 'bg-red-50 text-red-700 border-red-200',
     projects: 'bg-teal-50 text-teal-700 border-teal-200',
     other: 'bg-stone-50 text-stone-700 border-stone-200',
-};
+}; //folders, files, registers

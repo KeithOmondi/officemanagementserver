@@ -242,7 +242,10 @@ export class StationEngagementExportService {
         if (report.engagements && report.engagements.length > 0) {
           this.drawSectionHeader(doc, 'B', `STATION ENGAGEMENT LOG (${report.engagements.length})`);
           report.engagements.forEach((engagement, index) => {
-            if (doc.y > 650) {
+            // Estimate the card's height up front so we only page-break
+            // when the card genuinely won't fit, rather than mid-card.
+            const estimatedHeight = this.estimateEngagementCardHeight(doc, engagement);
+            if (doc.y + estimatedHeight > 780) {
               doc.addPage();
             }
             this.drawEngagementCard(doc, engagement);
@@ -291,7 +294,8 @@ export class StationEngagementExportService {
           }
           this.drawSectionHeader(doc, 'D', `ESCALATIONS FOR THE REGISTRAR'S ATTENTION (${report.escalations.length})`);
           report.escalations.forEach((escalation) => {
-            if (doc.y > 700) {
+            const estimatedHeight = this.estimateEscalationCardHeight(doc, escalation);
+            if (doc.y + estimatedHeight > 780) {
               doc.addPage();
             }
             this.drawEscalationCard(doc, escalation);
@@ -387,6 +391,12 @@ export class StationEngagementExportService {
   private static readonly TEXT_DARK = '#111827';
   private static readonly BORDER_GRAY = '#d1d5db';
 
+  private static readonly FIELD_LABEL_SIZE = 7;
+  private static readonly FIELD_VALUE_SIZE = 8.5;
+  private static readonly FIELD_LABEL_OFFSET = 11; // space taken by the label above the box
+  private static readonly FIELD_BOX_MIN_HEIGHT = 23; // minimum box height (fits ~1 line)
+  private static readonly FIELD_BOX_PAD_Y = 6; // top/bottom inner padding inside a field box
+
   private static ensureSpace(doc: PDFKit.PDFDocument, needed: number): void {
     if (doc.y + needed > 760) {
       doc.addPage();
@@ -401,29 +411,72 @@ export class StationEngagementExportService {
     doc.moveDown(0.5);
   }
 
+  /**
+   * Draws a labeled field box with a FIXED height. Best for short, predictable
+   * values (station names, dates, statuses) where truncation is acceptable
+   * as a last resort. Truncates with an ellipsis if the value doesn't fit.
+   */
   private static drawFieldBox(
     doc: PDFKit.PDFDocument,
     x: number, y: number, width: number, height: number,
     label: string, value: string
   ): void {
-    doc.font('Helvetica-Bold').fontSize(7).fillColor(this.LABEL_GRAY)
+    doc.font('Helvetica-Bold').fontSize(this.FIELD_LABEL_SIZE).fillColor(this.LABEL_GRAY)
        .text(label.toUpperCase(), x, y, { width });
 
-    const boxY = y + 11;
-    const boxHeight = height - 11;
+    const boxY = y + this.FIELD_LABEL_OFFSET;
+    const boxHeight = height - this.FIELD_LABEL_OFFSET;
 
     doc.roundedRect(x, boxY, width, boxHeight, 3)
        .strokeColor(this.BORDER_GRAY)
        .lineWidth(0.75)
        .stroke();
 
-    doc.font('Helvetica').fontSize(8.5).fillColor(this.TEXT_DARK)
-       .text(value || '\u2014', x + 6, boxY + 6, {
+    doc.font('Helvetica').fontSize(this.FIELD_VALUE_SIZE).fillColor(this.TEXT_DARK)
+       .text(value || '\u2014', x + 6, boxY + this.FIELD_BOX_PAD_Y, {
          width: width - 12,
-         height: boxHeight - 10,
+         height: boxHeight - (this.FIELD_BOX_PAD_Y * 2 - 2),
          ellipsis: true,
        });
   }
+
+  /**
+   * Measures how tall a field box needs to be (label + border box) to fit
+   * `value` in full at the given width, with no truncation. Use this before
+   * drawFieldBoxAuto so that paired boxes (e.g. two columns in a row) can be
+   * given a shared, mutually-fitting height.
+   */
+  private static measureFieldBoxHeight(doc: PDFKit.PDFDocument, width: number, value: string): number {
+    const text = value || '\u2014';
+    const textHeight = doc.font('Helvetica').fontSize(this.FIELD_VALUE_SIZE)
+      .heightOfString(text, { width: width - 12 });
+    const boxHeight = Math.max(this.FIELD_BOX_MIN_HEIGHT, textHeight + this.FIELD_BOX_PAD_Y * 2);
+    return boxHeight + this.FIELD_LABEL_OFFSET;
+  }
+
+private static drawFieldBoxAuto(
+  doc: PDFKit.PDFDocument,
+  x: number, y: number, width: number, height: number,
+  label: string, value: string
+): void {
+  console.log('🟢 AUTO BOX RUNNING:', label, '| height:', height);   // ← ADD THIS LINE
+
+  doc.font('Helvetica-Bold').fontSize(this.FIELD_LABEL_SIZE).fillColor(this.LABEL_GRAY)
+     .text(label.toUpperCase(), x, y, { width });
+
+  const boxY = y + this.FIELD_LABEL_OFFSET;
+  const boxHeight = height - this.FIELD_LABEL_OFFSET;
+
+  doc.roundedRect(x, boxY, width, boxHeight, 3)
+     .strokeColor(this.BORDER_GRAY)
+     .lineWidth(0.75)
+     .stroke();
+
+  doc.font('Helvetica').fontSize(this.FIELD_VALUE_SIZE).fillColor(this.TEXT_DARK)
+     .text(value || '\u2014', x + 6, boxY + this.FIELD_BOX_PAD_Y, {
+       width: width - 12,
+     });
+}
 
   private static drawTextBox(doc: PDFKit.PDFDocument, x: number, y: number, width: number, text: string): void {
     const height = Math.max(45, doc.heightOfString(text, { width: width - 16 }) + 16);
@@ -435,6 +488,47 @@ export class StationEngagementExportService {
        .text(text, x + 8, y + 8, { width: width - 16, align: 'left' });
     doc.y = y + height;
   }
+
+  // ─── Card Height Estimation (for page-break decisions) ───────────────
+
+  private static estimateEngagementCardHeight(doc: PDFKit.PDFDocument, engagement: Engagement): number {
+    const width = 500;
+    const pad = 10;
+    const colGap = 10;
+    const halfW = (width - pad * 2 - colGap) / 2;
+
+    const issuesText = engagement.issues_raised?.join(', ') || 'None';
+    const actionText = engagement.action_taken || engagement.resolution || 'N/A';
+    const rowHeight = Math.max(
+      this.measureFieldBoxHeight(doc, halfW, issuesText),
+      this.measureFieldBoxHeight(doc, halfW, actionText)
+    );
+
+    const rowH = 34; // fixed-height rows (station/date/contact, mode/status/follow-up)
+    return pad + rowH + 8 + rowH + 8 + rowHeight + pad + 12;
+  }
+
+  private static estimateEscalationCardHeight(doc: PDFKit.PDFDocument, escalation: EscalationItem): number {
+    const width = 500;
+    const pad = 10;
+    const colGap = 10;
+    const halfW = (width - pad * 2 - colGap) / 2;
+    const rowH = 34;
+
+    const issueText = escalation.issue || 'No issue described';
+    const issueRowHeight = this.measureFieldBoxHeight(doc, width - pad * 2, issueText);
+
+    const whyText = escalation.why_needs_escalation || '\u2014';
+    const actionText = escalation.recommended_action || 'No action specified';
+    const bottomRowHeight = Math.max(
+      this.measureFieldBoxHeight(doc, halfW, whyText),
+      this.measureFieldBoxHeight(doc, halfW, actionText)
+    );
+
+    return pad + rowH + 8 + issueRowHeight + 8 + bottomRowHeight + pad + 12;
+  }
+
+  // ─── Card Drawing ──────────────────────────────────────────────────────
 
   private static drawEngagementCard(doc: PDFKit.PDFDocument, engagement: Engagement): void {
     const x = 50;
@@ -465,13 +559,20 @@ export class StationEngagementExportService {
 
     cursorY += rowH + 8;
 
+    // Issue(s) Raised / Action Taken — free text, so these auto-size to the
+    // full content instead of clipping at a fixed 38px with an ellipsis.
     const halfW = (width - pad * 2 - colGap) / 2;
-    this.drawFieldBox(doc, x + pad, cursorY, halfW, 38, 'Issue(s) Raised',
-      engagement.issues_raised?.join(', ') || 'None');
-    this.drawFieldBox(doc, x + pad + halfW + colGap, cursorY, halfW, 38, 'Action Taken / Resolution',
-      engagement.action_taken || engagement.resolution || 'N/A');
+    const issuesText = engagement.issues_raised?.join(', ') || 'None';
+    const actionText = engagement.action_taken || engagement.resolution || 'N/A';
+    const rowHeight = Math.max(
+      this.measureFieldBoxHeight(doc, halfW, issuesText),
+      this.measureFieldBoxHeight(doc, halfW, actionText)
+    );
 
-    cursorY += 38 + pad;
+    this.drawFieldBoxAuto(doc, x + pad, cursorY, halfW, rowHeight, 'Issue(s) Raised', issuesText);
+    this.drawFieldBoxAuto(doc, x + pad + halfW + colGap, cursorY, halfW, rowHeight, 'Action Taken / Resolution', actionText);
+
+    cursorY += rowHeight + pad;
 
     doc.roundedRect(x, cardY, width, cursorY - cardY, 4)
        .strokeColor(this.BORDER_GRAY)
@@ -529,17 +630,25 @@ export class StationEngagementExportService {
 
     cursorY += rowH + 8;
 
-    this.drawFieldBox(doc, x + pad, cursorY, width - pad * 2, 38, 'Issue',
-      escalation.issue || 'No issue described');
+    // Issue — free text, full width, auto-sized.
+    const issueText = escalation.issue || 'No issue described';
+    const issueRowHeight = this.measureFieldBoxHeight(doc, width - pad * 2, issueText);
+    this.drawFieldBoxAuto(doc, x + pad, cursorY, width - pad * 2, issueRowHeight, 'Issue', issueText);
 
-    cursorY += 38 + 8;
+    cursorY += issueRowHeight + 8;
 
-    this.drawFieldBox(doc, x + pad, cursorY, halfW, 38, 'Why It Needs Escalation',
-      escalation.why_needs_escalation || '\u2014');
-    this.drawFieldBox(doc, x + pad + halfW + colGap, cursorY, halfW, 38, 'Recommended Action',
-      escalation.recommended_action || 'No action specified');
+    // Why It Needs Escalation / Recommended Action — free text, auto-sized.
+    const whyText = escalation.why_needs_escalation || '\u2014';
+    const actionText = escalation.recommended_action || 'No action specified';
+    const bottomRowHeight = Math.max(
+      this.measureFieldBoxHeight(doc, halfW, whyText),
+      this.measureFieldBoxHeight(doc, halfW, actionText)
+    );
 
-    cursorY += 38 + pad;
+    this.drawFieldBoxAuto(doc, x + pad, cursorY, halfW, bottomRowHeight, 'Why It Needs Escalation', whyText);
+    this.drawFieldBoxAuto(doc, x + pad + halfW + colGap, cursorY, halfW, bottomRowHeight, 'Recommended Action', actionText);
+
+    cursorY += bottomRowHeight + pad;
 
     doc.roundedRect(x, cardY, width, cursorY - cardY, 4)
        .strokeColor(this.BORDER_GRAY)

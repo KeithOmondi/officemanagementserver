@@ -12,93 +12,40 @@ import {
     getFolderDocumentsSchema,
     deleteRegistryFolderSchema,
     moveDocumentToFolderSchema,
+    addDocumentToFolderSchema,
+    removeDocumentFromFolderSchema,
+    bulkAddDocumentsToFolderSchema,
+    searchRegistryFoldersSchema,
+    getRootFoldersSchema,
+    getActiveFoldersSchema,
+    getFolderHierarchySchema,
+    getFolderStatisticsSchema,
+    moveFolderSchema,
 } from './registry.schema';
 import { protect, requireRole } from '../../middleware/auth.middleware';
 import { validate } from '../../middleware/validate.middleware';
 
 const router = Router();
 
-// All routes require authentication
 router.use(protect);
 
-// ── POST /api/registry/folders ──────────────────────────────────────────────
-router.post(
-    '/folders',
-    requireRole('super_admin', 'dept_head'),
-    validate(createRegistryFolderSchema),
-    RegistryController.createFolder
-);
-
-// ── GET /api/registry/folders ───────────────────────────────────────────────
-router.get(
-    '/folders',
-    validate(listRegistryFoldersSchema),
-    RegistryController.listFolders
-);
-
-// ── GET /api/registry/folders/categories ────────────────────────────────────
-router.get(
-    '/folders/categories',
-    validate(getRegistryCategoriesSchema),
-    RegistryController.getCategories
-);
-
-// ── GET /api/registry/folders/search ────────────────────────────────────────
-router.get(
-    '/folders/search',
-    RegistryController.searchFolders
-);
-
-// ── GET /api/registry/folders/:id ───────────────────────────────────────────
-router.get(
-    '/folders/:id',
-    validate(getRegistryFolderSchema),
-    RegistryController.getFolderById
-);
-
-// ── GET /api/registry/folders/:id/children ──────────────────────────────────
-router.get(
-    '/folders/:id/children',
-    validate(getRegistryFolderChildrenSchema),
-    RegistryController.getFolderChildren
-);
-
-// ── GET /api/registry/folders/:id/hierarchy ─────────────────────────────────
-router.get(
-    '/folders/:id/hierarchy',
-    validate(getRegistryFolderSchema),
-    RegistryController.getFolderHierarchy
-);
-
-// ── GET /api/registry/folders/:id/documents ─────────────────────────────────
-router.get(
-    '/folders/:id/documents',
-    validate(getFolderDocumentsSchema),
-    RegistryController.getFolderDocuments
-);
-
-// ── PUT /api/registry/folders/:id ───────────────────────────────────────────
-router.put(
-    '/folders/:id',
-    requireRole('super_admin', 'dept_head'),
-    validate(updateRegistryFolderSchema),
-    RegistryController.updateFolder
-);
-
-// ── DELETE /api/registry/folders/:id ────────────────────────────────────────
-router.delete(
-    '/folders/:id',
-    requireRole('super_admin', "dept_head"),
-    validate(deleteRegistryFolderSchema),
-    RegistryController.deleteFolder
-);
-
-// ── POST /api/registry/folders/:id/documents/:documentId/move ──────────────
-router.post(
-    '/folders/:id/documents/:documentId/move',
-    requireRole('super_admin', 'dept_head'),
-    validate(moveDocumentToFolderSchema),
-    RegistryController.moveDocumentToFolder
-);
+router.post('/folders', requireRole('super_admin', 'dept_head'), validate(createRegistryFolderSchema), RegistryController.createFolder);
+router.get('/folders', validate(listRegistryFoldersSchema), RegistryController.listFolders);
+router.get('/folders/categories', validate(getRegistryCategoriesSchema), RegistryController.getCategories);
+router.get('/folders/search', validate(searchRegistryFoldersSchema), RegistryController.searchFolders);
+router.get('/folders/root', validate(getRootFoldersSchema), RegistryController.getRootFolders);
+router.get('/folders/active', validate(getActiveFoldersSchema), RegistryController.getActiveFolders);
+router.get('/folders/statistics', validate(getFolderStatisticsSchema), RegistryController.getFolderStatistics);
+router.get('/folders/:id', validate(getRegistryFolderSchema), RegistryController.getFolderById);
+router.get('/folders/:id/children', validate(getRegistryFolderChildrenSchema), RegistryController.getFolderChildren);
+router.get('/folders/:id/hierarchy', validate(getFolderHierarchySchema), RegistryController.getFolderHierarchy);
+router.get('/folders/:id/documents', validate(getFolderDocumentsSchema), RegistryController.getFolderDocuments);
+router.put('/folders/:id', requireRole('super_admin', 'dept_head'), validate(updateRegistryFolderSchema), RegistryController.updateFolder);
+router.delete('/folders/:id', requireRole('super_admin', 'dept_head'), validate(deleteRegistryFolderSchema), RegistryController.deleteFolder);
+router.post('/folders/:id/documents', requireRole('super_admin', 'dept_head'), validate(addDocumentToFolderSchema), RegistryController.addDocumentToFolder);
+router.delete('/folders/:id/documents/:documentId', requireRole('super_admin', 'dept_head'), validate(removeDocumentFromFolderSchema), RegistryController.removeDocumentFromFolder);
+router.post('/folders/:id/documents/bulk', requireRole('super_admin', 'dept_head'), validate(bulkAddDocumentsToFolderSchema), RegistryController.bulkAddDocumentsToFolder);
+router.post('/folders/:id/move', requireRole('super_admin', 'dept_head'), validate(moveFolderSchema), RegistryController.moveFolder);
+router.post('/folders/:id/documents/:documentId/move', requireRole('super_admin', 'dept_head'), validate(moveDocumentToFolderSchema), RegistryController.moveDocumentToFolder);
 
 export default router;

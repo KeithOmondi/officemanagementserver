@@ -19,7 +19,6 @@ const folderCategoryEnum = z.enum([
     'other',
 ]);
 
-// ── POST /api/registry/folders ──────────────────────────────────────────────
 export const createRegistryFolderSchema = z.object({
     body: z.object({
         ref_no: z.string().min(3).max(50),
@@ -32,7 +31,6 @@ export const createRegistryFolderSchema = z.object({
     }),
 });
 
-// ── PUT /api/registry/folders/:id ───────────────────────────────────────────
 export const updateRegistryFolderSchema = z.object({
     params: z.object({
         id: z.string().uuid('Folder ID must be a valid UUID'),
@@ -45,7 +43,6 @@ export const updateRegistryFolderSchema = z.object({
     }),
 });
 
-// ── GET /api/registry/folders ───────────────────────────────────────────────
 export const listRegistryFoldersSchema = z.object({
     query: z.object({
         search: z.string().optional(),
@@ -59,14 +56,12 @@ export const listRegistryFoldersSchema = z.object({
     }).strict(),
 });
 
-// ── GET /api/registry/folders/:id ───────────────────────────────────────────
 export const getRegistryFolderSchema = z.object({
     params: z.object({
         id: z.string().uuid('Folder ID must be a valid UUID'),
     }),
 });
 
-// ── GET /api/registry/folders/:id/children ──────────────────────────────────
 export const getRegistryFolderChildrenSchema = z.object({
     params: z.object({
         id: z.string().uuid('Folder ID must be a valid UUID'),
@@ -77,14 +72,12 @@ export const getRegistryFolderChildrenSchema = z.object({
     }),
 });
 
-// ── GET /api/registry/folders/categories ────────────────────────────────────
 export const getRegistryCategoriesSchema = z.object({
     query: z.object({
         include_count: z.string().transform((val) => val === 'true').optional(),
     }),
 });
 
-// ── GET /api/registry/folders/:id/documents ─────────────────────────────────
 export const getFolderDocumentsSchema = z.object({
     params: z.object({
         id: z.string().uuid('Folder ID must be a valid UUID'),
@@ -95,14 +88,37 @@ export const getFolderDocumentsSchema = z.object({
     }),
 });
 
-// ── DELETE /api/registry/folders/:id ────────────────────────────────────────
 export const deleteRegistryFolderSchema = z.object({
     params: z.object({
         id: z.string().uuid('Folder ID must be a valid UUID'),
     }),
 });
 
-// ── POST /api/registry/folders/:id/documents/:documentId/move ──────────────
+export const addDocumentToFolderSchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Folder ID must be a valid UUID'),
+    }),
+    body: z.object({
+        document_id: z.string().uuid('Document ID must be a valid UUID'),
+    }).strict(),
+});
+
+export const removeDocumentFromFolderSchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Folder ID must be a valid UUID'),
+        documentId: z.string().uuid('Document ID must be a valid UUID'),
+    }),
+});
+
+export const bulkAddDocumentsToFolderSchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Folder ID must be a valid UUID'),
+    }),
+    body: z.object({
+        document_ids: z.array(z.string().uuid('Document ID must be a valid UUID')),
+    }).strict(),
+});
+
 export const moveDocumentToFolderSchema = z.object({
     params: z.object({
         id: z.string().uuid('Source folder ID must be a valid UUID'),
@@ -113,11 +129,56 @@ export const moveDocumentToFolderSchema = z.object({
     }).strict(),
 });
 
-// ── Type exports ─────────────────────────────────────────────────────────────
+export const searchRegistryFoldersSchema = z.object({
+    query: z.object({
+        q: z.string().min(2, 'Search query must be at least 2 characters'),
+        limit: z.string().regex(/^\d+$/).optional().transform(Number),
+        offset: z.string().regex(/^\d+$/).optional().transform(Number),
+    }),
+});
+
+export const getRootFoldersSchema = z.object({
+    query: z.object({
+        include_stats: z.string().transform((val) => val === 'true').optional(),
+    }),
+});
+
+export const getActiveFoldersSchema = z.object({
+    query: z.object({
+        limit: z.string().regex(/^\d+$/).optional().transform(Number),
+        offset: z.string().regex(/^\d+$/).optional().transform(Number),
+    }),
+});
+
+export const getFolderHierarchySchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Folder ID must be a valid UUID'),
+    }),
+});
+
+export const getFolderStatisticsSchema = z.object({
+    query: z.object({
+        include_document_stats: z.string().transform((val) => val === 'true').optional(),
+    }),
+});
+
+export const moveFolderSchema = z.object({
+    params: z.object({
+        id: z.string().uuid('Folder ID must be a valid UUID'),
+    }),
+    body: z.object({
+        parent_folder_id: z.string().uuid('Target folder ID must be a valid UUID').nullable(),
+    }).strict(),
+});
+
 export type CreateRegistryFolderBody = z.infer<typeof createRegistryFolderSchema>['body'];
 export type UpdateRegistryFolderBody = z.infer<typeof updateRegistryFolderSchema>['body'];
 export type ListRegistryFoldersQuery = z.infer<typeof listRegistryFoldersSchema>['query'];
 export type GetFolderChildrenQuery = z.infer<typeof getRegistryFolderChildrenSchema>['query'];
 export type GetFolderDocumentsQuery = z.infer<typeof getFolderDocumentsSchema>['query'];
 export type MoveDocumentToFolderBody = z.infer<typeof moveDocumentToFolderSchema>['body'];
-export type MoveDocumentToFolderParams = z.infer<typeof moveDocumentToFolderSchema>['params'];
+export type AddDocumentToFolderBody = z.infer<typeof addDocumentToFolderSchema>['body'];
+export type RemoveDocumentFromFolderParams = z.infer<typeof removeDocumentFromFolderSchema>['params'];
+export type BulkAddDocumentsToFolderBody = z.infer<typeof bulkAddDocumentsToFolderSchema>['body'];
+export type SearchRegistryFoldersQuery = z.infer<typeof searchRegistryFoldersSchema>['query'];
+export type MoveFolderBody = z.infer<typeof moveFolderSchema>['body'];

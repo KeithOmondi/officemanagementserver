@@ -36,7 +36,8 @@ const VALID_ENTITY_TYPES = [
 
 const VALID_FORMATS = ['pdf', 'docx', 'xlsx'] as const;
 
-const VALID_STATUSES = ['draft', 'pending_approval', 'approved', 'rejected', 'returned'] as const;
+// ─── UPDATED: Add 'ready_to_send' to VALID_STATUSES ──────────────────────────
+const VALID_STATUSES = ['draft', 'pending_approval', 'ready_to_send', 'approved', 'rejected', 'returned'] as const;
 
 const VALID_INTERNAL_STATUSES = [
     'pending', 'previewed', 'approved_internal', 'rejected_internal',
@@ -432,7 +433,7 @@ export class HelpdeskDocumentsController {
             const entity_type = getQueryEnum(req, 'entity_type', VALID_ENTITY_TYPES);
             const entity_id = getQueryParam(req, 'entity_id');
             const format = getQueryEnum(req, 'format', VALID_FORMATS);
-            const status = getQueryEnum(req, 'status', VALID_STATUSES);
+            const status = getQueryEnum(req, 'status', VALID_STATUSES);  // ← Now includes 'ready_to_send'
             const search = getQueryParam(req, 'search');
             const limit = getQueryNumber(req, 'limit');
             const offset = getQueryNumber(req, 'offset');
@@ -629,59 +630,78 @@ export class HelpdeskDocumentsController {
         }
     }
 
-    /**
-     * POST /api/helpdesk/documents/:id/internal/approve
-     * Super admin approves internally with signature AND stamp embedding
-     * Requester still sees 'pending_approval' until send back
-     */
+/**
+ * POST /api/helpdesk/documents/:id/internal/approve
+ * Super admin approves internally with signature AND stamp embedding
+ * Requester still sees 'pending_approval' until send back
+ */
 static async internalApprove(req: Request, res: Response, next: NextFunction) {
     try {
         const id = getParam(req, 'id');
         const userId = (req as any).user?.id as string;
         const body = req.body as InternalApproveDocumentBody;
 
+        console.log('📄 [internalApprove] Request:', {
+            documentId: id,
+            userId,
+            action: 'approve',
+        });
+
+        console.log('📤 [internalApprove] Request body:', JSON.stringify(body, null, 2));
+
         // Check if the user has a signature uploaded
         const { rows: userRows } = await pool.query(
             `SELECT signature_url FROM users WHERE id = $1 AND is_active = true`,
             [userId]
         );
-        
-        if (!userRows[0]?.signature_url) {
+
+        const hasSignature = !!userRows[0]?.signature_url;
+        console.log('👤 [internalApprove] Signature check:', { userId, hasSignature });
+
+        if (!hasSignature) {
             console.warn(`[InternalApprove] User ${userId} has no signature uploaded. Signature will not be embedded.`);
         }
 
-        const doc = await HelpdeskDocumentsService.internalApprove(
-            id,
-            {
-                document_id: id,
-                action: 'approve',
-                approved_by: body.approved_by || userId,
-                approved_by_name: body.approved_by_name || (req as any).user?.full_name,
-                comments: body.comments,
-                generate_e_stamp: body.generate_e_stamp ?? true,
-                signature_position_x: body.signature_position_x,
-                signature_position_y: body.signature_position_y,
-                signature_position_width: body.signature_position_width,
-                signature_position_height: body.signature_position_height,
-                stamp_position_x: body.stamp_position_x,
-                stamp_position_y: body.stamp_position_y,
-                stamp_position_width: body.stamp_position_width,
-                stamp_position_height: body.stamp_position_height,
-                stamp_type: body.stamp_type,
-                sync_utilities: body.sync_utilities ?? true, // ← ADD THIS
-            }
-        );
+        const payload = {
+            document_id: id,
+            action: 'approve' as const,
+            approved_by: body.approved_by || userId,
+            approved_by_name: body.approved_by_name || (req as any).user?.full_name,
+            comments: body.comments,
+            generate_e_stamp: body.generate_e_stamp ?? true,
+            signature_position_x: body.signature_position_x,
+            signature_position_y: body.signature_position_y,
+            signature_position_width: body.signature_position_width,
+            signature_position_height: body.signature_position_height,
+            stamp_position_x: body.stamp_position_x,
+            stamp_position_y: body.stamp_position_y,
+            stamp_position_width: body.stamp_position_width,
+            stamp_position_height: body.stamp_position_height,
+            stamp_type: body.stamp_type,
+            sync_utilities: body.sync_utilities ?? true,
+        };
 
-        const signatureMessage = doc.is_signed 
-            ? 'Document approved and signed. Send back to requester when ready.' 
+        console.log('📤 [internalApprove] Service payload:', JSON.stringify(payload, null, 2));
+
+        const doc = await HelpdeskDocumentsService.internalApprove(id, payload);
+
+        console.log('✅ [internalApprove] Success! Result:', {
+            id: doc.id,
+            is_signed: doc.is_signed,
+            internal_approval_status: doc.internal_approval_status,
+            e_stamp_status: doc.e_stamp_status,
+        });
+
+        const signatureMessage = doc.is_signed
+            ? 'Document approved and signed. Send back to requester when ready.'
             : 'Document approved (signature not embedded - no signature found). Send back to requester when ready.';
 
         return sendSuccess(res, doc, signatureMessage);
     } catch (err) {
+        console.error('❌ [internalApprove] Error:', err);
         next(err);
     }
 }
-
 
     /**
      * POST /api/helpdesk/documents/:id/internal/reject
@@ -781,46 +801,46 @@ static async internalApprove(req: Request, res: Response, next: NextFunction) {
      * Super admin sends document back to requester
      * THIS is when the requester finally sees the status change
      */
-static async sendBackToRequester(req: Request, res: Response, next: NextFunction) {
-    try {
-        const id = getParam(req, 'id');
-        const userId = (req as any).user?.id as string;
-        const body = req.body as SendBackToRequesterBody;
+    static async sendBackToRequester(req: Request, res: Response, next: NextFunction) {
+        try {
+            const id = getParam(req, 'id');
+            const userId = (req as any).user?.id as string;
+            const body = req.body as SendBackToRequesterBody;
 
-        if (!body.final_status) {
-            throw new AppError(400, 'Final status is required');
-        }
-
-        const validStatuses = ['approved', 'rejected', 'changes_requested'];
-        if (!validStatuses.includes(body.final_status)) {
-            throw new AppError(400, `Final status must be one of: ${validStatuses.join(', ')}`);
-        }
-
-        const doc = await HelpdeskDocumentsService.sendBackToRequester(
-            id,
-            {
-                document_id: id,
-                sent_by: body.sent_by || userId,
-                sent_by_name: body.sent_by_name || (req as any).user?.full_name,
-                comments: body.comments,
-                final_status: body.final_status as 'approved' | 'rejected' | 'changes_requested',
-                requester_message: body.requester_message,
-                notify_requester: body.notify_requester ?? true,
-                sync_utilities: body.sync_utilities ?? true, // ← ADD THIS
+            if (!body.final_status) {
+                throw new AppError(400, 'Final status is required');
             }
-        );
 
-        const statusMessages: Record<string, string> = {
-            approved: 'Document approved and sent back to requester with signature.',
-            rejected: 'Document rejected and sent back to requester.',
-            changes_requested: 'Changes requested and sent back to requester.',
-        };
+            const validStatuses = ['approved', 'rejected', 'changes_requested'];
+            if (!validStatuses.includes(body.final_status)) {
+                throw new AppError(400, `Final status must be one of: ${validStatuses.join(', ')}`);
+            }
 
-        return sendSuccess(res, doc, statusMessages[body.final_status] || 'Document sent back to requester.');
-    } catch (err) {
-        next(err);
+            const doc = await HelpdeskDocumentsService.sendBackToRequester(
+                id,
+                {
+                    document_id: id,
+                    sent_by: body.sent_by || userId,
+                    sent_by_name: body.sent_by_name || (req as any).user?.full_name,
+                    comments: body.comments,
+                    final_status: body.final_status as 'approved' | 'rejected' | 'changes_requested',
+                    requester_message: body.requester_message,
+                    notify_requester: body.notify_requester ?? true,
+                    sync_utilities: body.sync_utilities ?? true,
+                }
+            );
+
+            const statusMessages: Record<string, string> = {
+                approved: 'Document approved and sent back to requester with signature.',
+                rejected: 'Document rejected and sent back to requester.',
+                changes_requested: 'Changes requested and sent back to requester.',
+            };
+
+            return sendSuccess(res, doc, statusMessages[body.final_status] || 'Document sent back to requester.');
+        } catch (err) {
+            next(err);
+        }
     }
-}
 
     /**
      * POST /api/helpdesk/documents/:id/resubmit

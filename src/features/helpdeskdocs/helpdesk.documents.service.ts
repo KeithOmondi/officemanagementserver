@@ -36,7 +36,7 @@ import { sendHelpdeskApproved} from '../../utils/sendMail';
 
 const FOLDER = 'orhc/helpdesk-documents';
 
-// ─── SELECT Fragment (UPDATED: Added utility sync fields) ──────────────────
+// ─── SELECT Fragment ──────────────────────────────────────────────────────────
 
 const DOC_SELECT = `
     d.id, d.ref, d.subject, d.entity_type, d.entity_id, d.format,
@@ -69,9 +69,9 @@ const DOC_SELECT = `
     d.is_stamped, d.stamped_by, d.stamped_by_name, d.stamped_at,
     d.stamp_type, d.stamp_position_x, d.stamp_position_y,
     d.stamp_position_width, d.stamp_position_height,
-    -- NEW: Final Generated PDF fields
+    -- Final Generated PDF fields
     d.stamped_file_url, d.stamped_file_public_id, d.stamped_file_size,
-    -- ─── NEW: Utility sync fields ────────────────────────────────────────────
+    -- Utility sync fields
     d.utility_sync_status, d.utility_synced_at, d.utility_synced_by,
     d.utility_sync_result,
     u.full_name as uploaded_by_name,
@@ -105,7 +105,6 @@ function cleanInput(input: CreateHelpdeskDocumentInput): CreateHelpdeskDocumentI
         aide_status: input.aide_status === null ? undefined : input.aide_status?.trim() || undefined,
         residence_location: input.residence_location === null ? undefined : input.residence_location?.trim() || undefined,
         sentry_status: input.sentry_status === null ? undefined : input.sentry_status?.trim() || undefined,
-        // Conference fields
         conference_type: input.conference_type === null ? undefined : input.conference_type,
         start_date: input.start_date === null ? undefined : input.start_date?.trim() || undefined,
         end_date: input.end_date === null ? undefined : input.end_date?.trim() || undefined,
@@ -117,6 +116,105 @@ function cleanInput(input: CreateHelpdeskDocumentInput): CreateHelpdeskDocumentI
         stamp_type: input.stamp_type === null ? undefined : input.stamp_type,
     };
     return cleaned;
+}
+
+// ─── Helper: Build document from row ──────────────────────────────────────────
+
+function buildDocumentFromRow(row: any): HelpdeskDocument {
+    return {
+        id: row.id,
+        ref: row.ref,
+        subject: row.subject,
+        entity_type: row.entity_type,
+        entity_id: row.entity_id,
+        format: row.format,
+        file_url: row.file_url,
+        public_id: row.public_id,
+        file_size: row.file_size,
+        uploaded_by: row.uploaded_by,
+        uploaded_by_name: row.uploaded_by_name,
+        status: row.status,
+        e_stamp_status: row.e_stamp_status,
+        e_stamp_url: row.e_stamp_url,
+        e_stamp_public_id: row.e_stamp_public_id,
+        is_active: row.is_active,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        approved_at: row.approved_at,
+        approved_by: row.approved_by,
+        approved_by_name: row.approved_by_name,
+        returned_at: row.returned_at,
+        returned_by: row.returned_by,
+        rejection_reason: row.rejection_reason,
+        request_type: row.request_type,
+        judge_name: row.judge_name,
+        rank: row.rank,
+        reporting_date: row.reporting_date,
+        officer_rank: row.officer_rank,
+        officer_name: row.officer_name,
+        employment_number: row.employment_number,
+        current_station: row.current_station,
+        current_unit: row.current_unit,
+        proposed_assignment: row.proposed_assignment,
+        aide_status: row.aide_status,
+        residence_location: row.residence_location,
+        sentry_status: row.sentry_status,
+        conference_type: row.conference_type,
+        start_date: row.start_date,
+        end_date: row.end_date,
+        number_of_pax: row.number_of_pax,
+        venue: row.venue,
+        location: row.location,
+        budget_estimate: row.budget_estimate,
+        conference_status: row.conference_status,
+        internal_approval_status: row.internal_approval_status,
+        internal_approved_by: row.internal_approved_by,
+        internal_approved_by_name: row.internal_approved_by_name,
+        internal_approved_at: row.internal_approved_at,
+        internal_comments: row.internal_comments,
+        internal_changes_requested: row.internal_changes_requested,
+        internal_rejection_reason: row.internal_rejection_reason,
+        internal_preview_count: row.internal_preview_count || 0,
+        internal_previewed_at: row.internal_previewed_at,
+        internal_previewed_by: row.internal_previewed_by,
+        internal_previewed_by_name: row.internal_previewed_by_name,
+        requester_status: row.requester_status,
+        requester_visible_at: row.requester_visible_at,
+        requester_visible_by: row.requester_visible_by,
+        requester_visible_by_name: row.requester_visible_by_name,
+        resubmit_count: row.resubmit_count || 0,
+        last_resubmitted_at: row.last_resubmitted_at,
+        last_resubmitted_by: row.last_resubmitted_by,
+        is_internal_approval_complete: row.is_internal_approval_complete || false,
+        is_sent_back_to_requester: row.is_sent_back_to_requester || false,
+        is_requester_notified: row.is_requester_notified || false,
+        is_signed: row.is_signed || false,
+        signed_by: row.signed_by,
+        signed_by_name: row.signed_by_name,
+        signed_at: row.signed_at,
+        signature_position_x: row.signature_position_x,
+        signature_position_y: row.signature_position_y,
+        signature_position_width: row.signature_position_width,
+        signature_position_height: row.signature_position_height,
+        is_stamped: row.is_stamped || false,
+        stamped_by: row.stamped_by,
+        stamped_by_name: row.stamped_by_name,
+        stamped_at: row.stamped_at,
+        stamp_type: row.stamp_type,
+        stamp_position_x: row.stamp_position_x,
+        stamp_position_y: row.stamp_position_y,
+        stamp_position_width: row.stamp_position_width,
+        stamp_position_height: row.stamp_position_height,
+        stamped_file_url: row.stamped_file_url,
+        stamped_file_public_id: row.stamped_file_public_id,
+        stamped_file_size: row.stamped_file_size,
+        utility_sync_status: row.utility_sync_status || 'not_applicable',
+        utility_synced_at: row.utility_synced_at,
+        utility_synced_by: row.utility_synced_by,
+        utility_sync_result: row.utility_sync_result,
+        approval_history: [],
+        comments: [],
+    };
 }
 
 // ─── Service ──────────────────────────────────────────────────────────────────
@@ -180,7 +278,6 @@ export class HelpdeskDocumentsService {
 
         const result = await uploadToCloudinary(file, FOLDER);
 
-        // Determine initial utility sync status
         const isUtilityDoc = ['consolidated_utility_memo', 'consolidated_fuel_memo', 'utility_memo'].includes(cleaned.entity_type);
         const initialSyncStatus: UtilitySyncStatus = isUtilityDoc ? 'pending' : 'not_applicable';
 
@@ -237,9 +334,9 @@ export class HelpdeskDocumentsService {
                     cleaned.conference_status || null,
                     'pending',
                     'pending_approval',
-                    false, // is_stamped
-                    cleaned.stamp_type || null, // stamp_type
-                    initialSyncStatus, // utility_sync_status
+                    false,
+                    cleaned.stamp_type || null,
+                    initialSyncStatus,
                 ]
             );
 
@@ -376,17 +473,12 @@ export class HelpdeskDocumentsService {
                 p++;
             }
 
-            // ─── NEW: Utility sync fields ──────────────────────────────────────
-            if (input.sync_utilities !== undefined) {
-                // This will be handled after the update
-            }
             if (input.utility_sync_status !== undefined) {
                 updates.push(`utility_sync_status = $${p}`);
                 values.push(input.utility_sync_status);
                 p++;
             }
 
-            // ─── Signature fields ──────────────────────────────────────────────
             if (input.is_signed !== undefined) {
                 updates.push(`is_signed = $${p}`);
                 values.push(input.is_signed);
@@ -411,7 +503,6 @@ export class HelpdeskDocumentsService {
                 p++;
             }
 
-            // ─── Stamp fields ──────────────────────────────────────────────
             if (input.is_stamped !== undefined) {
                 updates.push(`is_stamped = $${p}`);
                 values.push(input.is_stamped);
@@ -466,7 +557,6 @@ export class HelpdeskDocumentsService {
                 p++;
             }
 
-            // ─── NEW: Final Stamped PDF fields ──────────────────────────────────────
             if (input.stamped_file_url !== undefined) {
                 updates.push(`stamped_file_url = $${p}`);
                 values.push(input.stamped_file_url);
@@ -543,7 +633,6 @@ export class HelpdeskDocumentsService {
             const updatedDoc = await this.findById(id);
             if (!updatedDoc) throw new AppError(500, 'Failed to retrieve updated document');
 
-            // ─── NEW: Sync utilities if requested ──────────────────────────────
             if (input.sync_utilities && updatedDoc) {
                 const memoTypes = ['consolidated_utility_memo', 'consolidated_fuel_memo'];
                 if (memoTypes.includes(updatedDoc.entity_type) && updatedDoc.status === 'approved') {
@@ -566,17 +655,12 @@ export class HelpdeskDocumentsService {
         }
     }
 
-    // ─── NEW: Sync Utility Items with Document ────────────────────────────────
+    // ─── Sync Utility Items with Document ────────────────────────────────────
 
-    /**
-     * Syncs utility items with document status.
-     * This is the source of truth for utility approval status.
-     */
     private static async syncUtilityItemsWithDocument(
         document: HelpdeskDocument,
         action: 'approved' | 'rejected' | 'returned' | 'sent'
     ): Promise<{ total: number; updated: number; failed: SyncedUtilityItem[] }> {
-        // Only sync for consolidated memo types
         const memoTypes = ['consolidated_utility_memo', 'consolidated_fuel_memo', 'utility_memo'];
         if (!memoTypes.includes(document.entity_type)) {
             return { total: 0, updated: 0, failed: [] };
@@ -586,7 +670,6 @@ export class HelpdeskDocumentsService {
         try {
             await client.query('BEGIN');
 
-            // Find the consolidated memo associated with this document
             const { rows: memoRows } = await client.query(
                 `SELECT id, utility_item_ids, type, period FROM consolidated_memos 
                  WHERE entity_id = $1 AND is_active = true`,
@@ -607,7 +690,6 @@ export class HelpdeskDocumentsService {
                 return { total: 0, updated: 0, failed: [] };
             }
 
-            // Map document action to utility approval status
             let newApprovalStatus: string;
             let shouldResetMemoId = false;
 
@@ -631,19 +713,16 @@ export class HelpdeskDocumentsService {
                     return { total: 0, updated: 0, failed: [] };
             }
 
-            // Get current status of items before update
             const { rows: currentItems } = await client.query(
-                `SELECT id, utility_type, amount, period, approval_status
+                `SELECT id, utility_type, amount, period, approval_status, request_id
                  FROM utilities_items 
                  WHERE id = ANY($1::uuid[]) AND is_active = true`,
                 [itemIds]
             );
 
-            // Build sync result
             const syncedItems: SyncedUtilityItem[] = [];
             const failedItems: SyncedUtilityItem[] = [];
 
-            // Update all utility items in this memo
             const updateQuery = `
                 UPDATE utilities_items 
                 SET approval_status = $1, 
@@ -657,7 +736,6 @@ export class HelpdeskDocumentsService {
                 itemIds
             ]);
 
-            // If rejected or returned, also reset memo_id
             if (shouldResetMemoId) {
                 await client.query(
                     `UPDATE utilities_items 
@@ -667,14 +745,12 @@ export class HelpdeskDocumentsService {
                 );
             }
 
-            // Build sync result details
             const updatedIds = new Set(updatedRows.map((r: any) => r.id));
             
             for (const item of currentItems) {
                 const isUpdated = updatedIds.has(item.id);
                 const newStatus = isUpdated ? newApprovalStatus : item.approval_status;
                 
-                // Get judge name for the item
                 const { rows: judgeRows } = await client.query(
                     `SELECT judge_name, pj_number FROM utilities_requests WHERE id = $1`,
                     [item.request_id]
@@ -699,7 +775,6 @@ export class HelpdeskDocumentsService {
                 }
             }
 
-            // Update document sync status
             const syncResult = {
                 total_items: itemIds.length,
                 updated_items: syncedItems,
@@ -722,7 +797,6 @@ export class HelpdeskDocumentsService {
                 ]
             );
 
-            // Add to approval history
             await this.addApprovalHistory(
                 document.id,
                 document.uploaded_by || 'system',
@@ -750,7 +824,7 @@ export class HelpdeskDocumentsService {
         }
     }
 
-    // ─── NEW: Public method to trigger utility sync ───────────────────────────
+    // ─── Public method to trigger utility sync ──────────────────────────────
 
     static async syncUtilitiesForDocument(
         id: string,
@@ -767,12 +841,10 @@ export class HelpdeskDocumentsService {
             throw new AppError(400, 'This document is not a utility memo and cannot sync utilities');
         }
 
-        // Only sync if document is approved, rejected, or returned
         if (!force && !['approved', 'rejected', 'returned'].includes(doc.status)) {
             throw new AppError(400, `Document status ${doc.status} does not require utility sync`);
         }
 
-        // Map status to action
         let action: 'approved' | 'rejected' | 'returned' | 'sent';
         switch (doc.status) {
             case 'approved':
@@ -790,7 +862,6 @@ export class HelpdeskDocumentsService {
 
         const result = await this.syncUtilityItemsWithDocument(doc, action);
         
-        // Update sync status on document
         const syncStatus: UtilitySyncStatus = result.failed.length === 0 ? 'synced' : 'failed';
         await pool.query(
             `UPDATE helpdesk_documents
@@ -828,11 +899,11 @@ export class HelpdeskDocumentsService {
         const history = await this.getApprovalHistory(id);
         const comments = await this.getComments(id);
 
-        return {
-            ...rows[0],
-            approval_history: history,
-            comments: comments,
-        };
+        const doc = buildDocumentFromRow(rows[0]);
+        doc.approval_history = history;
+        doc.comments = comments;
+
+        return doc;
     }
 
     // ─── Find All with Filters ───────────────────────────────────────────────
@@ -937,7 +1008,6 @@ export class HelpdeskDocumentsService {
             params.push(filters.sentry_status);
             p++;
         }
-        // ─── Conference filters ────────────────────────────────────────────────
         if (filters.conference_type) {
             query += ` AND d.conference_type = $${p}`;
             params.push(filters.conference_type);
@@ -1003,17 +1073,27 @@ export class HelpdeskDocumentsService {
             params.push(filters.is_sent_back_to_requester);
             p++;
         }
+
+        // ─── UPDATED: pending_internal_approval ──────────────────────────────────
+        // Returns documents that need review: 'pending', 'previewed', 'changes_ready'
         if (filters.pending_internal_approval) {
-            query += ` AND d.internal_approval_status IN ('pending', 'previewed')`;
+            query += ` AND d.internal_approval_status IN ('pending', 'previewed', 'changes_ready')`;
         }
+
+        // ─── UPDATED: ready_to_send_back ─────────────────────────────────────────
+        // Returns documents where admin has decided: 'approved_internal', 'rejected_internal', 'changes_requested_internal'
+        // AND is_internal_approval_complete = true AND is_sent_back_to_requester = false
         if (filters.ready_to_send_back) {
-            query += ` AND d.internal_approval_status IN ('approved_internal', 'rejected_internal', 'changes_requested_internal')`;
+            query += ` AND d.is_internal_approval_complete = true 
+                      AND d.is_sent_back_to_requester = false 
+                      AND d.internal_approval_status IN ('approved_internal', 'rejected_internal', 'changes_requested_internal')`;
         }
+
         if (filters.pending_my_approval && filters.uploaded_by) {
             query += ` AND d.status = 'pending_approval'`;
         }
 
-        // ─── NEW: Utility sync filters ──────────────────────────────────────────
+        // ─── Utility sync filters ──────────────────────────────────────────
         if (filters.utility_sync_status) {
             query += ` AND d.utility_sync_status = $${p}`;
             params.push(filters.utility_sync_status);
@@ -1050,11 +1130,12 @@ export class HelpdeskDocumentsService {
         const { rows } = await pool.query(query, params);
 
         const docs = await Promise.all(
-            rows.map(async (row) => ({
-                ...row,
-                approval_history: await this.getApprovalHistory(row.id),
-                comments: await this.getComments(row.id),
-            }))
+            rows.map(async (row) => {
+                const doc = buildDocumentFromRow(row);
+                doc.approval_history = await this.getApprovalHistory(row.id);
+                doc.comments = await this.getComments(row.id);
+                return doc;
+            })
         );
 
         return docs;
@@ -1109,11 +1190,12 @@ export class HelpdeskDocumentsService {
         const { rows } = await pool.query(query, params);
 
         const docs = await Promise.all(
-            rows.map(async (row) => ({
-                ...row,
-                approval_history: await this.getApprovalHistory(row.id),
-                comments: await this.getComments(row.id),
-            }))
+            rows.map(async (row) => {
+                const doc = buildDocumentFromRow(row);
+                doc.approval_history = await this.getApprovalHistory(row.id);
+                doc.comments = await this.getComments(row.id);
+                return doc;
+            })
         );
 
         return docs;
@@ -1174,7 +1256,7 @@ export class HelpdeskDocumentsService {
 
         const internalStatsQuery = `
             SELECT 
-                COUNT(CASE WHEN d.internal_approval_status IN ('pending', 'previewed') THEN 1 END) as pending_internal,
+                COUNT(CASE WHEN d.internal_approval_status IN ('pending', 'previewed', 'changes_ready') THEN 1 END) as pending_internal,
                 COUNT(CASE WHEN d.is_internal_approval_complete = true AND d.is_sent_back_to_requester = false THEN 1 END) as ready_to_send_back
             FROM helpdesk_documents d
             ${whereClause}
@@ -1191,7 +1273,6 @@ export class HelpdeskDocumentsService {
         `;
         const { rows: stampStatsRows } = await pool.query(stampStatsQuery, params);
 
-        // ─── NEW: Utility sync stats ────────────────────────────────────────────
         const utilitySyncQuery = `
             SELECT 
                 COUNT(CASE WHEN d.utility_sync_status = 'synced' THEN 1 END) as synced,
@@ -1240,125 +1321,129 @@ export class HelpdeskDocumentsService {
 
     // ─── Get Summary ─────────────────────────────────────────────────────────
 
-    static async getSummary(filters?: { entity_type?: DocumentEntityType }): Promise<DocumentSummary> {
-        const params: unknown[] = [];
-        let whereClause = 'WHERE d.is_active = true';
-        let p = 1;
+static async getSummary(filters?: { entity_type?: DocumentEntityType }): Promise<DocumentSummary> {
+    const params: unknown[] = [];
+    let whereClause = 'WHERE d.is_active = true';
+    let p = 1;
 
-        if (filters?.entity_type) {
-            whereClause += ` AND d.entity_type = $${p}`;
-            params.push(filters.entity_type);
-            p++;
-        }
-
-        const summaryQuery = `
-            SELECT 
-                COUNT(*) as total,
-                COUNT(CASE WHEN d.status = 'draft' THEN 1 END) as draft,
-                COUNT(CASE WHEN d.status = 'pending_approval' THEN 1 END) as pending_approval,
-                COUNT(CASE WHEN d.status = 'approved' THEN 1 END) as approved,
-                COUNT(CASE WHEN d.status = 'rejected' THEN 1 END) as rejected,
-                COUNT(CASE WHEN d.status = 'returned' THEN 1 END) as returned,
-                COUNT(CASE WHEN d.internal_approval_status = 'pending' THEN 1 END) as internal_pending,
-                COUNT(CASE WHEN d.internal_approval_status = 'previewed' THEN 1 END) as internal_previewed,
-                COUNT(CASE WHEN d.internal_approval_status = 'approved_internal' THEN 1 END) as internal_approved,
-                COUNT(CASE WHEN d.internal_approval_status = 'rejected_internal' THEN 1 END) as internal_rejected,
-                COUNT(CASE WHEN d.internal_approval_status = 'changes_requested_internal' THEN 1 END) as internal_changes_requested,
-                COUNT(CASE WHEN d.internal_approval_status = 'changes_ready' THEN 1 END) as internal_changes_ready,
-                COUNT(CASE WHEN d.requester_status = 'pending_approval' THEN 1 END) as requester_pending,
-                COUNT(CASE WHEN d.requester_status = 'approved' THEN 1 END) as requester_approved,
-                COUNT(CASE WHEN d.requester_status = 'rejected' THEN 1 END) as requester_rejected,
-                COUNT(CASE WHEN d.requester_status = 'changes_requested' THEN 1 END) as requester_changes_requested,
-                COUNT(CASE WHEN d.requester_status = 'in_revision' THEN 1 END) as requester_in_revision,
-                COUNT(CASE WHEN d.is_signed = true THEN 1 END) as signed_count,
-                COUNT(CASE WHEN d.is_stamped = true THEN 1 END) as stamped_count,
-                COUNT(CASE WHEN d.is_signed = true AND d.is_stamped = true THEN 1 END) as signed_and_stamped_count,
-                -- ─── NEW: Utility sync summary ──────────────────────────────────
-                COUNT(CASE WHEN d.utility_sync_status = 'synced' THEN 1 END) as utility_synced,
-                COUNT(CASE WHEN d.utility_sync_status = 'pending' THEN 1 END) as utility_pending,
-                COUNT(CASE WHEN d.utility_sync_status = 'failed' THEN 1 END) as utility_failed,
-                COUNT(CASE WHEN d.utility_sync_status = 'not_applicable' THEN 1 END) as utility_not_applicable
-            FROM helpdesk_documents d
-            ${whereClause}
-        `;
-        const { rows } = await pool.query(summaryQuery, params);
-        const summary = rows[0];
-
-        const statusQuery = `SELECT d.status, COUNT(*) as count FROM helpdesk_documents d ${whereClause} GROUP BY d.status`;
-        const { rows: statusRows } = await pool.query(statusQuery, params);
-        const byStatus: Record<DocumentStatus, number> = {
-            draft: 0,
-            pending_approval: 0,
-            approved: 0,
-            rejected: 0,
-            returned: 0,
-        };
-        statusRows.forEach(row => {
-            const status = row.status as DocumentStatus;
-            if (status in byStatus) {
-                byStatus[status] = Number(row.count);
-            }
-        });
-
-        const entityQuery = `SELECT d.entity_type, COUNT(*) as count FROM helpdesk_documents d ${whereClause} GROUP BY d.entity_type`;
-        const { rows: entityRows } = await pool.query(entityQuery, params);
-        const byEntityType: Record<DocumentEntityType, number> = {} as Record<DocumentEntityType, number>;
-        entityRows.forEach(row => {
-            byEntityType[row.entity_type as DocumentEntityType] = Number(row.count);
-        });
-
-        const formatQuery = `SELECT d.format, COUNT(*) as count FROM helpdesk_documents d ${whereClause} GROUP BY d.format`;
-        const { rows: formatRows } = await pool.query(formatQuery, params);
-        const byFormat: Record<DocumentFormat, number> = {
-            pdf: 0,
-            docx: 0,
-            xlsx: 0,
-        };
-        formatRows.forEach(row => {
-            const format = row.format as DocumentFormat;
-            if (format in byFormat) {
-                byFormat[format] = Number(row.count);
-            }
-        });
-
-        const requesterStatusSummary: Record<RequesterVisibleStatus, number> = {
-            pending_approval: Number(summary.requester_pending) || 0,
-            approved: Number(summary.requester_approved) || 0,
-            rejected: Number(summary.requester_rejected) || 0,
-            changes_requested: Number(summary.requester_changes_requested) || 0,
-            in_revision: Number(summary.requester_in_revision) || 0,
-        };
-
-        return {
-            total: Number(summary.total) || 0,
-            by_status: byStatus,
-            by_entity_type: byEntityType,
-            by_format: byFormat,
-            pending_approval: Number(summary.pending_approval) || 0,
-            draft: Number(summary.draft) || 0,
-            approved: Number(summary.approved) || 0,
-            rejected: Number(summary.rejected) || 0,
-            returned: Number(summary.returned) || 0,
-            internal_approval_summary: {
-                pending: Number(summary.internal_pending) || 0,
-                previewed: Number(summary.internal_previewed) || 0,
-                approved_internal: Number(summary.internal_approved) || 0,
-                rejected_internal: Number(summary.internal_rejected) || 0,
-                changes_requested_internal: Number(summary.internal_changes_requested) || 0,
-                changes_ready: Number(summary.internal_changes_ready) || 0,
-            },
-            requester_status_summary: requesterStatusSummary,
-            signed_count: Number(summary.signed_count) || 0,
-            stamped_count: Number(summary.stamped_count) || 0,
-            signed_and_stamped_count: Number(summary.signed_and_stamped_count) || 0,
-            utility_sync_summary: {
-                synced: Number(summary.utility_synced) || 0,
-                pending: Number(summary.utility_pending) || 0,
-                failed: Number(summary.utility_failed) || 0,
-                not_applicable: Number(summary.utility_not_applicable) || 0,
-            },
-        };
+    if (filters?.entity_type) {
+        whereClause += ` AND d.entity_type = $${p}`;
+        params.push(filters.entity_type);
+        p++;
     }
+
+    const summaryQuery = `
+        SELECT 
+            COUNT(*) as total,
+            COUNT(CASE WHEN d.status = 'draft' THEN 1 END) as draft,
+            COUNT(CASE WHEN d.status = 'pending_approval' THEN 1 END) as pending_approval,
+            COUNT(CASE WHEN d.status = 'ready_to_send' THEN 1 END) as ready_to_send,
+            COUNT(CASE WHEN d.status = 'approved' THEN 1 END) as approved,
+            COUNT(CASE WHEN d.status = 'rejected' THEN 1 END) as rejected,
+            COUNT(CASE WHEN d.status = 'returned' THEN 1 END) as returned,
+            COUNT(CASE WHEN d.internal_approval_status = 'pending' THEN 1 END) as internal_pending,
+            COUNT(CASE WHEN d.internal_approval_status = 'previewed' THEN 1 END) as internal_previewed,
+            COUNT(CASE WHEN d.internal_approval_status = 'approved_internal' THEN 1 END) as internal_approved,
+            COUNT(CASE WHEN d.internal_approval_status = 'rejected_internal' THEN 1 END) as internal_rejected,
+            COUNT(CASE WHEN d.internal_approval_status = 'changes_requested_internal' THEN 1 END) as internal_changes_requested,
+            COUNT(CASE WHEN d.internal_approval_status = 'changes_ready' THEN 1 END) as internal_changes_ready,
+            COUNT(CASE WHEN d.requester_status = 'pending_approval' THEN 1 END) as requester_pending,
+            COUNT(CASE WHEN d.requester_status = 'approved' THEN 1 END) as requester_approved,
+            COUNT(CASE WHEN d.requester_status = 'rejected' THEN 1 END) as requester_rejected,
+            COUNT(CASE WHEN d.requester_status = 'changes_requested' THEN 1 END) as requester_changes_requested,
+            COUNT(CASE WHEN d.requester_status = 'in_revision' THEN 1 END) as requester_in_revision,
+            COUNT(CASE WHEN d.is_signed = true THEN 1 END) as signed_count,
+            COUNT(CASE WHEN d.is_stamped = true THEN 1 END) as stamped_count,
+            COUNT(CASE WHEN d.is_signed = true AND d.is_stamped = true THEN 1 END) as signed_and_stamped_count,
+            COUNT(CASE WHEN d.utility_sync_status = 'synced' THEN 1 END) as utility_synced,
+            COUNT(CASE WHEN d.utility_sync_status = 'pending' THEN 1 END) as utility_pending,
+            COUNT(CASE WHEN d.utility_sync_status = 'failed' THEN 1 END) as utility_failed,
+            COUNT(CASE WHEN d.utility_sync_status = 'not_applicable' THEN 1 END) as utility_not_applicable
+        FROM helpdesk_documents d
+        ${whereClause}
+    `;
+    const { rows } = await pool.query(summaryQuery, params);
+    const summary = rows[0];
+
+    const statusQuery = `SELECT d.status, COUNT(*) as count FROM helpdesk_documents d ${whereClause} GROUP BY d.status`;
+    const { rows: statusRows } = await pool.query(statusQuery, params);
+    
+    // ─── UPDATED: Add ready_to_send to byStatus ──────────────────────────────
+    const byStatus: Record<DocumentStatus, number> = {
+        draft: 0,
+        pending_approval: 0,
+        ready_to_send: 0,
+        approved: 0,
+        rejected: 0,
+        returned: 0,
+    };
+    statusRows.forEach(row => {
+        const status = row.status as DocumentStatus;
+        if (status in byStatus) {
+            byStatus[status] = Number(row.count);
+        }
+    });
+
+    const entityQuery = `SELECT d.entity_type, COUNT(*) as count FROM helpdesk_documents d ${whereClause} GROUP BY d.entity_type`;
+    const { rows: entityRows } = await pool.query(entityQuery, params);
+    const byEntityType: Record<DocumentEntityType, number> = {} as Record<DocumentEntityType, number>;
+    entityRows.forEach(row => {
+        byEntityType[row.entity_type as DocumentEntityType] = Number(row.count);
+    });
+
+    const formatQuery = `SELECT d.format, COUNT(*) as count FROM helpdesk_documents d ${whereClause} GROUP BY d.format`;
+    const { rows: formatRows } = await pool.query(formatQuery, params);
+    const byFormat: Record<DocumentFormat, number> = {
+        pdf: 0,
+        docx: 0,
+        xlsx: 0,
+    };
+    formatRows.forEach(row => {
+        const format = row.format as DocumentFormat;
+        if (format in byFormat) {
+            byFormat[format] = Number(row.count);
+        }
+    });
+
+    const requesterStatusSummary: Record<RequesterVisibleStatus, number> = {
+        pending_approval: Number(summary.requester_pending) || 0,
+        approved: Number(summary.requester_approved) || 0,
+        rejected: Number(summary.requester_rejected) || 0,
+        changes_requested: Number(summary.requester_changes_requested) || 0,
+        in_revision: Number(summary.requester_in_revision) || 0,
+    };
+
+    return {
+        total: Number(summary.total) || 0,
+        by_status: byStatus,
+        by_entity_type: byEntityType,
+        by_format: byFormat,
+        pending_approval: Number(summary.pending_approval) || 0,
+        draft: Number(summary.draft) || 0,
+        ready_to_send: Number(summary.ready_to_send) || 0,
+        approved: Number(summary.approved) || 0,
+        rejected: Number(summary.rejected) || 0,
+        returned: Number(summary.returned) || 0,
+        internal_approval_summary: {
+            pending: Number(summary.internal_pending) || 0,
+            previewed: Number(summary.internal_previewed) || 0,
+            approved_internal: Number(summary.internal_approved) || 0,
+            rejected_internal: Number(summary.internal_rejected) || 0,
+            changes_requested_internal: Number(summary.internal_changes_requested) || 0,
+            changes_ready: Number(summary.internal_changes_ready) || 0,
+        },
+        requester_status_summary: requesterStatusSummary,
+        signed_count: Number(summary.signed_count) || 0,
+        stamped_count: Number(summary.stamped_count) || 0,
+        signed_and_stamped_count: Number(summary.signed_and_stamped_count) || 0,
+        utility_sync_summary: {
+            synced: Number(summary.utility_synced) || 0,
+            pending: Number(summary.utility_pending) || 0,
+            failed: Number(summary.utility_failed) || 0,
+            not_applicable: Number(summary.utility_not_applicable) || 0,
+        },
+    };
+}
 
     // ─── Submit for Approval ────────────────────────────────────────────────
 
@@ -1420,7 +1505,11 @@ export class HelpdeskDocumentsService {
 
     /**
      * Internal Preview - Super admin previews the document
-     * This updates internal status only, requester doesn't see this
+     * 
+     * ─── STATE TRANSITION ──────────────────────────────────────────────────────────
+     * Before: status = 'pending_approval', internal_approval_status = 'pending'|'changes_ready'
+     * After:  status = 'pending_approval' (stays), internal_approval_status = 'previewed'
+     * ──────────────────────────────────────────────────────────────────────────────
      */
     static async internalPreview(
         id: string,
@@ -1487,8 +1576,14 @@ export class HelpdeskDocumentsService {
 
     /**
      * Internal Approve - Super admin approves internally with signature AND STAMP embedding
-     * Requester still sees 'pending_approval' until send back
-     * UPDATED: Syncs utility items to 'sent' status when approved internally
+     * 
+     * ─── STATE TRANSITION ──────────────────────────────────────────────────────────
+     * Before: status = 'pending_approval', internal_approval_status = 'pending'|'previewed'|'changes_ready'
+     * After:  status = 'pending_approval' (stays), internal_approval_status = 'approved_internal'
+     *         is_internal_approval_complete = true
+     *         
+     * The document stays in the super admin's queue but appears as "READY" instead of "PENDING"
+     * ──────────────────────────────────────────────────────────────────────────────
      */
     static async internalApprove(
         id: string,
@@ -1499,6 +1594,7 @@ export class HelpdeskDocumentsService {
             throw new AppError(404, 'Document not found');
         }
 
+        // ─── VALIDATE BEFORE ANY DB OPERATIONS ────────────────────────────────
         if (doc.status !== 'pending_approval') {
             throw new AppError(400, `Cannot approve document with status: ${doc.status}`);
         }
@@ -1530,115 +1626,108 @@ export class HelpdeskDocumentsService {
             throw new AppError(404, 'User not found');
         }
 
+        // ─── DECLARE VARIABLES FOR POST-COMMIT OPERATIONS ─────────────────────────
+        let finalFileUrl = doc.file_url;
+        let finalPublicId = doc.public_id;
+        let finalFileSize: number | null = null;
+        let wasSigned = false;
+        let newFileUrl = doc.file_url;
+        let newPublicId = doc.public_id;
+        let newFileSize: number | null = null;
+
+        // ─── Generate stamped/signed PDF BEFORE transaction ──────────────────────
+        try {
+            if (input.generate_e_stamp) {
+                console.log(`[InternalApprove] Generating E-Stamp for document ${id}...`);
+
+                const { stampedPdfBuffer, eStampRecord } = await EStampService.generateEStamp(
+                    {
+                        document_id: id,
+                        stamp_type: input.stamp_type || 'approved',
+                        original_pdf_url: doc.file_url,
+                        signature_url: signer.signature_url,
+                        metadata: {
+                            department_name: 'Office of the Registrar',
+                            station_name: 'High Court',
+                        },
+                    },
+                    input.approved_by || 'system'
+                );
+
+                const multerFile: Express.Multer.File = {
+                    buffer: stampedPdfBuffer,
+                    mimetype: 'application/pdf',
+                    originalname: doc.file_url.split('/').pop() || 'stamped-document.pdf',
+                    size: stampedPdfBuffer.length,
+                    fieldname: 'file',
+                    encoding: '7bit',
+                    stream: null as any,
+                    destination: '',
+                    filename: '',
+                    path: '',
+                };
+                const uploaded = await uploadToCloudinary(multerFile, FOLDER);
+
+                newFileUrl = uploaded.secure_url;
+                newPublicId = uploaded.public_id;
+                newFileSize = uploaded.bytes || uploaded.size || stampedPdfBuffer.length;
+                wasSigned = true;
+
+                console.log(`[InternalApprove] Successfully generated & uploaded stamped PDF for ${id}`);
+
+            } else {
+                console.log(`[InternalApprove] Generating Signature Block for document ${id}...`);
+
+                const signedPdfBuffer = await embedSignatureBlockIntoPDF(
+                    doc.file_url,
+                    signer.signature_url!,
+                    signer.full_name || 'Registrar, High Court',
+                    'Registrar, High Court',
+                );
+
+                const multerFile: Express.Multer.File = {
+                    buffer: signedPdfBuffer,
+                    mimetype: 'application/pdf',
+                    originalname: doc.file_url.split('/').pop() || 'signed-document.pdf',
+                    size: signedPdfBuffer.length,
+                    fieldname: 'file',
+                    encoding: '7bit',
+                    stream: null as any,
+                    destination: '',
+                    filename: '',
+                    path: '',
+                };
+                const uploaded = await uploadToCloudinary(multerFile, FOLDER);
+
+                newFileUrl = uploaded.secure_url;
+                newPublicId = uploaded.public_id;
+                newFileSize = uploaded.bytes || uploaded.size || signedPdfBuffer.length;
+                wasSigned = true;
+
+                console.log(`[InternalApprove] Successfully generated & uploaded signed PDF for ${id}`);
+            }
+
+            finalFileUrl = newFileUrl;
+            finalPublicId = newPublicId;
+            finalFileSize = newFileSize;
+
+        } catch (stampError) {
+            console.error(`[InternalApprove] Failed to generate document for ${id}:`, stampError);
+            let errorMessage = 'Unknown error during document generation';
+            if (stampError instanceof Error) {
+                errorMessage = stampError.message;
+            } else if (typeof stampError === 'string') {
+                errorMessage = stampError;
+            }
+            throw new AppError(500, `Failed to generate ${input.generate_e_stamp ? 'e-stamp' : 'signature block'}: ${errorMessage}`);
+        }
+
+        // ─── DATABASE TRANSACTION ──────────────────────────────────────────────────
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
 
-            let finalFileUrl = doc.file_url;
-            let finalPublicId = doc.public_id;
-            let finalFileSize: number | null = null;
-            let wasSigned = false;
-            let eStampRecordId: string | null = null;
-
-            // ─── BRANCH: E-STAMP OR SIGNATURE BLOCK ────────────────────────────────────
-            if (input.generate_e_stamp) {
-                // ─── APPROVE & STAMP ──────────────────────────────────────────────────
-                try {
-                    console.log(`[InternalApprove] Generating E-Stamp for document ${id}...`);
-
-                    const { stampedPdfBuffer, eStampRecord } = await EStampService.generateEStamp(
-                        {
-                            document_id: id,
-                            stamp_type: input.stamp_type || 'approved',
-                            original_pdf_url: doc.file_url,
-                            signature_url: signer.signature_url,
-                            metadata: {
-                                department_name: 'Office of the Registrar',
-                                station_name: 'High Court',
-                            },
-                        },
-                        input.approved_by || 'system'
-                    );
-
-                    eStampRecordId = eStampRecord.id;
-
-                    const multerFile: Express.Multer.File = {
-                        buffer: stampedPdfBuffer,
-                        mimetype: 'application/pdf',
-                        originalname: doc.file_url.split('/').pop() || 'stamped-document.pdf',
-                        size: stampedPdfBuffer.length,
-                        fieldname: 'file',
-                        encoding: '7bit',
-                        stream: null as any,
-                        destination: '',
-                        filename: '',
-                        path: '',
-                    };
-                    const uploaded = await uploadToCloudinary(multerFile, FOLDER);
-
-                    finalFileUrl = uploaded.secure_url;
-                    finalPublicId = uploaded.public_id;
-                    finalFileSize = uploaded.bytes || uploaded.size || stampedPdfBuffer.length;
-                    wasSigned = true;
-
-                    console.log(`[InternalApprove] Successfully generated & uploaded stamped PDF for ${id}`);
-
-                } catch (stampError) {
-                    console.error(`[InternalApprove] Failed to generate e-stamp for ${id}:`, stampError);
-                    let errorMessage = 'Unknown error during e-stamp generation';
-                    if (stampError instanceof Error) {
-                        errorMessage = stampError.message;
-                    } else if (typeof stampError === 'string') {
-                        errorMessage = stampError;
-                    }
-                    throw new AppError(500, `Failed to generate e-stamp: ${errorMessage}`);
-                }
-            } else {
-                // ─── APPROVE & SIGN (No stamp, just a clean signature block) ──────────
-                try {
-                    console.log(`[InternalApprove] Generating Signature Block for document ${id}...`);
-
-                    const signedPdfBuffer = await embedSignatureBlockIntoPDF(
-                        doc.file_url,
-                        signer.signature_url!,
-                        signer.full_name || 'Registrar, High Court',
-                        'Registrar, High Court',
-                    );
-
-                    const multerFile: Express.Multer.File = {
-                        buffer: signedPdfBuffer,
-                        mimetype: 'application/pdf',
-                        originalname: doc.file_url.split('/').pop() || 'signed-document.pdf',
-                        size: signedPdfBuffer.length,
-                        fieldname: 'file',
-                        encoding: '7bit',
-                        stream: null as any,
-                        destination: '',
-                        filename: '',
-                        path: '',
-                    };
-                    const uploaded = await uploadToCloudinary(multerFile, FOLDER);
-
-                    finalFileUrl = uploaded.secure_url;
-                    finalPublicId = uploaded.public_id;
-                    finalFileSize = uploaded.bytes || uploaded.size || signedPdfBuffer.length;
-                    wasSigned = true;
-
-                    console.log(`[InternalApprove] Successfully generated & uploaded signed PDF for ${id}`);
-
-                } catch (signError) {
-                    console.error(`[InternalApprove] Failed to generate signature block for ${id}:`, signError);
-                    let errorMessage = 'Unknown error during signature block generation';
-                    if (signError instanceof Error) {
-                        errorMessage = signError.message;
-                    } else if (typeof signError === 'string') {
-                        errorMessage = signError;
-                    }
-                    throw new AppError(500, `Failed to generate signature block: ${errorMessage}`);
-                }
-            }
-
-            // ─── UPDATE THE DOCUMENT IN THE DATABASE ──────────────────────────────────
+            // ─── UPDATE THE DOCUMENT ──────────────────────────────────────────────────
             const updateQuery = `
                 UPDATE helpdesk_documents
                 SET internal_approval_status = 'approved_internal',
@@ -1691,16 +1780,6 @@ export class HelpdeskDocumentsService {
                 id
             ]);
 
-            // Delete old file if it was replaced
-            if (doc.public_id && doc.public_id !== finalPublicId && finalFileUrl !== doc.file_url) {
-                try {
-                    await deleteFromCloudinary(doc.public_id, 'raw');
-                    console.log(`[InternalApprove] Deleted old file ${doc.public_id}`);
-                } catch (error) {
-                    console.error('Failed to delete old file from Cloudinary:', error);
-                }
-            }
-
             await this.addApprovalHistory(
                 id,
                 input.approved_by || 'system',
@@ -1711,31 +1790,64 @@ export class HelpdeskDocumentsService {
 
             await client.query('COMMIT');
 
-            const updatedDoc = await this.findById(id);
-            if (!updatedDoc) throw new AppError(500, 'Failed to retrieve updated document');
-
-            // ─── NEW: Sync utility items to 'sent' status on internal approval ────
-            if (input.sync_utilities !== false) {
-                const memoTypes = ['consolidated_utility_memo', 'consolidated_fuel_memo'];
-                if (memoTypes.includes(updatedDoc.entity_type)) {
-                    await this.syncUtilityItemsWithDocument(updatedDoc, 'sent');
-                }
-            }
-
-            return updatedDoc;
-
         } catch (err) {
             await client.query('ROLLBACK');
-            console.error('[InternalApprove] Error:', err);
+            console.error('[InternalApprove] Database error:', err);
             throw err;
         } finally {
             client.release();
         }
+
+        // ─── POST-COMMIT OPERATIONS ─────────────────────────────────────────────────
+        // These run after the transaction is committed and won't cause a rollback failure
+
+        let updatedDoc: HelpdeskDocument | null = null;
+        try {
+            updatedDoc = await this.findById(id);
+        } catch (err) {
+            console.error('[InternalApprove] Failed to retrieve updated document:', err);
+            // Don't throw - the DB update succeeded, we just can't fetch it
+        }
+
+        // ─── Delete old file if replaced ──────────────────────────────────────────
+        if (doc.public_id && doc.public_id !== finalPublicId && finalFileUrl !== doc.file_url) {
+            try {
+                await deleteFromCloudinary(doc.public_id, 'raw');
+                console.log(`[InternalApprove] Deleted old file ${doc.public_id}`);
+            } catch (error) {
+                console.error('Failed to delete old file from Cloudinary:', error);
+            }
+        }
+
+        // ─── Sync utility items on internal approval ─────────────────────────────
+        if (input.sync_utilities !== false && updatedDoc) {
+            const memoTypes = ['consolidated_utility_memo', 'consolidated_fuel_memo'];
+            if (memoTypes.includes(updatedDoc.entity_type)) {
+                try {
+                    await this.syncUtilityItemsWithDocument(updatedDoc, 'sent');
+                } catch (syncError) {
+                    console.error('[InternalApprove] Utility sync failed:', syncError);
+                    // Don't throw - the document is already approved
+                }
+            }
+        }
+
+        // ─── Return the document (or throw if we couldn't find it) ──────────────
+        if (!updatedDoc) {
+            throw new AppError(500, 'Failed to retrieve updated document');
+        }
+
+        return updatedDoc;
     }
 
     /**
      * Internal Reject - Super admin rejects internally
-     * Requester still sees 'pending_approval' until send back
+     * 
+     * ─── STATE TRANSITION ──────────────────────────────────────────────────────────
+     * Before: status = 'pending_approval', internal_approval_status = 'pending'|'previewed'|'changes_ready'
+     * After:  status = 'pending_approval' (stays), internal_approval_status = 'rejected_internal'
+     *         is_internal_approval_complete = true
+     * ──────────────────────────────────────────────────────────────────────────────
      */
     static async internalReject(
         id: string,
@@ -1796,7 +1908,12 @@ export class HelpdeskDocumentsService {
 
     /**
      * Internal Request Changes - Super admin requests changes internally
-     * Requester still sees 'pending_approval' until send back
+     * 
+     * ─── STATE TRANSITION ──────────────────────────────────────────────────────────
+     * Before: status = 'pending_approval', internal_approval_status = 'pending'|'previewed'|'changes_ready'
+     * After:  status = 'pending_approval' (stays), internal_approval_status = 'changes_requested_internal'
+     *         is_internal_approval_complete = true
+     * ──────────────────────────────────────────────────────────────────────────────
      */
     static async internalRequestChanges(
         id: string,
@@ -1860,7 +1977,14 @@ export class HelpdeskDocumentsService {
     }
 
     /**
-     * Cancel Internal Approval - Reset internal approval decision     */
+     * Cancel Internal Approval - Reset internal approval decision
+     * 
+     * ─── STATE TRANSITION ──────────────────────────────────────────────────────────
+     * Before: status = 'pending_approval', internal_approval_status = any internal status
+     * After:  status = 'pending_approval' (stays), internal_approval_status = 'pending'
+     *         is_internal_approval_complete = false
+     * ──────────────────────────────────────────────────────────────────────────────
+     */
     static async cancelInternalApproval(
         id: string,
         input: CancelInternalApprovalRequest
@@ -1919,7 +2043,17 @@ export class HelpdeskDocumentsService {
 
     /**
      * Send Back to Requester - This is when the requester finally sees the status
-     * UPDATED: Syncs utility items when document is approved or rejected
+     * 
+     * ─── STATE TRANSITION ──────────────────────────────────────────────────────────
+     * Before: status = 'pending_approval', internal_approval_status = 'approved_internal'|'rejected_internal'|'changes_requested_internal'
+     *         is_internal_approval_complete = true, is_sent_back_to_requester = false
+     * 
+     * After:  status = 'approved'|'rejected'|'returned' (depending on final_status)
+     *         requester_status = 'approved'|'rejected'|'changes_requested'
+     *         is_sent_back_to_requester = true
+     *         
+     * The document is now removed from the super admin's queue
+     * ──────────────────────────────────────────────────────────────────────────────
      */
     static async sendBackToRequester(
         id: string,
@@ -2000,12 +2134,12 @@ export class HelpdeskDocumentsService {
             const updatedDoc = await this.findById(id);
             if (!updatedDoc) throw new AppError(500, 'Failed to retrieve updated document');
 
-            // ─── 🚀 SEND EMAIL NOTIFICATION AFTER COMMIT ──────────────────────
+            // ─── SEND EMAIL NOTIFICATION ──────────────────────────────────────
             if (input.notify_requester !== false && doc.uploaded_by) {
                 await this.sendApprovalNotification(updatedDoc, doc.uploaded_by, finalStatus);
             }
 
-            // ─── NEW: Sync utility items when document is approved or rejected ──
+            // ─── Sync utility items when document is approved or rejected ──
             if (input.sync_utilities !== false && updatedDoc) {
                 const memoTypes = ['consolidated_utility_memo', 'consolidated_fuel_memo'];
                 if (memoTypes.includes(updatedDoc.entity_type)) {
@@ -2036,7 +2170,7 @@ export class HelpdeskDocumentsService {
         }
     }
 
-    // ─── NEW: Send approval notification email ──────────────────────────────────
+    // ─── Send approval notification email ──────────────────────────────────
 
     private static async sendApprovalNotification(
         doc: HelpdeskDocument,
@@ -2110,7 +2244,17 @@ export class HelpdeskDocumentsService {
 
     /**
      * Resubmit After Changes - Requester resubmits after making changes
-     * UPDATED: Resets utility sync status when document is resubmitted
+     * 
+     * ─── STATE TRANSITION ──────────────────────────────────────────────────────────
+     * Before: status = 'returned'|'rejected', requester_status = 'changes_requested'|'rejected'
+     *         is_sent_back_to_requester = true
+     * 
+     * After:  status = 'pending_approval', internal_approval_status = 'changes_ready'
+     *         requester_status = 'pending_approval', is_sent_back_to_requester = false
+     *         utility_sync_status = 'pending'
+     * 
+     * The document reappears in the super admin's queue as "PENDING" (changes_ready)
+     * ──────────────────────────────────────────────────────────────────────────────
      */
     static async resubmitAfterChanges(
         id: string,
@@ -2175,23 +2319,129 @@ export class HelpdeskDocumentsService {
 
     // ─── Pending Internal Approvals (Super Admin Dashboard) ──────────────────
 
+    /**
+     * Get documents that need super admin attention.
+     * 
+     * This includes:
+     * 1. Pending Review: internal_approval_status IN ('pending', 'previewed', 'changes_ready')
+     *    - These appear as "PENDING" in the UI
+     * 2. Ready to Send Back: is_internal_approval_complete = true AND is_sent_back_to_requester = false
+     *    - These appear as "READY" in the UI
+     * 
+     * Both categories keep the document in the super admin's queue
+     */
     static async getPendingInternalApprovals(
         filters: HelpdeskDocumentFilters = {}
     ): Promise<HelpdeskDocument[]> {
-        const pendingFilters: HelpdeskDocumentFilters = {
-            ...filters,
-            pending_internal_approval: true,
-            status: 'pending_approval',
-        };
-        
-        return this.findAll(pendingFilters);
+        let query = `
+            SELECT ${DOC_SELECT}
+            FROM helpdesk_documents d
+            LEFT JOIN users u ON d.uploaded_by = u.id
+            LEFT JOIN users au ON d.approved_by = au.id
+            LEFT JOIN users ru ON d.returned_by = ru.id
+            LEFT JOIN users su ON d.signed_by = su.id
+            LEFT JOIN users stu ON d.stamped_by = stu.id
+            LEFT JOIN users syncer ON d.utility_synced_by = syncer.id
+            WHERE d.is_active = true
+              AND (
+                -- ─── Category 1: Pending Review ──────────────────────────────
+                d.internal_approval_status IN ('pending', 'previewed', 'changes_ready')
+                -- ─── Category 2: Ready to Send Back ──────────────────────────
+                OR (d.is_internal_approval_complete = true AND d.is_sent_back_to_requester = false)
+                -- ─── Category 3: Status is pending_approval ──────────────────
+                OR d.status = 'pending_approval'
+                -- ─── Category 4: Requester status is pending_approval ────────
+                OR d.requester_status = 'pending_approval'
+              )
+              -- ─── Exclude fully sent back documents ─────────────────────────
+              AND NOT (d.is_sent_back_to_requester = true AND d.requester_status != 'pending_approval')
+        `;
+
+        const params: unknown[] = [];
+        let p = 1;
+
+        // ─── Apply additional filters ──────────────────────────────────────────
+        if (filters.entity_type) {
+            query += ` AND d.entity_type = $${p}`;
+            params.push(filters.entity_type);
+            p++;
+        }
+        if (filters.entity_id) {
+            query += ` AND d.entity_id = $${p}`;
+            params.push(filters.entity_id);
+            p++;
+        }
+        if (filters.search) {
+            query += ` AND (d.ref ILIKE $${p} OR d.subject ILIKE $${p})`;
+            params.push(`%${filters.search}%`);
+            p++;
+        }
+        if (filters.uploaded_by) {
+            query += ` AND d.uploaded_by = $${p}`;
+            params.push(filters.uploaded_by);
+            p++;
+        }
+
+        // ─── Sorting ──────────────────────────────────────────────────────────
+        // Show pending review first, then ready to send back
+        query += ` ORDER BY 
+            CASE 
+                WHEN d.internal_approval_status IN ('pending', 'previewed', 'changes_ready') THEN 1
+                WHEN d.is_internal_approval_complete = true THEN 2
+                ELSE 3
+            END,
+            d.created_at ASC`;
+
+        if (filters.limit) {
+            query += ` LIMIT $${p}`;
+            params.push(filters.limit);
+            p++;
+        }
+        if (filters.offset) {
+            query += ` OFFSET $${p}`;
+            params.push(filters.offset);
+        }
+
+        const { rows } = await pool.query(query, params);
+
+        const docs = await Promise.all(
+            rows.map(async (row) => {
+                const doc = buildDocumentFromRow(row);
+                doc.approval_history = await this.getApprovalHistory(row.id);
+                doc.comments = await this.getComments(row.id);
+                return doc;
+            })
+        );
+
+        return docs;
     }
 
+    /**
+     * Get summary of pending internal approvals for super admin dashboard
+     * 
+     * This provides counts for each status category:
+     * - pending_review: internal_approval_status = 'pending'
+     * - previewed: internal_approval_status = 'previewed'
+     * - changes_ready: internal_approval_status = 'changes_ready'
+     * - approved_internal: internal_approval_status = 'approved_internal' AND is_sent_back_to_requester = false
+     * - rejected_internal: internal_approval_status = 'rejected_internal' AND is_sent_back_to_requester = false
+     * - changes_requested_internal: internal_approval_status = 'changes_requested_internal' AND is_sent_back_to_requester = false
+     * - ready_to_send_back: is_internal_approval_complete = true AND is_sent_back_to_requester = false (total)
+     */
     static async getPendingInternalApprovalsSummary(
         filters?: { entity_type?: DocumentEntityType }
     ): Promise<PendingInternalApprovalsSummary> {
         const params: unknown[] = [];
-        let whereClause = 'WHERE d.is_active = true AND d.status = \'pending_approval\'';
+        let whereClause = `
+            WHERE d.is_active = true 
+              AND (
+                d.internal_approval_status IN ('pending', 'previewed', 'changes_ready')
+                OR (d.is_internal_approval_complete = true AND d.is_sent_back_to_requester = false)
+                OR d.status = 'pending_approval'
+                OR d.requester_status = 'pending_approval'
+              )
+              AND NOT (d.is_sent_back_to_requester = true AND d.requester_status != 'pending_approval')
+        `;
         let p = 1;
 
         if (filters?.entity_type) {
@@ -2203,15 +2453,18 @@ export class HelpdeskDocumentsService {
         const query = `
             SELECT 
                 COUNT(*) as total_pending,
+                -- ─── Pending Review ──────────────────────────────────────────
                 COUNT(CASE WHEN d.internal_approval_status = 'pending' THEN 1 END) as pending_review,
                 COUNT(CASE WHEN d.internal_approval_status = 'previewed' THEN 1 END) as previewed,
-                COUNT(CASE WHEN d.internal_approval_status = 'approved_internal' THEN 1 END) as approved_internal,
-                COUNT(CASE WHEN d.internal_approval_status = 'rejected_internal' THEN 1 END) as rejected_internal,
-                COUNT(CASE WHEN d.internal_approval_status = 'changes_requested_internal' THEN 1 END) as changes_requested_internal,
-                COUNT(CASE WHEN d.is_internal_approval_complete = true THEN 1 END) as ready_to_send_back,
+                COUNT(CASE WHEN d.internal_approval_status = 'changes_ready' THEN 1 END) as changes_ready,
+                -- ─── Ready to Send Back ──────────────────────────────────────
+                COUNT(CASE WHEN d.internal_approval_status = 'approved_internal' AND d.is_sent_back_to_requester = false THEN 1 END) as approved_internal,
+                COUNT(CASE WHEN d.internal_approval_status = 'rejected_internal' AND d.is_sent_back_to_requester = false THEN 1 END) as rejected_internal,
+                COUNT(CASE WHEN d.internal_approval_status = 'changes_requested_internal' AND d.is_sent_back_to_requester = false THEN 1 END) as changes_requested_internal,
+                COUNT(CASE WHEN d.is_internal_approval_complete = true AND d.is_sent_back_to_requester = false THEN 1 END) as ready_to_send_back,
                 MIN(d.created_at) as oldest_pending,
                 AVG(EXTRACT(EPOCH FROM (NOW() - d.created_at)) / 3600) as avg_review_hours,
-                -- ─── NEW: Utility sync pending count ──────────────────────────────
+                -- ─── Utility sync pending count ──────────────────────────────
                 COUNT(CASE WHEN d.utility_sync_status = 'pending' THEN 1 END) as pending_utility_sync
             FROM helpdesk_documents d
             ${whereClause}
@@ -2220,6 +2473,7 @@ export class HelpdeskDocumentsService {
         const { rows } = await pool.query(query, params);
         const result = rows[0];
 
+        // ─── Entity breakdown ──────────────────────────────────────────────────
         const entityQuery = `
             SELECT d.entity_type, COUNT(*) as count
             FROM helpdesk_documents d
@@ -2237,6 +2491,7 @@ export class HelpdeskDocumentsService {
             oldestPendingDays = Math.floor((Date.now() - new Date(result.oldest_pending).getTime()) / (1000 * 60 * 60 * 24));
         }
 
+        // ─── Urgent count (pending > 2 days) ──────────────────────────────────
         const urgentQuery = `
             SELECT COUNT(*) as urgent
             FROM helpdesk_documents d
@@ -2249,6 +2504,7 @@ export class HelpdeskDocumentsService {
             total_pending_internal: Number(result.total_pending) || 0,
             pending_review: Number(result.pending_review) || 0,
             previewed: Number(result.previewed) || 0,
+            changes_ready: Number(result.changes_ready) || 0,
             approved_internal: Number(result.approved_internal) || 0,
             rejected_internal: Number(result.rejected_internal) || 0,
             changes_requested_internal: Number(result.changes_requested_internal) || 0,
@@ -2321,7 +2577,6 @@ export class HelpdeskDocumentsService {
         aideStatus?: string,
         residenceLocation?: string,
         sentryStatus?: string,
-        // ─── Conference fields ──────────────────────────────────────────────
         conferenceType?: ConferenceType,
         startDate?: string,
         endDate?: string,
@@ -2350,7 +2605,6 @@ export class HelpdeskDocumentsService {
         values.push(entityId);
         p++;
 
-        // ─── NEW: Update utility sync status if linking to a utility entity ────
         const isUtilityDoc = ['consolidated_utility_memo', 'consolidated_fuel_memo', 'utility_memo'].includes(entityType);
         if (isUtilityDoc) {
             updates.push(`utility_sync_status = $${p}`);
@@ -2436,7 +2690,6 @@ export class HelpdeskDocumentsService {
             p++;
         }
 
-        // ─── Conference fields ──────────────────────────────────────────────
         if (conferenceType !== undefined) {
             updates.push(`conference_type = $${p}`);
             values.push(conferenceType || null);
@@ -2519,7 +2772,6 @@ export class HelpdeskDocumentsService {
         aideStatus?: string,
         residenceLocation?: string,
         sentryStatus?: string,
-        // ─── Conference fields ──────────────────────────────────────────────
         conferenceType?: ConferenceType,
         startDate?: string,
         endDate?: string,
@@ -2572,88 +2824,90 @@ export class HelpdeskDocumentsService {
 
     // ─── Bulk Update Status ──────────────────────────────────────────────────
 
-    static async bulkUpdateStatus(
-        documentIds: string[],
-        status: DocumentStatus,
-        comments?: string
-    ): Promise<{ success: string[]; failed: string[] }> {
-        const success: string[] = [];
-        const failed: string[] = [];
+  static async bulkUpdateStatus(
+    documentIds: string[],
+    status: DocumentStatus,
+    comments?: string
+): Promise<{ success: string[]; failed: string[] }> {
+    const success: string[] = [];
+    const failed: string[] = [];
 
-        const client = await pool.connect();
-        try {
-            await client.query('BEGIN');
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
 
-            for (const id of documentIds) {
-                try {
-                    const doc = await this.findById(id);
-                    if (!doc) {
-                        failed.push(id);
-                        continue;
-                    }
-
-                    const validTransitions: Record<DocumentStatus, DocumentStatus[]> = {
-                        draft: ['pending_approval'],
-                        pending_approval: ['approved', 'rejected', 'returned'],
-                        approved: ['returned'],
-                        rejected: ['draft'],
-                        returned: ['draft'],
-                    };
-
-                    if (!validTransitions[doc.status]?.includes(status)) {
-                        failed.push(id);
-                        continue;
-                    }
-
-                    await client.query(
-                        `UPDATE helpdesk_documents
-                         SET status = $1,
-                             updated_at = NOW()
-                         WHERE id = $2 AND is_active = true`,
-                        [status, id]
-                    );
-
-                    let action: 'approved' | 'rejected' | 'returned' | 'submitted';
-                    switch (status) {
-                        case 'approved':
-                            action = 'approved';
-                            break;
-                        case 'rejected':
-                            action = 'rejected';
-                            break;
-                        case 'returned':
-                            action = 'returned';
-                            break;
-                        default:
-                            action = 'submitted';
-                            break;
-                    }
-
-                    await this.addApprovalHistory(
-                        id,
-                        'system',
-                        action,
-                        undefined,
-                        comments || `Bulk status update to ${status}`
-                    );
-
-                    success.push(id);
-                } catch (error) {
-                    console.error(`Failed to update status for document ${id}:`, error);
+        for (const id of documentIds) {
+            try {
+                const doc = await this.findById(id);
+                if (!doc) {
                     failed.push(id);
+                    continue;
                 }
-            }
 
-            await client.query('COMMIT');
-        } catch (err) {
-            await client.query('ROLLBACK');
-            throw err;
-        } finally {
-            client.release();
+                // ─── UPDATED: Add ready_to_send to valid transitions ──────────────
+                const validTransitions: Record<DocumentStatus, DocumentStatus[]> = {
+                    draft: ['pending_approval'],
+                    pending_approval: ['ready_to_send', 'approved', 'rejected', 'returned', 'draft'],
+                    ready_to_send: ['approved', 'rejected', 'returned'],
+                    approved: ['returned'],
+                    rejected: ['draft', 'pending_approval'],
+                    returned: ['draft', 'pending_approval'],
+                };
+
+                if (!validTransitions[doc.status]?.includes(status)) {
+                    failed.push(id);
+                    continue;
+                }
+
+                await client.query(
+                    `UPDATE helpdesk_documents
+                     SET status = $1,
+                         updated_at = NOW()
+                     WHERE id = $2 AND is_active = true`,
+                    [status, id]
+                );
+
+                let action: 'approved' | 'rejected' | 'returned' | 'submitted';
+                switch (status) {
+                    case 'approved':
+                        action = 'approved';
+                        break;
+                    case 'rejected':
+                        action = 'rejected';
+                        break;
+                    case 'returned':
+                        action = 'returned';
+                        break;
+                    default:
+                        action = 'submitted';
+                        break;
+                }
+
+                await this.addApprovalHistory(
+                    id,
+                    'system',
+                    action,
+                    undefined,
+                    comments || `Bulk status update to ${status}`
+                );
+
+                success.push(id);
+            } catch (error) {
+                console.error(`Failed to update status for document ${id}:`, error);
+                failed.push(id);
+            }
         }
 
-        return { success, failed };
+        await client.query('COMMIT');
+    } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+    } finally {
+        client.release();
     }
+
+    return { success, failed };
+}
 
     // ─── Comments ─────────────────────────────────────────────────────────────
 
@@ -2761,10 +3015,6 @@ export class HelpdeskDocumentsService {
 
     // ─── Delete Document ─────────────────────────────────────────────────────
 
-    /**
-     * Soft delete a document - sets is_active to false
-     * Permission checks should be handled by the controller
-     */
     static async delete(id: string): Promise<void> {
         const doc = await this.findById(id);
         if (!doc) {
@@ -2836,7 +3086,7 @@ export class HelpdeskDocumentsService {
         }
     }
 
-    // ─── Hard Delete (Admin Only) ───────────────────────────────────────────
+    // ─── Hard Delete ─────────────────────────────────────────────────────────
 
     static async hardDelete(id: string): Promise<void> {
         const doc = await this.findById(id);

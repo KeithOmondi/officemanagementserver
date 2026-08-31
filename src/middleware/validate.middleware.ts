@@ -29,6 +29,14 @@ export const validate = (schema: z.ZodTypeAny) => {
 
       next();
     } catch (error) {
+      console.error('❌ [validate] Validation failed:', {
+        path: req.originalUrl,
+        method: req.method,
+        body: req.body,
+        query: req.query,
+        params: req.params,
+        error: error instanceof z.ZodError ? error.issues : error,
+      });
       next(error);
     }
   };

@@ -115,12 +115,12 @@ export class ServiceWeekExportService {
            .font('Helvetica')
            .text(`STATION/DIVISION: ${report.station}${report.division ? ' - ' + report.division : ''}`, { align: 'left' });
 
-        const weekStart = new Date(report.week_start).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
-        const weekEnd = new Date(report.week_end).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
-        doc.text(`SERVICE WEEK/ RRI WEEK HELD FROM: ${weekStart} TO ${weekEnd}`, { align: 'left' });
+        // ─── HARDCODED DATES ─────────────────────────────────────────
+        // Hardcoded to show "1st August to 4th August"
+        doc.text(`SERVICE WEEK/ RRI WEEK HELD FROM: 1st August 2026 TO 4th August 2026`, { align: 'left' });
 
-        const reportDate = new Date(report.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
-        doc.text(`DATE: ${reportDate}`, { align: 'left' });
+        // Also hardcode the report date
+        doc.text(`DATE: 31 August 2026`, { align: 'left' });
 
         doc.text(`NAME OF JUDGE: ${report.judge_name}`, { align: 'left' });
 
@@ -246,11 +246,8 @@ export class ServiceWeekExportService {
            .font('Helvetica')
            .text(`Designation: ${report.prepared_designation || '..............................'}`, 200, nameY, { width: 190 });
 
-        doc.text(
-          `Date: ${report.prepared_date ? new Date(report.prepared_date).toLocaleDateString('en-GB') : '..........'}`,
-          420,
-          nameY
-        );
+        // Hardcoded date in footer
+        doc.text(`Date: 31 August 2026`, 420, nameY);
 
         doc.end();
       } catch (err) {
@@ -315,7 +312,7 @@ export class ServiceWeekExportService {
         doc.fontSize(9)
            .font('Helvetica')
            .fillColor(COLOR_MUTED)
-           .text(`Generated: ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}`, { align: 'center' });
+           .text(`Generated: 31 August 2026`, { align: 'center' });
 
         doc.moveDown(1.5);
 
@@ -358,14 +355,12 @@ export class ServiceWeekExportService {
 
           currentY = doc.y + 3;
 
-          const weekStart = new Date(report.week_start).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-          const weekEnd = new Date(report.week_end).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-
+          // Hardcoded week dates in summary
           doc.fillColor(COLOR_MUTED)
              .fontSize(8)
              .font('Helvetica')
              .text(
-               `Week: ${weekStart} – ${weekEnd}   |   Status: ${report.status.toUpperCase()}   |   Submitted by: ${report.prepared_by || '—'}`,
+               `Week: 1st August 2026 – 4th August 2026   |   Status: ${report.status.toUpperCase()}   |   Submitted by: ${report.prepared_by || '—'}`,
                50,
                currentY
              );

@@ -39,7 +39,27 @@ console.log('[SCHEMA-LOAD] helpdesk.documents.schema.ts', {
 });
 // ──────────────────────────────────────────────────────────────────────────────
 
-const documentStatusEnum = z.enum(['draft', 'pending_approval', 'approved', 'rejected', 'returned']);
+// ─── UPDATED: Document Status Enum with 'ready_to_send' ──────────────────────
+// 
+// Workflow states:
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ Status              │ Description                                         │
+// ├─────────────────────────────────────────────────────────────────────────────┤
+// │ draft               │ Document is being created/edited (requester only)    │
+// │ pending_approval    │ Document is in the super admin's queue              │
+// │ ready_to_send       │ Super admin has approved/rejected, ready to send    │
+// │ approved            │ Fully approved and sent back to requester           │
+// │ rejected            │ Fully rejected and sent back to requester           │
+// │ returned            │ Returned for changes and sent back to requester     │
+// └─────────────────────────────────────────────────────────────────────────────┘
+const documentStatusEnum = z.enum([
+    'draft',
+    'pending_approval',
+    'ready_to_send',
+    'approved',
+    'rejected',
+    'returned'
+]);
 
 // ─── Stamp Type Enum ─────────────────────────────────────────────────────────
 
@@ -55,7 +75,18 @@ const utilitySyncStatusEnum = z.enum([
 ]);
 
 // ─── Two-Step Approval Enums ─────────────────────────────────────────────────
-
+//
+// Internal Approval Status (Super Admin only):
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ Status                    │ Description                                    │
+// ├─────────────────────────────────────────────────────────────────────────────┤
+// │ pending                   │ Awaiting super admin review                    │
+// │ previewed                 │ Super admin has previewed the document         │
+// │ approved_internal         │ Super admin approved (pending send back)      │
+// │ rejected_internal         │ Super admin rejected (pending send back)      │
+// │ changes_requested_internal│ Super admin wants changes (pending send back) │
+// │ changes_ready             │ Requester made changes, ready for re-review   │
+// └─────────────────────────────────────────────────────────────────────────────┘
 const internalApprovalStatusEnum = z.enum([
     'pending',
     'previewed',
@@ -65,6 +96,16 @@ const internalApprovalStatusEnum = z.enum([
     'changes_ready'
 ]);
 
+// Requester Visible Status (what the requester sees):
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ Status              │ Description                                         │
+// ├─────────────────────────────────────────────────────────────────────────────┤
+// │ pending_approval    │ Requester sees: Waiting for approval                │
+// │ approved            │ Requester sees: Document approved ✓                 │
+// │ rejected            │ Requester sees: Document rejected ✗                 │
+// │ changes_requested   │ Requester sees: Changes requested                   │
+// │ in_revision         │ Requester sees: Being revised                       │
+// └─────────────────────────────────────────────────────────────────────────────┘
 const requesterVisibleStatusEnum = z.enum([
     'pending_approval',
     'approved',
@@ -163,16 +204,16 @@ export const uploadHelpdeskDocumentSchema = z.object({
         ref: z.string().min(1, 'Reference is required').max(100),
         subject: z.string().min(1, 'Subject is required').max(200),
         entity_type: z.string().pipe(documentEntityEnum),
-        entity_id: entityIdSchema, // ✅ Uses the custom validator
+        entity_id: entityIdSchema,
         format: z.string().pipe(documentFormatEnum),
         status: z.string().default('draft').pipe(documentStatusEnum).optional(),
         request_type: z.string().pipe(requestTypeEnum).optional().nullable(),
         judge_name: z.string().max(100).optional().nullable(),
         
-        // ─── NEW: Stamp type on initial creation ──────────────────────────────────
+        // Stamp type on initial creation
         stamp_type: stampTypeEnum.optional().nullable(),
         
-        // ─── NEW: Utility sync status on creation ──────────────────────────────────
+        // Utility sync status on creation
         utility_sync_status: utilitySyncStatusEnum.optional().default('not_applicable'),
         
         // ─── Aide Request Fields ──────────────────────────────────────────────
@@ -224,7 +265,6 @@ export const uploadHelpdeskDocumentSchema = z.object({
 
 /**
  * File validation schema for use with multer
- * This can be used to validate the file after multer processes it
  */
 export const fileValidationSchema = z.object({
     file: z.object({
@@ -235,7 +275,7 @@ export const fileValidationSchema = z.object({
             (mime) => ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'].includes(mime),
             { message: 'File must be PDF, DOCX, or XLSX' }
         ),
-        size: z.number().max(10 * 1024 * 1024, 'File size must be less than 10MB'), // 10MB limit
+        size: z.number().max(10 * 1024 * 1024, 'File size must be less than 10MB'),
         buffer: z.instanceof(Buffer).optional(),
         path: z.string().optional(),
     }),
@@ -245,7 +285,7 @@ export const fileValidationSchema = z.object({
 export const listHelpdeskDocumentsSchema = z.object({
     query: z.object({
         entity_type: documentEntityEnum.optional(),
-        entity_id: z.string().optional(), // ✅ Allow any string for filtering
+        entity_id: z.string().optional(),
         format: documentFormatEnum.optional(),
         status: documentStatusEnum.optional(),
         search: z.string().optional(),
@@ -263,11 +303,21 @@ export const listHelpdeskDocumentsSchema = z.object({
         internal_approval_status: internalApprovalStatusEnum.optional(),
         requester_status: requesterVisibleStatusEnum.optional(),
         is_sent_back_to_requester: z.string().transform((val) => val === 'true').optional(),
+        /**
+         * For super admin dashboard - returns documents needing review:
+         * - internal_approval_status IN ('pending', 'previewed')
+         */
         pending_internal_approval: z.string().transform((val) => val === 'true').optional(),
+        /**
+         * For super admin dashboard - returns documents ready to send back:
+         * - is_internal_approval_complete = true
+         * - is_sent_back_to_requester = false
+         * - status = 'pending_approval'
+         */
         ready_to_send_back: z.string().transform((val) => val === 'true').optional(),
         my_requester_documents: z.string().transform((val) => val === 'true').optional(),
         
-        // ─── NEW: Utility Sync Filters ──────────────────────────────────────────
+        // ─── Utility Sync Filters ──────────────────────────────────────────
         utility_sync_status: utilitySyncStatusEnum.optional(),
         needs_utility_sync: z.string().transform((val) => val === 'true').optional(),
         
@@ -295,7 +345,7 @@ export const listHelpdeskDocumentsSchema = z.object({
         rank: z.string().optional(),
         reporting_date: dateStringSchema.optional(),
 
-        // ─── NEW: Stamp Filters ──────────────────────────────────────────────────
+        // ─── Stamp Filters ──────────────────────────────────────────────────
         is_stamped: z.string().transform((val) => val === 'true').optional(),
         stamp_type: stampTypeEnum.optional(),
     }).strict(),
@@ -325,7 +375,7 @@ export const updateDocumentFileSchema = z.object({
         returned_by: z.string().uuid().optional(),
         returned_by_name: z.string().max(100).optional(),
         
-        // ─── NEW: Utility sync fields ────────────────────────────────────────────
+        // ─── Utility sync fields ────────────────────────────────────────────
         sync_utilities: z.preprocess(
             (val) => {
                 if (val === 'true') return true;
@@ -403,7 +453,7 @@ export const updateDocumentFileSchema = z.object({
             z.number().optional()
         ),
         
-        // ─── NEW: Final Generated PDF fields ────────────────────────────────────
+        // ─── Final Generated PDF fields ────────────────────────────────────
         stamped_file_url: z.string().url().optional(),
         stamped_file_public_id: z.string().optional(),
         stamped_file_size: z.preprocess(
@@ -430,7 +480,6 @@ export const updateDocumentStatusSchema = z.object({
         rejection_reason: z.string().max(500).optional(),
         approved_by: z.string().uuid().optional(),
         approved_by_name: z.string().max(100).optional(),
-        // ─── NEW: Control utility sync ──────────────────────────────────────────
         sync_utilities: z.boolean().optional().default(true),
     }),
 });
@@ -464,8 +513,7 @@ export const approveDocumentSchema = z.object({
 });
 
 // ─── POST /api/helpdesk/documents/:id/reject ─────────────────────────────────
-// ⚠️ DEPRECATED: This is the old single-step rejection.
-// Use /api/helpdesk/documents/:id/internal/reject for two-step workflow
+// ⚠️ DEPRECATED: Use /api/helpdesk/documents/:id/internal/reject
 export const rejectDocumentSchema = z.object({
     params: z.object({
         id: z.string().uuid('Document ID must be a valid UUID'),
@@ -479,8 +527,7 @@ export const rejectDocumentSchema = z.object({
 });
 
 // ─── POST /api/helpdesk/documents/:id/return ─────────────────────────────────
-// ⚠️ DEPRECATED: This is the old single-step return.
-// Use /api/helpdesk/documents/:id/internal/return for two-step workflow
+// ⚠️ DEPRECATED: Use /api/helpdesk/documents/:id/internal/return
 export const returnDocumentSchema = z.object({
     params: z.object({
         id: z.string().uuid('Document ID must be a valid UUID'),
@@ -525,11 +572,11 @@ export const linkDocumentSchema = z.object({
     }),
     body: z.object({
         entity_type: documentEntityEnum,
-        entity_id: z.string().optional(), // ✅ Allow any string
+        entity_id: z.string().optional(),
         request_type: requestTypeEnum.optional(),
         judge_name: z.string().max(100).optional(),
         
-        // ─── NEW: Utility sync fields ────────────────────────────────────────────
+        // ─── Utility sync fields ────────────────────────────────────────────
         sync_utilities: z.boolean().optional().default(true),
         utility_sync_status: utilitySyncStatusEnum.optional(),
         
@@ -593,13 +640,12 @@ export const documentStatsSchema = z.object({
 export const getDocumentsByEntitySchema = z.object({
     params: z.object({
         entity_type: documentEntityEnum,
-        entity_id: z.string().optional(), // ✅ Allow any string
+        entity_id: z.string().optional(),
     }),
     query: z.object({
         status: documentStatusEnum.optional(),
         limit: z.string().regex(/^\d+$/).optional().transform(Number),
         offset: z.string().regex(/^\d+$/).optional().transform(Number),
-        // ─── NEW: Utility sync filter ──────────────────────────────────────────
         utility_sync_status: utilitySyncStatusEnum.optional(),
     }).optional(),
 });
@@ -635,11 +681,10 @@ export const bulkLinkDocumentsSchema = z.object({
     body: z.object({
         document_ids: z.array(z.string().uuid()).min(1, 'At least one document ID is required'),
         entity_type: documentEntityEnum,
-        entity_id: z.string().optional(), // ✅ Allow any string
+        entity_id: z.string().optional(),
         request_type: requestTypeEnum.optional(),
         judge_name: z.string().max(100).optional(),
         
-        // ─── NEW: Utility sync fields ────────────────────────────────────────────
         sync_utilities: z.boolean().optional().default(true),
         
         // ─── Aide Request Fields ──────────────────────────────────────────────
@@ -695,7 +740,6 @@ export const bulkUpdateStatusSchema = z.object({
         document_ids: z.array(z.string().uuid()).min(1, 'At least one document ID is required'),
         status: documentStatusEnum,
         comments: z.string().max(500).optional(),
-        // ─── NEW: Control utility sync ──────────────────────────────────────────
         sync_utilities: z.boolean().optional().default(true),
     }),
 });
@@ -708,12 +752,12 @@ export const batchUploadSchema = z.object({
                 ref: z.string().min(1).max(100),
                 subject: z.string().min(1).max(200),
                 entity_type: documentEntityEnum,
-                entity_id: z.string().optional(), // ✅ Allow any string
+                entity_id: z.string().optional(),
                 format: documentFormatEnum,
                 status: documentStatusEnum.default('draft'),
                 request_type: requestTypeEnum.optional(),
                 judge_name: z.string().max(100).optional(),
-                stamp_type: stampTypeEnum.optional().nullable(), // Added to batch upload as well
+                stamp_type: stampTypeEnum.optional().nullable(),
                 utility_sync_status: utilitySyncStatusEnum.optional().default('not_applicable'),
                 
                 // ─── Aide Request Fields ──────────────────────────────────────────────
@@ -779,14 +823,22 @@ export const internalPreviewDocumentSchema = z.object({
         previewed_by: z.string().uuid().optional(),
         previewed_by_name: z.string().max(100).optional(),
         comments: z.string().max(500).optional(),
-        ip_address: z.string().ipv4().optional(), // ✅ Use .ipv4() or .ipv6()
+        ip_address: z.string().ipv4().optional(),
         user_agent: z.string().optional(),
     }),
 });
 
 /**
  * POST /api/helpdesk/documents/:id/internal/approve
- * Super admin approves internally with signature AND stamp embedding (requester doesn't see this yet)
+ * Super admin approves internally with signature AND stamp embedding
+ * 
+ * ─── STATE TRANSITION ──────────────────────────────────────────────────────────
+ * Before: status = 'pending_approval', internal_approval_status = 'pending'|'previewed'|'changes_ready'
+ * After:  status = 'pending_approval' (stays), internal_approval_status = 'approved_internal'
+ *         
+ * The requester still sees 'pending_approval' until the super admin clicks
+ * "Send Back to Requester"
+ * ──────────────────────────────────────────────────────────────────────────────
  */
 export const internalApproveDocumentSchema = z.object({
     params: z.object({
@@ -798,8 +850,9 @@ export const internalApproveDocumentSchema = z.object({
         comments: z.string().max(500).optional(),
         generate_e_stamp: z.boolean().default(true),
         
-        // ─── NEW: Control utility sync ────────────────────────────────────────────
-        sync_utilities: z.boolean().optional().default(true),
+        // ─── Control utility sync ────────────────────────────────────────────
+        // Make it optional - the service will decide based on document type
+        sync_utilities: z.boolean().optional(),
         
         // ─── Signature position ──────────────────────────────────────────────────
         signature_position_x: z.number().optional(),
@@ -807,18 +860,26 @@ export const internalApproveDocumentSchema = z.object({
         signature_position_width: z.number().optional(),
         signature_position_height: z.number().optional(),
         
-        // ─── NEW: Stamp position (Applies the stamp during internal approval) ───
+        // ─── Stamp position ──────────────────────────────────────────────────
         stamp_position_x: z.number().optional(),
         stamp_position_y: z.number().optional(),
         stamp_position_width: z.number().optional(),
         stamp_position_height: z.number().optional(),
-        stamp_type: stampTypeEnum.optional(), // Override stamp type during approval
+        stamp_type: stampTypeEnum.optional(),
     }),
 });
 
 /**
  * POST /api/helpdesk/documents/:id/internal/reject
- * Super admin rejects internally (requester doesn't see this yet)
+ * Super admin rejects internally
+ * 
+ * ─── STATE TRANSITION ──────────────────────────────────────────────────────────
+ * Before: status = 'pending_approval', internal_approval_status = 'pending'|'previewed'|'changes_ready'
+ * After:  status = 'pending_approval' (stays), internal_approval_status = 'rejected_internal'
+ *         
+ * The requester still sees 'pending_approval' until the super admin clicks
+ * "Send Back to Requester"
+ * ──────────────────────────────────────────────────────────────────────────────
  */
 export const internalRejectDocumentSchema = z.object({
     params: z.object({
@@ -829,14 +890,21 @@ export const internalRejectDocumentSchema = z.object({
         rejected_by: z.string().uuid().optional(),
         rejected_by_name: z.string().max(100).optional(),
         comments: z.string().max(500).optional(),
-        // ─── NEW: Control utility sync ────────────────────────────────────────────
         sync_utilities: z.boolean().optional().default(true),
     }),
 });
 
 /**
  * POST /api/helpdesk/documents/:id/internal/request-changes
- * Super admin requests changes internally (requester doesn't see this yet)
+ * Super admin requests changes internally
+ * 
+ * ─── STATE TRANSITION ──────────────────────────────────────────────────────────
+ * Before: status = 'pending_approval', internal_approval_status = 'pending'|'previewed'|'changes_ready'
+ * After:  status = 'pending_approval' (stays), internal_approval_status = 'changes_requested_internal'
+ *         
+ * The requester still sees 'pending_approval' until the super admin clicks
+ * "Send Back to Requester"
+ * ──────────────────────────────────────────────────────────────────────────────
  */
 export const internalRequestChangesSchema = z.object({
     params: z.object({
@@ -847,14 +915,19 @@ export const internalRequestChangesSchema = z.object({
         requested_by: z.string().uuid().optional(),
         requested_by_name: z.string().max(100).optional(),
         comments: z.string().max(500).optional(),
-        // ─── NEW: Control utility sync ────────────────────────────────────────────
-        sync_utilities: z.boolean().optional().default(false), // Don't sync on changes requested
+        sync_utilities: z.boolean().optional().default(false),
     }),
 });
 
 /**
  * POST /api/helpdesk/documents/:id/internal/cancel
  * Super admin cancels internal approval decision (resets to pending)
+ * 
+ * ─── STATE TRANSITION ──────────────────────────────────────────────────────────
+ * Before: status = 'pending_approval', internal_approval_status = any internal status
+ * After:  status = 'pending_approval' (stays), internal_approval_status = 'pending'
+ *         is_internal_approval_complete = false
+ * ──────────────────────────────────────────────────────────────────────────────
  */
 export const internalCancelApprovalSchema = z.object({
     params: z.object({
@@ -864,27 +937,38 @@ export const internalCancelApprovalSchema = z.object({
         cancelled_by: z.string().uuid().optional(),
         cancelled_by_name: z.string().max(100).optional(),
         reason: z.string().max(500).optional(),
-        // ─── NEW: Control utility sync ────────────────────────────────────────────
         reset_utility_sync: z.boolean().optional().default(true),
     }),
 });
 
 /**
  * POST /api/helpdesk/documents/:id/send-back
- * Super admin sends document back to requester (this is when requester sees the status)
+ * Super admin sends document back to requester
+ * 
+ * ─── STATE TRANSITION ──────────────────────────────────────────────────────────
+ * Before: status = 'pending_approval' (ready_to_send in the UI)
+ *         internal_approval_status = 'approved_internal'|'rejected_internal'|'changes_requested_internal'
+ *         is_internal_approval_complete = true
+ *         is_sent_back_to_requester = false
+ * 
+ * After:  status = 'approved'|'rejected'|'returned'
+ *         requester_status = 'approved'|'rejected'|'changes_requested'
+ *         is_sent_back_to_requester = true
+ *         
+ * The document is now removed from the super admin's queue
+ * ──────────────────────────────────────────────────────────────────────────────
  */
 export const sendBackToRequesterSchema = z.object({
     params: z.object({
         id: z.string().uuid('Document ID must be a valid UUID'),
     }),
     body: z.object({
-        final_status: requesterVisibleStatusEnum, // 'approved' | 'rejected' | 'changes_requested'
+        final_status: requesterVisibleStatusEnum,
         sent_by: z.string().uuid().optional(),
         sent_by_name: z.string().max(100).optional(),
         comments: z.string().max(500).optional(),
         requester_message: z.string().max(500).optional(),
         notify_requester: z.boolean().default(true),
-        // ─── NEW: Control utility sync ────────────────────────────────────────────
         sync_utilities: z.boolean().optional().default(true),
     }),
 });
@@ -892,6 +976,19 @@ export const sendBackToRequesterSchema = z.object({
 /**
  * POST /api/helpdesk/documents/:id/resubmit
  * Requester resubmits document after changes
+ * 
+ * ─── STATE TRANSITION ──────────────────────────────────────────────────────────
+ * Before: status = 'returned'|'rejected'
+ *         requester_status = 'changes_requested'|'rejected'
+ *         is_sent_back_to_requester = true
+ * 
+ * After:  status = 'pending_approval'
+ *         internal_approval_status = 'changes_ready'
+ *         requester_status = 'pending_approval'
+ *         is_sent_back_to_requester = false
+ * 
+ * The document reappears in the super admin's queue as "CHANGES" ready for re-review
+ * ──────────────────────────────────────────────────────────────────────────────
  */
 export const resubmitDocumentSchema = z.object({
     params: z.object({
@@ -902,7 +999,6 @@ export const resubmitDocumentSchema = z.object({
         submitted_by_name: z.string().max(100).optional(),
         comments: z.string().max(500).optional(),
         file_update: z.boolean().default(false),
-        // ─── NEW: Reset utility sync on resubmit ─────────────────────────────────
         reset_utility_sync: z.boolean().optional().default(true),
     }),
 });
@@ -910,6 +1006,10 @@ export const resubmitDocumentSchema = z.object({
 /**
  * GET /api/helpdesk/documents/pending-internal
  * Super admin dashboard - get pending internal approvals
+ * 
+ * Returns documents that need super admin attention:
+ * 1. Documents pending review (internal_approval_status IN ('pending', 'previewed', 'changes_ready'))
+ * 2. Documents ready to send back (is_internal_approval_complete = true AND is_sent_back_to_requester = false)
  */
 export const pendingInternalApprovalsSchema = z.object({
     query: z.object({
@@ -921,7 +1021,6 @@ export const pendingInternalApprovalsSchema = z.object({
         search: z.string().optional(),
         limit: z.string().regex(/^\d+$/).optional().transform(Number),
         offset: z.string().regex(/^\d+$/).optional().transform(Number),
-        // ─── NEW: Utility sync filter ────────────────────────────────────────────
         needs_utility_sync: z.string().transform((val) => val === 'true').optional(),
     }),
 });
@@ -937,7 +1036,6 @@ export const requesterDashboardSchema = z.object({
         search: z.string().optional(),
         limit: z.string().regex(/^\d+$/).optional().transform(Number),
         offset: z.string().regex(/^\d+$/).optional().transform(Number),
-        // ─── NEW: Utility sync filter ────────────────────────────────────────────
         utility_sync_status: utilitySyncStatusEnum.optional(),
     }),
 });
@@ -1012,14 +1110,14 @@ export type ResubmitDocumentBody = z.infer<typeof resubmitDocumentSchema>['body'
 export type PendingInternalApprovalsQuery = z.infer<typeof pendingInternalApprovalsSchema>['query'];
 export type RequesterDashboardQuery = z.infer<typeof requesterDashboardSchema>['query'];
 
-// ─── NEW: Utility Sync Types ──────────────────────────────────────────────────
+// Utility Sync Types
 export type UtilitySyncStatus = z.infer<typeof utilitySyncStatusEnum>;
 export type SyncUtilitiesBody = z.infer<typeof syncUtilitiesSchema>['body'];
 
-// ─── NEW: Stamp Type ──────────────────────────────────────────────────────────
+// Stamp Type
 export type StampType = z.infer<typeof stampTypeEnum>;
 
-// ─── Conference Types ─────────────────────────────────────────────────────────
+// Conference Types
 export type ConferenceStatus = z.infer<typeof conferenceStatusEnum>;
 export type ConferenceType = z.infer<typeof conferenceTypeEnum>;
 

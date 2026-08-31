@@ -22,7 +22,16 @@ export type DocumentEntityType =
     | 'sentry'           // Sentry request documents
     | 'conference';      // Conference request documents
 
-export type DocumentStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected' | 'returned';
+// ─── Document Status ──────────────────────────────────────────────────────────
+// These are the main statuses that determine where a document appears
+
+export type DocumentStatus = 
+    | 'draft'                 // Document is being created/edited (requester only)
+    | 'pending_approval'      // Document is in the super admin's queue (waiting for action)
+    | 'ready_to_send'         // Super admin has approved/rejected, waiting to send back to requester
+    | 'approved'              // Document is fully approved and sent back to requester
+    | 'rejected'              // Document is fully rejected and sent back to requester
+    | 'returned';             // Document was returned for changes and sent back to requester
 
 export type EStampStatus = 'pending' | 'stamped' | 'failed';
 
@@ -48,26 +57,33 @@ export type ConferenceType =
 
 export type StampType = 'approved' | 'received' | 'official';
 
+// ─── Two-Step Approval Status Types ──────────────────────────────────────────
+
 /**
- * Internal approval status (only visible to super admin)
- * - 'pending': Awaiting super admin action
- * - 'previewed': Super admin has previewed the document
- * - 'approved_internal': Super admin approved internally (not yet sent to requester)
- * - 'rejected_internal': Super admin rejected internally (not yet sent to requester)
- * - 'changes_requested_internal': Super admin requested changes internally (not yet sent to requester)
- * - 'changes_ready': Requester has made changes, ready for re-review
+ * Internal approval status - ONLY visible to super admin
+ * This tracks the super admin's decision before the requester is notified
+ * 
+ * Workflow:
+ * 1. Requester submits → internal_approval_status = 'pending'
+ * 2. Super admin previews → internal_approval_status = 'previewed'
+ * 3. Super admin makes decision → 'approved_internal' | 'rejected_internal' | 'changes_requested_internal'
+ * 4. Requester resubmits after changes → internal_approval_status = 'changes_ready'
+ * 5. Super admin cancels decision → internal_approval_status = 'pending'
  */
 export type InternalApprovalStatus = 
     | 'pending'                    // Awaiting super admin review
     | 'previewed'                  // Super admin has previewed the document
-    | 'approved_internal'          // Super admin approved (waiting to send back)
-    | 'rejected_internal'          // Super admin rejected (waiting to send back)
-    | 'changes_requested_internal' // Super admin wants changes (waiting to send back)
-    | 'changes_ready';             // Changes have been made, ready for re-review
+    | 'approved_internal'          // Super admin approved (ready to send back to requester)
+    | 'rejected_internal'          // Super admin rejected (ready to send back to requester)
+    | 'changes_requested_internal' // Super admin wants changes (ready to send back to requester)
+    | 'changes_ready';             // Requester has made changes, ready for re-review
 
 /**
- * External/Requester visible status (what the requester sees)
+ * Requester visible status - what the requester sees
  * Only changes when super admin clicks "Send Back to Requester"
+ * 
+ * The requester's status is independent of the internal status until
+ * the super admin explicitly sends it back.
  */
 export type RequesterVisibleStatus = 
     | 'pending_approval'    // Requester sees: Waiting for approval
@@ -76,16 +92,16 @@ export type RequesterVisibleStatus =
     | 'changes_requested'   // Requester sees: Changes requested
     | 'in_revision';        // Requester sees: Being revised
 
-// ─── NEW: Utility Sync Status ─────────────────────────────────────────────────
+// ─── Utility Sync Status ─────────────────────────────────────────────────────
 
 /**
  * Tracks the sync status between a document and its associated utility items
  */
 export type UtilitySyncStatus = 
-    | 'pending'      // Document is still pending, utility items are not synced
-    | 'synced'       // Utility items have been synced with document status
-    | 'failed'       // Sync attempt failed
-    | 'not_applicable'; // Not a utility document
+    | 'pending'          // Document is still pending, utility items are not synced
+    | 'synced'           // Utility items have been synced with document status
+    | 'failed'           // Sync attempt failed
+    | 'not_applicable';  // Not a utility document
 
 /**
  * Represents a utility item that has been synced with a document
@@ -101,6 +117,8 @@ export interface SyncedUtilityItem {
     new_status: string;
     synced_at: string;
 }
+
+// ─── Main Document Interface ──────────────────────────────────────────────────
 
 export interface HelpdeskDocument {
     id: string;
@@ -150,8 +168,8 @@ export interface HelpdeskDocument {
     
     // External/Requester visible status
     requester_status: RequesterVisibleStatus;
-    requester_visible_at?: string; // When status became visible to requester
-    requester_visible_by?: string; // Who sent it back to requester
+    requester_visible_at?: string;
+    requester_visible_by?: string;
     requester_visible_by_name?: string;
     
     // Resubmit tracking
@@ -159,27 +177,26 @@ export interface HelpdeskDocument {
     last_resubmitted_at?: string;
     last_resubmitted_by?: string;
     
-    // Flags
-    is_internal_approval_complete: boolean; // Super admin has made a decision internally
-    is_sent_back_to_requester: boolean; // Document has been sent back to requester
-    is_requester_notified: boolean; // Requester has been notified
+    // ─── Flags that determine document state ──────────────────────────────────
+    /**
+     * Whether the super admin has made an internal decision
+     * True when internal_approval_status is 'approved_internal', 'rejected_internal', or 'changes_requested_internal'
+     */
+    is_internal_approval_complete: boolean;
+    
+    /**
+     * Whether the document has been sent back to the requester
+     * True only after super admin clicks "Send Back to Requester"
+     * When true, the document is removed from the super admin's queue
+     */
+    is_sent_back_to_requester: boolean;
+    
+    is_requester_notified: boolean;
 
-    // ─── NEW: Utility Sync Fields ──────────────────────────────────────────────
-    /**
-     * Whether utility items have been synced with this document
-     */
+    // ─── Utility Sync Fields ──────────────────────────────────────────────────
     utility_sync_status: UtilitySyncStatus;
-    /**
-     * When the utility items were last synced
-     */
     utility_synced_at?: string;
-    /**
-     * Who performed the sync
-     */
     utility_synced_by?: string;
-    /**
-     * Detailed sync results
-     */
     utility_sync_result?: {
         total_items: number;
         updated_items: SyncedUtilityItem[];
@@ -187,30 +204,30 @@ export interface HelpdeskDocument {
     };
 
     // ─── Signature Fields ──────────────────────────────────────────────────────
-    is_signed: boolean;                    // Whether the document has been signed
-    signed_by?: string;                    // ID of the user who signed
-    signed_by_name?: string;               // Name of the user who signed
-    signed_at?: string;                    // When the document was signed
-    signature_position_x?: number | null;  // X position of signature on PDF
-    signature_position_y?: number | null;  // Y position of signature on PDF
-    signature_position_width?: number | null;  // Width of signature on PDF
-    signature_position_height?: number | null; // Height of signature on PDF
+    is_signed: boolean;
+    signed_by?: string;
+    signed_by_name?: string;
+    signed_at?: string;
+    signature_position_x?: number | null;
+    signature_position_y?: number | null;
+    signature_position_width?: number | null;
+    signature_position_height?: number | null;
 
-    // ─── NEW: Stamp Fields ──────────────────────────────────────────────────────
-    is_stamped: boolean;                   // Whether the document has been officially stamped
-    stamped_by?: string;                   // ID of the user who applied the stamp
-    stamped_by_name?: string;              // Name of the user who applied the stamp
-    stamped_at?: string;                   // When the stamp was applied
-    stamp_type?: StampType;                // Type of stamp applied (approved, received, official)
-    stamp_position_x?: number | null;      // X position of stamp on PDF
-    stamp_position_y?: number | null;      // Y position of stamp on PDF
-    stamp_position_width?: number | null;  // Width of stamp on PDF
-    stamp_position_height?: number | null; // Height of stamp on PDF
+    // ─── Stamp Fields ──────────────────────────────────────────────────────
+    is_stamped: boolean;
+    stamped_by?: string;
+    stamped_by_name?: string;
+    stamped_at?: string;
+    stamp_type?: StampType;
+    stamp_position_x?: number | null;
+    stamp_position_y?: number | null;
+    stamp_position_width?: number | null;
+    stamp_position_height?: number | null;
 
-    // ─── NEW: Final Generated PDF Fields ───────────────────────────────────────
-    stamped_file_url?: string | null;      // The URL to the fully generated PDF containing both the signature and stamp
-    stamped_file_public_id?: string | null;// Cloud public ID for the final generated PDF
-    stamped_file_size?: number | null;     // Size of the final generated PDF
+    // ─── Final Generated PDF Fields ───────────────────────────────────────────
+    stamped_file_url?: string | null;
+    stamped_file_public_id?: string | null;
+    stamped_file_size?: number | null;
 
     // ─── Aide Request Fields ──────────────────────────────────────────────────
     officer_rank?: string | null;
@@ -239,10 +256,7 @@ export interface HelpdeskDocument {
     rank?: string | null;
     reporting_date?: string | null;
 
-    // ─── NEW: Memo Reference ────────────────────────────────────────────────────
-    /**
-     * Reference to the consolidated memo if this is a utility document
-     */
+    // ─── Memo Reference ────────────────────────────────────────────────────────
     memo_reference?: {
         memo_id: string;
         memo_type: 'all' | 'fuel';
@@ -250,6 +264,8 @@ export interface HelpdeskDocument {
         total_amount: number;
     };
 }
+
+// ─── Approval History ──────────────────────────────────────────────────────
 
 export interface ApprovalHistoryEntry {
     id: string;
@@ -261,10 +277,8 @@ export interface ApprovalHistoryEntry {
     to_user_name?: string;
     comments?: string;
     created_at: string;
-    // For two-step workflow
-    internal_action?: boolean; // Whether this was an internal action (super admin only)
-    requester_visible?: boolean; // Whether this action is visible to requester
-    // ─── NEW: Utility sync metadata ──────────────────────────────────────────────
+    internal_action?: boolean;      // Whether this was an internal action (super admin only)
+    requester_visible?: boolean;    // Whether this action is visible to requester
     utility_sync_metadata?: {
         total_items: number;
         updated_count: number;
@@ -272,16 +286,20 @@ export interface ApprovalHistoryEntry {
     };
 }
 
+// ─── Comments ──────────────────────────────────────────────────────────────
+
 export interface Comment {
     id: string;
     document_id: string;
     user_id: string;
     user_name: string;
     comment: string;
-    is_internal: boolean; // Internal comments (super admin only)
+    is_internal: boolean;
     is_active: boolean;
     created_at: string;
 }
+
+// ─── Input Types ────────────────────────────────────────────────────────────
 
 export interface CreateHelpdeskDocumentInput {
     ref: string;
@@ -292,11 +310,7 @@ export interface CreateHelpdeskDocumentInput {
     status?: DocumentStatus;
     request_type?: string | null;
     judge_name?: string | null;
-    
-    // ─── NEW: Stamp field for initial creation ────────────────────────────────
-    stamp_type?: StampType | null; // Pre-select a specific stamp type if needed at creation
-
-    // ─── NEW: Utility memo reference ────────────────────────────────────────────
+    stamp_type?: StampType | null;
     memo_reference?: {
         memo_id: string;
         memo_type: 'all' | 'fuel';
@@ -304,7 +318,7 @@ export interface CreateHelpdeskDocumentInput {
         total_amount: number;
     };
 
-    // ─── Aide Request Fields ──────────────────────────────────────────────
+    // Aide Request Fields
     officer_rank?: string | null;
     officer_name?: string | null;
     employment_number?: string | null;
@@ -313,11 +327,11 @@ export interface CreateHelpdeskDocumentInput {
     proposed_assignment?: string | null;
     aide_status?: string | null;
     
-    // ─── Sentry Request Fields ──────────────────────────────────────────────
+    // Sentry Request Fields
     residence_location?: string | null;
     sentry_status?: string | null;
     
-    // ─── Conference Request Fields ──────────────────────────────────────────
+    // Conference Request Fields
     conference_type?: ConferenceType | null;
     start_date?: string | null;
     end_date?: string | null;
@@ -327,7 +341,7 @@ export interface CreateHelpdeskDocumentInput {
     budget_estimate?: number | null;
     conference_status?: ConferenceStatus | null;
     
-    // ─── Legacy fields ──────────────────────────────────────────────────────
+    // Legacy fields
     rank?: string | null;
     reporting_date?: string | null;
 }
@@ -340,13 +354,8 @@ export interface UpdateDocumentStatusInput {
     e_stamp_public_id?: string;
     approved_by?: string;
     approved_by_name?: string;
-    // ─── NEW: Control utility sync ──────────────────────────────────────────────
-    sync_utilities?: boolean; // Whether to sync utility items on status change
+    sync_utilities?: boolean;
 }
-
-// src/features/helpdesk/helpdesk.documents.types.ts
-
-// Find the UpdateDocumentFileInput interface and add these two missing properties:
 
 export interface UpdateDocumentFileInput {
     status?: DocumentStatus;
@@ -360,17 +369,17 @@ export interface UpdateDocumentFileInput {
     returned_by?: string;
     returned_by_name?: string;
     
-    // ─── NEW: Utility sync fields ────────────────────────────────────────────
-    sync_utilities?: boolean;          // Whether to sync utility items
-    utility_sync_status?: UtilitySyncStatus; // Sync status to set
+    // Utility sync fields
+    sync_utilities?: boolean;
+    utility_sync_status?: UtilitySyncStatus;
     
-    // ─── Signature fields ──────────────────────────────────────────────────────
+    // Signature fields
     is_signed?: boolean;
     signed_by?: string;
     signed_by_name?: string;
     signed_at?: string;
     
-    // ─── NEW: Stamp fields ────────────────────────────────────────────────────
+    // Stamp fields
     is_stamped?: boolean;
     stamped_by?: string;
     stamped_by_name?: string;
@@ -381,11 +390,91 @@ export interface UpdateDocumentFileInput {
     stamp_position_width?: number;
     stamp_position_height?: number;
     
-    // ─── NEW: Final generated PDF fields ──────────────────────────────────────
+    // Final generated PDF fields
     stamped_file_url?: string;
     stamped_file_public_id?: string;
     stamped_file_size?: number;
 }
+
+// ─── Two-Step Approval Request Types ─────────────────────────────────────────
+
+/**
+ * Request to perform internal approval (super admin action)
+ * This doesn't change what requester sees yet
+ */
+export interface InternalApprovalRequest {
+    document_id: string;
+    action: 'approve' | 'reject' | 'request_changes';
+    comments?: string;
+    changes_requested?: string[];
+    rejection_reason?: string;
+    approved_by: string;
+    approved_by_name?: string;
+    generate_e_stamp?: boolean;
+    signature_position_x?: number;
+    signature_position_y?: number;
+    signature_position_width?: number;
+    signature_position_height?: number;
+    stamp_position_x?: number;
+    stamp_position_y?: number;
+    stamp_position_width?: number;
+    stamp_position_height?: number;
+    stamp_type?: StampType;
+    sync_utilities?: boolean;
+}
+
+/**
+ * Request to preview document (super admin action)
+ */
+export interface InternalPreviewRequest {
+    document_id: string;
+    previewed_by: string;
+    previewed_by_name?: string;
+    comments?: string;
+    ip_address?: string;
+    user_agent?: string;
+}
+
+/**
+ * Request to send document back to requester (super admin action)
+ * This is when the requester finally sees the status change
+ */
+export interface SendBackToRequesterRequest {
+    document_id: string;
+    sent_by: string;
+    sent_by_name?: string;
+    comments?: string;
+    notify_requester?: boolean;
+    final_status: 'approved' | 'rejected' | 'changes_requested';
+    requester_message?: string;
+    sync_utilities?: boolean;
+}
+
+/**
+ * Request to resubmit after changes (requester action)
+ */
+export interface ResubmitAfterChangesRequest {
+    document_id: string;
+    submitted_by: string;
+    submitted_by_name?: string;
+    comments?: string;
+    file_update?: boolean;
+    file?: Express.Multer.File;
+    reset_utility_sync?: boolean;
+}
+
+/**
+ * Request to cancel internal approval (super admin action)
+ * Resets the document back to pending for re-review
+ */
+export interface CancelInternalApprovalRequest {
+    document_id: string;
+    cancelled_by: string;
+    cancelled_by_name?: string;
+    reason?: string;
+}
+
+// ─── Filters ──────────────────────────────────────────────────────────────────
 
 export interface HelpdeskDocumentFilters {
     entity_type?: DocumentEntityType;
@@ -407,13 +496,31 @@ export interface HelpdeskDocumentFilters {
     internal_approval_status?: InternalApprovalStatus;
     requester_status?: RequesterVisibleStatus;
     is_sent_back_to_requester?: boolean;
-    pending_internal_approval?: boolean; // For super admin dashboard
-    ready_to_send_back?: boolean; // Super admin has decided, ready to send back
-    my_requester_documents?: boolean; // For requester dashboard
     
-    // ─── NEW: Utility Sync Filters ────────────────────────────────────────────
+    /**
+     * For super admin dashboard - returns documents needing review:
+     * - internal_approval_status IN ('pending', 'previewed')
+     */
+    pending_internal_approval?: boolean;
+    
+    /**
+     * For super admin dashboard - returns documents ready to send back:
+     * - is_internal_approval_complete = true
+     * - is_sent_back_to_requester = false
+     * - status = 'pending_approval'
+     */
+    ready_to_send_back?: boolean;
+    
+    /**
+     * For requester dashboard - returns documents visible to requester:
+     * - is_sent_back_to_requester = true
+     * - OR uploaded_by = current_user
+     */
+    my_requester_documents?: boolean;
+    
+    // ─── Utility Sync Filters ────────────────────────────────────────────
     utility_sync_status?: UtilitySyncStatus;
-    needs_utility_sync?: boolean; // Documents that haven't been synced yet
+    needs_utility_sync?: boolean;
     
     // ─── Aide Request Filters ──────────────────────────────────────────────
     officer_rank?: string;
@@ -439,99 +546,12 @@ export interface HelpdeskDocumentFilters {
     rank?: string;
     reporting_date?: string;
 
-    // ─── NEW: Stamp Filters ──────────────────────────────────────────────────
+    // ─── Stamp Filters ──────────────────────────────────────────────────
     is_stamped?: boolean;
     stamp_type?: StampType;
 }
 
-// ─── Two-Step Approval Request Types ─────────────────────────────────────────
-
-/**
- * Request to perform internal approval (super admin action)
- * This doesn't change what requester sees yet
- */
-export interface InternalApprovalRequest {
-    document_id: string;
-    action: 'approve' | 'reject' | 'request_changes';
-    comments?: string;
-    changes_requested?: string[]; // For 'request_changes' action
-    rejection_reason?: string; // For 'reject' action
-    approved_by: string;
-    approved_by_name?: string;
-    // Optional: generate e-stamp immediately on internal approval
-    generate_e_stamp?: boolean;
-    // ─── Signature position ─────────────────────────────────────────────────
-    signature_position_x?: number;
-    signature_position_y?: number;
-    signature_position_width?: number;
-    signature_position_height?: number;
-    // ─── NEW: Stamp position ──────────────────────────────────────────────────
-    stamp_position_x?: number;
-    stamp_position_y?: number;
-    stamp_position_width?: number;
-    stamp_position_height?: number;
-    stamp_type?: StampType; // Allow admin to choose/override the stamp type during approval
-    // ─── NEW: Control utility sync ────────────────────────────────────────────
-    sync_utilities?: boolean; // Whether to sync utility items on approval
-}
-
-/**
- * Request to preview document (super admin action)
- */
-export interface InternalPreviewRequest {
-    document_id: string;
-    previewed_by: string;
-    previewed_by_name?: string;
-    comments?: string;
-    ip_address?: string;
-    user_agent?: string;
-}
-
-/**
- * Request to send document back to requester (super admin action)
- * This is when the requester finally sees the status change
- */
-export interface SendBackToRequesterRequest {
-    document_id: string;
-    sent_by: string;
-    sent_by_name?: string;
-    comments?: string;
-    notify_requester?: boolean; // Send email notification to requester
-    // The status that requester will see (must match internal decision)
-    final_status: 'approved' | 'rejected' | 'changes_requested';
-    // Optional: additional message for requester
-    requester_message?: string;
-    // ─── NEW: Control utility sync ────────────────────────────────────────────
-    sync_utilities?: boolean; // Whether to sync utility items when sending back
-}
-
-/**
- * Request to resubmit after changes (requester action)
- */
-export interface ResubmitAfterChangesRequest {
-    document_id: string;
-    submitted_by: string;
-    submitted_by_name?: string;
-    comments?: string;
-    file_update?: boolean; // Whether the file was updated
-    // Optional: new file to upload
-    file?: Express.Multer.File;
-    // ─── NEW: Reset utility sync ──────────────────────────────────────────────
-    reset_utility_sync?: boolean; // Reset utility items to pending on resubmit
-}
-
-/**
- * Request to cancel internal approval (super admin action)
- * Resets the document back to pending for re-review
- */
-export interface CancelInternalApprovalRequest {
-    document_id: string;
-    cancelled_by: string;
-    cancelled_by_name?: string;
-    reason?: string;
-}
-
-// ─── Preview History Types ───────────────────────────────────────────────────
+// ─── Preview History ──────────────────────────────────────────────────────
 
 export interface DocumentPreviewHistory {
     id: string;
@@ -547,24 +567,34 @@ export interface DocumentPreviewHistory {
     created_at: string;
 }
 
-// ─── Dashboard Summary Types ─────────────────────────────────────────────────
+// ─── Dashboard Summary Types ──────────────────────────────────────────────────
 
 /**
  * Pending internal approvals summary (super admin dashboard)
+ * This helps the super admin quickly see what needs attention
  */
 export interface PendingInternalApprovalsSummary {
+    // ─── Total ───────────────────────────────────────────────────────────────
     total_pending_internal: number;
-    pending_review: number;           // Awaiting super admin review
-    previewed: number;               // Super admin previewed but not decided
-    approved_internal: number;       // Approved internally, waiting to send back
-    rejected_internal: number;       // Rejected internally, waiting to send back
-    changes_requested_internal: number; // Changes requested, waiting to send back
-    ready_to_send_back: number;      // Super admin has decided, ready to send back to requester
+    
+    // ─── Documents that need super admin action ──────────────────────────
+    pending_review: number;           // Awaiting super admin review (internal_approval_status: 'pending')
+    previewed: number;               // Super admin previewed but not decided (internal_approval_status: 'previewed')
+    changes_ready: number;           // Requester made changes, ready for re-review (internal_approval_status: 'changes_ready')
+    
+    // ─── Documents where super admin has decided but not sent back ──────
+    approved_internal: number;       // Approved internally, waiting to send back (status: 'pending_approval', internal_approval_status: 'approved_internal')
+    rejected_internal: number;       // Rejected internally, waiting to send back (status: 'pending_approval', internal_approval_status: 'rejected_internal')
+    changes_requested_internal: number; // Changes requested, waiting to send back (status: 'pending_approval', internal_approval_status: 'changes_requested_internal')
+    
+    // ─── Computed field ────────────────────────────────────────────────────
+    ready_to_send_back: number;      // All documents where is_internal_approval_complete = true AND is_sent_back_to_requester = false
+    
+    // ─── Breakdown ──────────────────────────────────────────────────────────
     by_entity_type: Record<DocumentEntityType, number>;
-    urgent_pending: number;
-    oldest_pending_days: number;
+    urgent_pending: number;          // Documents pending > 2 days
+    oldest_pending_days: number;     // Age of oldest pending document
     average_review_time_hours?: number;
-    // ─── NEW: Utility sync stats ──────────────────────────────────────────────
     pending_utility_sync: number;    // Documents waiting for utility sync
 }
 
@@ -581,131 +611,40 @@ export interface RequesterDocumentView {
     comments?: string;
     entity_type: DocumentEntityType;
     entity_id?: string;
+    
     // Only show these if status is 'approved' or 'rejected'
     approved_rejected_at?: string;
     approved_rejected_by?: string;
     approved_rejected_by_name?: string;
+    
     // Only show if status is 'changes_requested'
     changes_requested?: string[];
+    
     // Only show if status is 'rejected'
     rejection_reason?: string;
+    
     // Show if resubmit is allowed
     can_resubmit: boolean;
-    // ─── Signature info ──────────────────────────────────────────────────────
+    
+    // Signature info
     is_signed: boolean;
     signed_by_name?: string;
     signed_at?: string;
-    // ─── NEW: Stamp info ──────────────────────────────────────────────────────
+    
+    // Stamp info
     is_stamped: boolean;
     stamped_by_name?: string;
     stamped_at?: string;
     stamp_type?: StampType;
-    // ─── NEW: Final file info ──────────────────────────────────────────────────
-    stamped_file_url?: string | null; // Requester will download/view this if approved
-    // ─── NEW: Utility sync status ──────────────────────────────────────────────
+    
+    // Final file info
+    stamped_file_url?: string | null;
+    
+    // Utility sync status
     utility_sync_status: UtilitySyncStatus;
 }
 
-// ─── Notification Types ──────────────────────────────────────────────────────
-
-export interface SuperAdminNotification {
-    type: 'new_document_submitted' | 'document_previewed' | 'document_internally_approved' | 'document_sent_back' | 'utility_sync_completed';
-    document_id: string;
-    document_ref: string;
-    document_subject: string;
-    submitted_by?: string;
-    submitted_by_name?: string;
-    action_by?: string;
-    action_by_name?: string;
-    internal_status: InternalApprovalStatus;
-    requester_status?: RequesterVisibleStatus;
-    action_url: string;
-    dashboard_url: string;
-    comments?: string;
-    changes_requested?: string[];
-    rejection_reason?: string;
-    priority: 'low' | 'normal' | 'high' | 'urgent';
-    timestamp: string;
-    // ─── NEW: Utility sync info ────────────────────────────────────────────────
-    utility_sync_info?: {
-        total_items: number;
-        updated_items: number;
-        failed_items: number;
-    };
-}
-
-export interface RequesterNotification {
-    type: 'document_approved' | 'document_rejected' | 'document_changes_requested' | 'document_status_updated' | 'utility_items_updated';
-    document_id: string;
-    document_ref: string;
-    document_subject: string;
-    status: RequesterVisibleStatus;
-    comments?: string;
-    changes_requested?: string[];
-    rejection_reason?: string;
-    action_by?: string;
-    action_by_name?: string;
-    action_url: string;
-    dashboard_url: string;
-    timestamp: string;
-}
-
-// ─── Configuration ──────────────────────────────────────────────────────────
-
-export interface TwoStepApprovalConfig {
-    enabled: boolean;
-    require_preview_before_approval: boolean;
-    allow_multiple_previews: boolean;
-    max_preview_count?: number;
-    auto_reminder_hours: number; // Hours before sending reminder to super admin
-    send_back_confirmation_required: boolean; // Require confirmation before sending back
-    notify_requester_on_send_back: boolean;
-    allow_requester_resubmit: boolean;
-    max_resubmit_count?: number;
-    super_admin_emails: string[];
-    from_email: string;
-    from_name: string;
-    daily_digest_enabled: boolean;
-    daily_digest_time: string; // e.g., "09:00"
-    urgent_threshold_hours: number; // Hours after which pending becomes urgent
-    // ─── NEW: Utility sync config ──────────────────────────────────────────────
-    auto_sync_utilities: boolean; // Whether to auto-sync utilities on approval/rejection
-}
-
-// ─── Document Summary Types ──────────────────────────────────────────────────
-
-export interface DocumentSummary {
-    total: number;
-    by_status: Record<DocumentStatus, number>;
-    by_entity_type: Record<DocumentEntityType, number>;
-    by_format: Record<DocumentFormat, number>;
-    pending_approval: number;
-    draft: number;
-    approved: number;
-    rejected: number;
-    returned: number;
-    // Two-step workflow summary
-    internal_approval_summary: {
-        pending: number;
-        previewed: number;
-        approved_internal: number;
-        rejected_internal: number;
-        changes_requested_internal: number;
-        changes_ready: number;
-    };
-    requester_status_summary: Record<RequesterVisibleStatus, number>;
-    signed_count: number;
-    // ─── NEW: Stamp summary ────────────────────────────────────────────────────
-    stamped_count: number;
-    signed_and_stamped_count: number;
-    // ─── NEW: Utility sync summary ──────────────────────────────────────────────
-    utility_sync_summary: {
-        synced: number;
-        pending: number;
-        failed: number;
-        not_applicable: number;
-    };
-}
+// ─── Document Stats ──────────────────────────────────────────────────────
 
 export interface DocumentStats {
     total: number;
@@ -731,16 +670,52 @@ export interface DocumentStats {
     // Two-step workflow stats
     pending_internal: number;
     ready_to_send_back: number;
-    // ─── NEW: Stamp stats ──────────────────────────────────────────────────────
+    // Stamp stats
     stamped_count: number;
     signed_count: number;
     signed_and_stamped_count: number;
-    // ─── NEW: Utility sync stats ──────────────────────────────────────────────
+    // Utility sync stats
     utility_sync_stats: {
         total_utility_documents: number;
         synced: number;
         pending: number;
         failed: number;
+    };
+}
+
+// ─── Find the DocumentSummary interface and update it ──────────────────────
+
+export interface DocumentSummary {
+    total: number;
+    by_status: Record<DocumentStatus, number>;
+    by_entity_type: Record<DocumentEntityType, number>;
+    by_format: Record<DocumentFormat, number>;
+    pending_approval: number;
+    draft: number;
+    ready_to_send: number;    // ← ADD THIS - missing property
+    approved: number;
+    rejected: number;
+    returned: number;
+    // Two-step workflow summary
+    internal_approval_summary: {
+        pending: number;
+        previewed: number;
+        approved_internal: number;
+        rejected_internal: number;
+        changes_requested_internal: number;
+        changes_ready: number;
+    };
+    requester_status_summary: Record<RequesterVisibleStatus, number>;
+    signed_count: number;
+    // Stamp summary
+    stamped_count: number;
+    signed_and_stamped_count: number;
+    // Utility sync summary
+    utility_sync_summary: {
+        synced: number;
+        pending: number;
+        failed: number;
+        not_applicable: number;
     };
 }
 
@@ -847,9 +822,12 @@ export const CONFERENCE_TYPE_COLORS: Record<ConferenceType, string> = {
     other: 'text-stone-600 bg-stone-50',
 };
 
+// ─── Document Status Constants ───────────────────────────────────────────────
+
 export const DOCUMENT_STATUS_LABELS: Record<DocumentStatus, string> = {
     draft: 'Draft',
     pending_approval: 'Pending Approval',
+    ready_to_send: 'Ready to Send',
     approved: 'Approved',
     rejected: 'Rejected',
     returned: 'Returned',
@@ -858,18 +836,22 @@ export const DOCUMENT_STATUS_LABELS: Record<DocumentStatus, string> = {
 export const DOCUMENT_STATUS_COLORS: Record<DocumentStatus, string> = {
     draft: 'bg-stone-100 text-stone-600',
     pending_approval: 'bg-amber-50 text-amber-700',
+    ready_to_send: 'bg-blue-50 text-blue-700',
     approved: 'bg-emerald-50 text-emerald-700',
     rejected: 'bg-red-50 text-red-700',
-    returned: 'bg-blue-50 text-blue-700',
+    returned: 'bg-orange-50 text-orange-700',
 };
 
 export const DOCUMENT_STATUS_BADGE_STYLES: Record<DocumentStatus, string> = {
     draft: 'badge-stone',
     pending_approval: 'badge-amber',
+    ready_to_send: 'badge-blue',
     approved: 'badge-emerald',
     rejected: 'badge-red',
-    returned: 'badge-blue',
+    returned: 'badge-orange',
 };
+
+// ─── E-Stamp Constants ──────────────────────────────────────────────────────
 
 export const E_STAMP_STATUS_LABELS: Record<EStampStatus, string> = {
     pending: 'Pending',
@@ -972,32 +954,6 @@ export const REQUEST_TYPE_COLORS: Record<string, string> = {
     Sentry: 'text-gray-600 bg-gray-50',
 };
 
-// ─── Conference Helper Functions ─────────────────────────────────────────────
-
-export function getConferenceStatusLabel(status: ConferenceStatus): string {
-    return CONFERENCE_STATUS_LABELS[status] || status;
-}
-
-export function getConferenceStatusColor(status: ConferenceStatus): string {
-    return CONFERENCE_STATUS_COLORS[status] || '';
-}
-
-export function getConferenceTypeLabel(type: ConferenceType): string {
-    return CONFERENCE_TYPE_LABELS[type] || type;
-}
-
-export function getConferenceTypeColor(type: ConferenceType): string {
-    return CONFERENCE_TYPE_COLORS[type] || '';
-}
-
-export function isConferenceStatus(value: string): value is ConferenceStatus {
-    return ['draft', 'pending', 'approved', 'rejected', 'completed', 'cancelled'].includes(value);
-}
-
-export function isConferenceType(value: string): value is ConferenceType {
-    return ['judicial', 'administrative', 'training', 'workshop', 'seminar', 'other'].includes(value);
-}
-
 // ─── Type Guards ─────────────────────────────────────────────────────────────
 
 export function isDocumentEntityType(value: string): value is DocumentEntityType {
@@ -1024,7 +980,7 @@ export function isDocumentEntityType(value: string): value is DocumentEntityType
 }
 
 export function isDocumentStatus(value: string): value is DocumentStatus {
-    return ['draft', 'pending_approval', 'approved', 'rejected', 'returned'].includes(value);
+    return ['draft', 'pending_approval', 'ready_to_send', 'approved', 'rejected', 'returned'].includes(value);
 }
 
 export function isInternalApprovalStatus(value: string): value is InternalApprovalStatus {
@@ -1064,8 +1020,6 @@ export function isStampType(value: string): value is StampType {
     return ['approved', 'received', 'official'].includes(value);
 }
 
-// ─── NEW: Utility Sync Type Guards ───────────────────────────────────────────
-
 export function isUtilityDocument(entityType: DocumentEntityType): boolean {
     return ['consolidated_utility_memo', 'consolidated_fuel_memo', 'utility_memo'].includes(entityType);
 }
@@ -1074,14 +1028,30 @@ export function isConsolidatedUtilityDocument(entityType: DocumentEntityType): b
     return ['consolidated_utility_memo', 'consolidated_fuel_memo'].includes(entityType);
 }
 
-export function getUtilitySyncStatusLabel(status: UtilitySyncStatus): string {
-    const labels: Record<UtilitySyncStatus, string> = {
-        pending: 'Pending Sync',
-        synced: 'Synced ✓',
-        failed: 'Sync Failed',
-        not_applicable: 'N/A',
-    };
-    return labels[status] || status;
+// ─── Conference Helper Functions ─────────────────────────────────────────────
+
+export function getConferenceStatusLabel(status: ConferenceStatus): string {
+    return CONFERENCE_STATUS_LABELS[status] || status;
+}
+
+export function getConferenceStatusColor(status: ConferenceStatus): string {
+    return CONFERENCE_STATUS_COLORS[status] || '';
+}
+
+export function getConferenceTypeLabel(type: ConferenceType): string {
+    return CONFERENCE_TYPE_LABELS[type] || type;
+}
+
+export function getConferenceTypeColor(type: ConferenceType): string {
+    return CONFERENCE_TYPE_COLORS[type] || '';
+}
+
+export function isConferenceStatus(value: string): value is ConferenceStatus {
+    return ['draft', 'pending', 'approved', 'rejected', 'completed', 'cancelled'].includes(value);
+}
+
+export function isConferenceType(value: string): value is ConferenceType {
+    return ['judicial', 'administrative', 'training', 'workshop', 'seminar', 'other'].includes(value);
 }
 
 // ─── Helper Functions ────────────────────────────────────────────────────────
@@ -1126,16 +1096,6 @@ export function getRequestTypeColor(requestType: string): string {
     return REQUEST_TYPE_COLORS[requestType] || 'text-gray-600 bg-gray-50';
 }
 
-// ─── Stamp Helper Functions ──────────────────────────────────────────────────
-
-export function getStampTypeLabel(stampType: StampType): string {
-    return STAMP_TYPE_LABELS[stampType] || stampType;
-}
-
-export function getStampTypeColor(stampType: StampType): string {
-    return STAMP_TYPE_COLORS[stampType] || '';
-}
-
 // ─── Two-Step Approval Helper Functions ────────────────────────────────────
 
 export function getInternalApprovalStatusDisplayName(status: InternalApprovalStatus): string {
@@ -1162,6 +1122,69 @@ export function getRequesterVisibleStatusIcon(status: RequesterVisibleStatus): s
     return REQUESTER_VISIBLE_STATUS_ICONS[status] || 'File';
 }
 
+// ─── State Check Helpers ──────────────────────────────────────────────────────
+
+/**
+ * Check if a document is in the "pending review" state (needs super admin action)
+ * These documents appear as "PENDING" in the super admin list
+ */
+export function isPendingReview(doc: HelpdeskDocument): boolean {
+    return doc.internal_approval_status === 'pending' 
+        || doc.internal_approval_status === 'previewed'
+        || doc.internal_approval_status === 'changes_ready';
+}
+
+/**
+ * Check if a document is in the "ready to send back" state
+ * These documents appear as "READY" in the super admin list
+ */
+export function isReadyToSendBack(doc: HelpdeskDocument): boolean {
+    return doc.is_internal_approval_complete 
+        && !doc.is_sent_back_to_requester
+        && doc.status === 'pending_approval';
+}
+
+/**
+ * Check if a document is in the super admin's active queue
+ * Documents in the queue are NOT sent back to requester yet
+ */
+export function isInSuperAdminQueue(doc: HelpdeskDocument): boolean {
+    return doc.status === 'pending_approval' 
+        && !doc.is_sent_back_to_requester;
+}
+
+/**
+ * Get the display status for a document in the super admin list
+ * Returns "PENDING" if needs review, "READY" if approved and ready to send back
+ */
+export function getSuperAdminDisplayStatus(doc: HelpdeskDocument): 'PENDING' | 'READY' {
+    if (isReadyToSendBack(doc)) {
+        return 'READY';
+    }
+    return 'PENDING';
+}
+
+/**
+ * Check if the super admin can approve this document
+ */
+export function canSuperAdminApprove(doc: HelpdeskDocument): boolean {
+    return doc.status === 'pending_approval' 
+        && !doc.is_sent_back_to_requester
+        && !doc.is_internal_approval_complete
+        && (doc.internal_approval_status === 'pending' 
+            || doc.internal_approval_status === 'previewed'
+            || doc.internal_approval_status === 'changes_ready');
+}
+
+/**
+ * Check if the super admin can send this document back to requester
+ */
+export function canSuperAdminSendBack(doc: HelpdeskDocument): boolean {
+    return doc.is_internal_approval_complete 
+        && !doc.is_sent_back_to_requester
+        && doc.status === 'pending_approval';
+}
+
 export function isInternalApprovalPending(status: InternalApprovalStatus): boolean {
     return ['pending', 'previewed'].includes(status);
 }
@@ -1185,6 +1208,30 @@ export function isDocumentVisibleToRequester(requesterStatus: RequesterVisibleSt
 export function isPreviewRequired(internalStatus: InternalApprovalStatus): boolean {
     return ['pending', 'changes_ready'].includes(internalStatus);
 }
+
+// ─── Stamp Helper Functions ──────────────────────────────────────────────────
+
+export function getStampTypeLabel(stampType: StampType): string {
+    return STAMP_TYPE_LABELS[stampType] || stampType;
+}
+
+export function getStampTypeColor(stampType: StampType): string {
+    return STAMP_TYPE_COLORS[stampType] || '';
+}
+
+// ─── Utility Sync Helper Functions ───────────────────────────────────────────
+
+export function getUtilitySyncStatusLabel(status: UtilitySyncStatus): string {
+    const labels: Record<UtilitySyncStatus, string> = {
+        pending: 'Pending Sync',
+        synced: 'Synced ✓',
+        failed: 'Sync Failed',
+        not_applicable: 'N/A',
+    };
+    return labels[status] || status;
+}
+
+// ─── Status Transition Functions ────────────────────────────────────────────
 
 /**
  * Gets the next internal approval status based on super admin action
@@ -1304,7 +1351,8 @@ export function validateDocumentStatusWithTwoStepWorkflow(
     // Basic document status transition validation
     const validTransitions: Record<DocumentStatus, DocumentStatus[]> = {
         draft: ['pending_approval', 'returned'],
-        pending_approval: ['approved', 'rejected', 'returned', 'draft'],
+        pending_approval: ['ready_to_send', 'approved', 'rejected', 'returned', 'draft'],
+        ready_to_send: ['approved', 'rejected', 'returned'],
         approved: ['returned'],
         rejected: ['draft', 'pending_approval'],
         returned: ['draft', 'pending_approval'],
@@ -1402,7 +1450,7 @@ export function buildDocumentFilters(filters: HelpdeskDocumentFilters): Record<s
     if (filters.ready_to_send_back !== undefined) result.ready_to_send_back = filters.ready_to_send_back;
     if (filters.my_requester_documents !== undefined) result.my_requester_documents = filters.my_requester_documents;
     
-    // ─── NEW: Utility sync filters ────────────────────────────────────────────
+    // Utility sync filters
     if (filters.utility_sync_status) result.utility_sync_status = filters.utility_sync_status;
     if (filters.needs_utility_sync !== undefined) {
         result.needs_utility_sync = filters.needs_utility_sync;
@@ -1432,7 +1480,7 @@ export function buildDocumentFilters(filters: HelpdeskDocumentFilters): Record<s
     if (filters.rank) result.rank = filters.rank;
     if (filters.reporting_date) result.reporting_date = filters.reporting_date;
 
-    // ─── NEW: Stamp filters ──────────────────────────────────────────────────
+    // Stamp filters
     if (filters.is_stamped !== undefined) result.is_stamped = filters.is_stamped;
     if (filters.stamp_type) result.stamp_type = filters.stamp_type;
 
@@ -1461,7 +1509,8 @@ export function validateDocumentStatusTransition(
 ): boolean {
     const validTransitions: Record<DocumentStatus, DocumentStatus[]> = {
         draft: ['pending_approval', 'returned', 'approved'],
-        pending_approval: ['approved', 'rejected', 'returned', 'draft'],
+        pending_approval: ['ready_to_send', 'approved', 'rejected', 'returned', 'draft'],  // ← ADD ready_to_send
+        ready_to_send: ['approved', 'rejected', 'returned'],  // ← ADD THIS
         approved: ['returned'],
         rejected: ['draft', 'pending_approval'],
         returned: ['draft', 'pending_approval'],
@@ -1473,7 +1522,8 @@ export function validateDocumentStatusTransition(
 export function getAvailableStatusTransitions(currentStatus: DocumentStatus): DocumentStatus[] {
     const transitions: Record<DocumentStatus, DocumentStatus[]> = {
         draft: ['pending_approval'],
-        pending_approval: ['approved', 'rejected', 'returned'],
+        pending_approval: ['ready_to_send', 'approved', 'rejected', 'returned'],  // ← ADD ready_to_send
+        ready_to_send: ['approved', 'rejected', 'returned'],  // ← ADD THIS
         approved: ['returned'],
         rejected: ['draft'],
         returned: ['draft'],
@@ -1524,13 +1574,13 @@ export const TWO_STEP_APPROVAL_TABLE_COLUMNS = `
     signature_position_width FLOAT,
     signature_position_height FLOAT,
 
-    -- ─── NEW: Utility Sync fields ────────────────────────────────────────────
+    -- Utility Sync fields
     utility_sync_status VARCHAR(50) DEFAULT 'not_applicable',
     utility_synced_at TIMESTAMP,
     utility_synced_by UUID,
     utility_sync_result JSONB,
 
-    -- ─── NEW: Stamp fields ──────────────────────────────────────────────────────
+    -- Stamp fields
     is_stamped BOOLEAN DEFAULT FALSE,
     stamped_by UUID,
     stamped_by_name VARCHAR(255),
@@ -1541,7 +1591,7 @@ export const TWO_STEP_APPROVAL_TABLE_COLUMNS = `
     stamp_position_width FLOAT,
     stamp_position_height FLOAT,
 
-    -- ─── NEW: Final Generated PDF fields ───────────────────────────────────────
+    -- Final Generated PDF fields
     stamped_file_url VARCHAR(255),
     stamped_file_public_id VARCHAR(255),
     stamped_file_size INTEGER

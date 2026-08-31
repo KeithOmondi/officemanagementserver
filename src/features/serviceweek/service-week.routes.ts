@@ -2,59 +2,72 @@
 
 import { Router } from 'express';
 import { serviceWeekController } from './service-week.controller';
-import { protect, requireRole } from '../../middleware/auth.middleware';
+import { protect } from '../../middleware/auth.middleware';
 
 const router = Router();
 
-// ─── Public Routes (no auth) ───────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════
+// PUBLIC ROUTES (no authentication required)
+// These are used by the public-facing form for creating, viewing, 
+// and editing drafts
+// ═══════════════════════════════════════════════════════════════════════
 
 /**
  * POST /api/service-week/reports
- * Create a new service week report (can be saved as draft or submitted)
- * Public — no login required. Anonymous submissions from the ServiceWeek
- * public frontend. created_by will be null for these.
+ * Create a new service week report (draft or submitted)
+ * Public — no login required
  */
 router.post('/reports', serviceWeekController.createReport);
+
+/**
+ * GET /api/service-week/reports
+ * Get all reports (with filters) - public view
+ */
 router.get('/reports', serviceWeekController.getAllReports);
+
+/**
+ * GET /api/service-week/reports/:id
+ * Get a specific report by ID
+ * Public - allows viewing both drafts and submitted reports
+ * MOVED TO PUBLIC SECTION TO FIX 401 ERROR ON EDIT
+ */
+router.get('/reports/:id', serviceWeekController.getReportById);
+
+/**
+ * PUT /api/service-week/reports/:id
+ * Update a report (drafts only)
+ * Public - uses report ID as the identifier
+ * Submitted reports cannot be edited
+ */
 router.put('/reports/:id', serviceWeekController.updateReport);
 
 /**
  * POST /api/service-week/reports/:id/submit
- * Submit a draft report (changes status from draft to submitted)
+ * Submit a draft (draft → submitted)
+ * Public - anyone with the draft ID can submit it
  */
 router.post('/reports/:id/submit', serviceWeekController.submitReport);
-router.get('/reports/:id/pdf', serviceWeekController.generatePDF);
-
-// ─── Authenticated Routes ───────────────────────────────────────────────────
-// Everything below still requires login until the anonymous-lookup
-// mechanism (access token / reference code) is built.
-
-router.use(protect);
-
-/**
- * GET /api/service-week/reports
- * Get all service week reports with optional filters (paginated)
- * Query: station, judge_name, week_start, week_end, status, limit, offset
- */
-
-
-/**
- * GET /api/service-week/reports/:id
- * Get a specific service week report by ID
- */
-router.get('/reports/:id', serviceWeekController.getReportById);
-
-
-/**
- * DELETE /api/service-week/reports/:id
- * Delete a service week report (draft only)
- */
-router.delete('/reports/:id', serviceWeekController.deleteReport);
 
 /**
  * GET /api/service-week/reports/:id/pdf
- * Generate and download PDF of the service week report
+ * Generate PDF for a report
+ * Public - anyone with the report ID can download
  */
+router.get('/reports/:id/pdf', serviceWeekController.generatePDF);
 
+// ═══════════════════════════════════════════════════════════════════════
+// PROTECTED ROUTES (authentication required)
+// Admin-only operations for managing reports
+// ═══════════════════════════════════════════════════════════════════════
+
+// All routes below this line require authentication
+router.use(protect);
+
+/**
+ * DELETE /api/service-week/reports/:id
+ * Delete a report (drafts only)
+ * Admin only - requires authentication
+ */
+router.delete('/reports/:id', serviceWeekController.deleteReport);
 
 export default router;

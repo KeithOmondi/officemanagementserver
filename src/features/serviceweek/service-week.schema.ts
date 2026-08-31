@@ -12,6 +12,11 @@ export const caseReturnSchema = z.object({
   remarks: z.string().optional(),
 });
 
+// ─── Status Enums ──────────────────────────────────────────────────────────
+
+export const ServiceWeekStatusEnum = z.enum(['draft', 'submitted']);
+export type ServiceWeekStatus = z.infer<typeof ServiceWeekStatusEnum>;
+
 // ─── Create Service Week Schema ─────────────────────────────────────────
 
 export const createServiceWeekSchema = z.object({
@@ -44,7 +49,8 @@ export const updateServiceWeekSchema = z.object({
     prepared_by: z.string().optional(),
     prepared_designation: z.string().optional(),
     prepared_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Invalid date format').optional(),
-    status: z.enum(['draft', 'submitted']).optional(),
+    status: ServiceWeekStatusEnum.optional(),
+    edit_reason: z.string().min(1, 'Edit reason is required for super admin edits').optional(),
   }).strict(),
 });
 
@@ -56,7 +62,7 @@ export const serviceWeekFiltersSchema = z.object({
     judge_name: z.string().optional(),
     week_start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     week_end: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    status: z.enum(['draft', 'submitted']).optional(),
+    status: ServiceWeekStatusEnum.optional(),
     limit: z.string().regex(/^\d+$/).optional().transform(Number),
     offset: z.string().regex(/^\d+$/).optional().transform(Number),
   }).strict(),
@@ -83,4 +89,4 @@ export const idSchema = z.object({
 export type CaseReturnInput = z.infer<typeof caseReturnSchema>;
 export type CreateServiceWeekInput = z.infer<typeof createServiceWeekSchema>['body'];
 export type UpdateServiceWeekInput = z.infer<typeof updateServiceWeekSchema>['body'];
-export type ServiceWeekFilters = z.infer<typeof serviceWeekFiltersSchema>['query'];
+export type ServiceWeekFiltersInput = z.infer<typeof serviceWeekFiltersSchema>['query'];

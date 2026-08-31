@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
-import { AppError } from '../utils/response';
 import { env } from '../config/env';
+import { AppError } from '../utils/response';
 
 export const errorMiddleware = (
   err: any,
@@ -21,6 +21,13 @@ export const errorMiddleware = (
     });
     return;
   }
+
+  console.log('[ERR-DEBUG]', {
+  ctorName: err?.constructor?.name,
+  isAppError: err instanceof AppError,
+  hasStatusCode: 'statusCode' in err,
+  statusCode: err?.statusCode,
+});
 
   // 2. Intercept Intentional App Operational Errors
   if (err instanceof AppError) {

@@ -154,4 +154,41 @@ export const serviceWeekController = {
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(pdfBuffer);
   }),
+
+  // ══════════════════════════════════════════════════════════════════════
+  // SUPER ADMIN EDIT FUNCTIONALITY
+  // ══════════════════════════════════════════════════════════════════════
+
+  // ─── Super Admin Edit Report ──────────────────────────────────────────
+
+  superAdminEdit: asyncHandler(async (req: Request, res: Response) => {
+    const paramsResult = idSchema.safeParse({ params: req.params });
+    if (!paramsResult.success) {
+      throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+    }
+
+    const bodyResult = updateServiceWeekSchema.safeParse({ body: req.body });
+    if (!bodyResult.success) {
+      throw new AppError(400, bodyResult.error.issues[0]?.message ?? 'Invalid data');
+    }
+
+    const user = (req as any).user;
+    if (!user) {
+      throw new AppError(401, 'Authentication required');
+    }
+
+    if (user.role !== 'super_admin') {
+      throw new AppError(403, 'Only super admins can edit reports');
+    }
+
+    const report = await ServiceWeekService.superAdminEdit({
+      reportId: paramsResult.data.params.id,
+      updates: bodyResult.data.body,
+      edit_reason: bodyResult.data.body.edit_reason || 'Edited by super admin',
+      edited_by: user.name || user.email || 'Super Admin',
+      edited_by_designation: user.designation || user.role || 'Super Admin',
+    });
+
+    return sendSuccess(res, report, 'Report updated successfully');
+  }),
 };

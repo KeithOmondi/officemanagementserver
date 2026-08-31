@@ -871,38 +871,48 @@ static async internalApprove(req: Request, res: Response, next: NextFunction) {
 
     // ─── TWO-STEP APPROVAL DASHBOARD METHODS ──────────────────────────────────
 
-    /**
-     * GET /api/helpdesk/documents/pending-internal
-     * Super admin dashboard - get pending internal approvals
-     */
-    static async getPendingInternalApprovals(req: Request, res: Response, next: NextFunction) {
-        try {
-            const entity_type = getQueryEnum(req, 'entity_type', VALID_ENTITY_TYPES);
-            const internal_approval_status = getQueryEnum(req, 'internal_approval_status', VALID_INTERNAL_STATUSES);
-            const search = getQueryParam(req, 'search');
-            const limit = getQueryNumber(req, 'limit');
-            const offset = getQueryNumber(req, 'offset');
+static async getPendingInternalApprovals(req: Request, res: Response, next: NextFunction) {
+    try {
+        const entity_type = getQueryEnum(req, 'entity_type', VALID_ENTITY_TYPES);
+        const internal_approval_status = getQueryEnum(req, 'internal_approval_status', VALID_INTERNAL_STATUSES);
+        const search = getQueryParam(req, 'search');
+        const limit = getQueryNumber(req, 'limit');
+        const offset = getQueryNumber(req, 'offset');
 
-            const docs = await HelpdeskDocumentsService.getPendingInternalApprovals({
-                entity_type,
-                internal_approval_status,
-                search,
-                limit,
-                offset,
-            });
+        const docs = await HelpdeskDocumentsService.getPendingInternalApprovals({
+            entity_type,
+            internal_approval_status,
+            search,
+            limit,
+            offset,
+            // ─── Explicitly set these to true to enforce filtering ──────────
+            pending_internal_approval: true,
+            ready_to_send_back: true,
+        });
 
-            const summary = await HelpdeskDocumentsService.getPendingInternalApprovalsSummary({
-                entity_type,
-            });
+        // ─── Additional safety filter ──────────────────────────────────────
+        const filteredDocs = docs.filter(doc => {
+            // Only include documents that are actually pending or ready to send
+            const isPending = ['pending', 'previewed', 'changes_ready'].includes(
+                doc.internal_approval_status
+            );
+            const isReady = doc.is_internal_approval_complete === true && 
+                            doc.is_sent_back_to_requester === false;
+            return isPending || isReady;
+        });
 
-            return sendSuccess(res, {
-                documents: docs,
-                summary,
-            }, `Found ${docs.length} pending internal approvals.`);
-        } catch (err) {
-            next(err);
-        }
+        const summary = await HelpdeskDocumentsService.getPendingInternalApprovalsSummary({
+            entity_type,
+        });
+
+        return sendSuccess(res, {
+            documents: filteredDocs,
+            summary,
+        }, `Found ${filteredDocs.length} pending internal approvals.`);
+    } catch (err) {
+        next(err);
     }
+}
 
     /**
      * GET /api/helpdesk/documents/pending-internal/summary

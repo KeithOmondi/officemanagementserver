@@ -70,4 +70,11 @@ router.use(protect);
  */
 router.delete('/reports/:id', serviceWeekController.deleteReport);
 
+/**
+ * PUT /api/service-week/reports/:id/super-admin-edit
+ * Super admin edit ANY report (including submitted ones)
+ * Requires super_admin role
+ */
+router.put('/reports/:id/super-admin-edit', serviceWeekController.superAdminEdit);
+
 export default router;

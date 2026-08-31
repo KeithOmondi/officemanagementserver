@@ -115,11 +115,9 @@ export class ServiceWeekExportService {
            .font('Helvetica')
            .text(`STATION/DIVISION: ${report.station}${report.division ? ' - ' + report.division : ''}`, { align: 'left' });
 
-        // ─── HARDCODED DATES ─────────────────────────────────────────
-        // Hardcoded to show "1st August to 4th August"
-        doc.text(`SERVICE WEEK/ RRI WEEK HELD FROM: 1st August 2026 TO 4th August 2026`, { align: 'left' });
+        // ─── UPDATED: Service Week dates ─────────────────────────────
+        doc.text(`SERVICE WEEK/ RRI WEEK HELD FROM: 31st August 2026 TO 4th September 2026`, { align: 'left' });
 
-        // Also hardcode the report date
         doc.text(`DATE: 31 August 2026`, { align: 'left' });
 
         doc.text(`NAME OF JUDGE: ${report.judge_name}`, { align: 'left' });
@@ -246,7 +244,6 @@ export class ServiceWeekExportService {
            .font('Helvetica')
            .text(`Designation: ${report.prepared_designation || '..............................'}`, 200, nameY, { width: 190 });
 
-        // Hardcoded date in footer
         doc.text(`Date: 31 August 2026`, 420, nameY);
 
         doc.end();
@@ -355,12 +352,12 @@ export class ServiceWeekExportService {
 
           currentY = doc.y + 3;
 
-          // Hardcoded week dates in summary
+          // ─── UPDATED: Summary week dates ──────────────────────────
           doc.fillColor(COLOR_MUTED)
              .fontSize(8)
              .font('Helvetica')
              .text(
-               `Week: 1st August 2026 – 4th August 2026   |   Status: ${report.status.toUpperCase()}   |   Submitted by: ${report.prepared_by || '—'}`,
+               `Week: 31st August 2026 – 4th September 2026   |   Status: ${report.status.toUpperCase()}   |   Submitted by: ${report.prepared_by || '—'}`,
                50,
                currentY
              );

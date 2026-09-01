@@ -116,9 +116,9 @@ export class ServiceWeekExportService {
            .text(`STATION/DIVISION: ${report.station}${report.division ? ' - ' + report.division : ''}`, { align: 'left' });
 
         // ─── UPDATED: Service Week dates ─────────────────────────────
-        doc.text(`SERVICE WEEK/ RRI WEEK HELD FROM: 31st August 2026 TO 4th September 2026`, { align: 'left' });
+        doc.text(`SERVICE WEEK/ RRI WEEK HELD FROM: 1st September 2026 TO 4th September 2026`, { align: 'left' });
 
-        doc.text(`DATE: 31 August 2026`, { align: 'left' });
+        doc.text(`DATE: 1st September 2026`, { align: 'left' });
 
         doc.text(`NAME OF JUDGE: ${report.judge_name}`, { align: 'left' });
 

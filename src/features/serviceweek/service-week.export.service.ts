@@ -21,6 +21,10 @@ const COLOR_BORDER = '#d6d3c4';    // warm gray-green border
 const MIN_ROW_HEIGHT = 25;
 const CELL_PADDING = 10;
 
+// The current service week cycle always ends on this date.
+// Update this constant when the next service week cycle begins.
+const SERVICE_WEEK_END_DATE = new Date(2026, 8, 4); // September 4, 2026 (month is 0-indexed)
+
 // ─── Export Service ─────────────────────────────────────────────────────
 
 export class ServiceWeekExportService {
@@ -37,6 +41,25 @@ export class ServiceWeekExportService {
         response.on('error', () => resolve(null));
       }).on('error', () => resolve(null));
     });
+  }
+
+  // ─── Helper: format a Date as "2nd September 2026" ───────────────────
+
+  private static formatOrdinalDate(date: Date): string {
+    const day = date.getDate();
+    const month = date.toLocaleString('en-US', { month: 'long' });
+    const year = date.getFullYear();
+    return `${day}${this.ordinalSuffix(day)} ${month} ${year}`;
+  }
+
+  private static ordinalSuffix(day: number): string {
+    if (day > 3 && day < 21) return 'th'; // 11th–13th
+    switch (day % 10) {
+      case 1: return 'st';
+      case 2: return 'nd';
+      case 3: return 'rd';
+      default: return 'th';
+    }
   }
 
   // ─── Helper: compute a row's height from its tallest wrapped cell ────
@@ -65,6 +88,10 @@ export class ServiceWeekExportService {
     }
 
     const logoBuffer = await this.fetchImage(LOGO_URL);
+
+    // ─── Resolve dates from the report (fallback to today) ─────────────
+    const reportDate = (report as any).date ? new Date((report as any).date) : new Date();
+    const generatedDate = new Date();
 
     return new Promise<Buffer>((resolve, reject) => {
       const doc = new PDFDocument({
@@ -115,10 +142,13 @@ export class ServiceWeekExportService {
            .font('Helvetica')
            .text(`STATION/DIVISION: ${report.station}${report.division ? ' - ' + report.division : ''}`, { align: 'left' });
 
-        // ─── UPDATED: Service Week dates ─────────────────────────────
-        doc.text(`SERVICE WEEK/ RRI WEEK HELD FROM: 1st September 2026 TO 4th September 2026`, { align: 'left' });
+        // ─── Service Week dates: FROM the report's date TO the fixed cycle end ──
+        doc.text(
+          `SERVICE WEEK/ RRI WEEK HELD FROM: ${this.formatOrdinalDate(reportDate)} TO ${this.formatOrdinalDate(SERVICE_WEEK_END_DATE)}`,
+          { align: 'left' }
+        );
 
-        doc.text(`DATE: 1st September 2026`, { align: 'left' });
+        doc.text(`DATE: ${this.formatOrdinalDate(reportDate)}`, { align: 'left' });
 
         doc.text(`NAME OF JUDGE: ${report.judge_name}`, { align: 'left' });
 
@@ -244,7 +274,7 @@ export class ServiceWeekExportService {
            .font('Helvetica')
            .text(`Designation: ${report.prepared_designation || '..............................'}`, 200, nameY, { width: 190 });
 
-        doc.text(`Date: 31 August 2026`, 420, nameY);
+        doc.text(`Date: ${this.formatOrdinalDate(generatedDate)}`, 420, nameY);
 
         doc.end();
       } catch (err) {
@@ -261,6 +291,7 @@ export class ServiceWeekExportService {
     }
 
     const logoBuffer = await this.fetchImage(LOGO_URL);
+    const generatedDate = new Date();
 
     return new Promise<Buffer>((resolve, reject) => {
       const doc = new PDFDocument({
@@ -309,7 +340,7 @@ export class ServiceWeekExportService {
         doc.fontSize(9)
            .font('Helvetica')
            .fillColor(COLOR_MUTED)
-           .text(`Generated: 31 August 2026`, { align: 'center' });
+           .text(`Generated: ${this.formatOrdinalDate(generatedDate)}`, { align: 'center' });
 
         doc.moveDown(1.5);
 
@@ -352,12 +383,14 @@ export class ServiceWeekExportService {
 
           currentY = doc.y + 3;
 
-          // ─── UPDATED: Summary week dates ──────────────────────────
+          // ─── Per-report week dates: FROM the report's date TO the fixed cycle end ──
+          const repDate = (report as any).date ? new Date((report as any).date) : generatedDate;
+
           doc.fillColor(COLOR_MUTED)
              .fontSize(8)
              .font('Helvetica')
              .text(
-               `Week: 31st August 2026 – 4th September 2026   |   Status: ${report.status.toUpperCase()}   |   Submitted by: ${report.prepared_by || '—'}`,
+               `Week: ${this.formatOrdinalDate(repDate)} – ${this.formatOrdinalDate(SERVICE_WEEK_END_DATE)}   |   Status: ${report.status.toUpperCase()}   |   Submitted by: ${report.prepared_by || '—'}`,
                50,
                currentY
              );

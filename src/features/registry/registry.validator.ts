@@ -20,7 +20,6 @@ export const folderStatusEnum = z.enum([
   'active', 'archived',
 ]);
 
-// NEW: Document Source enum for validator
 export const documentSourceEnum = z.enum([
   'routed', 'direct',
 ]);
@@ -46,7 +45,6 @@ export const courtReferenceSchema = z.string()
   .max(15, 'Reference number is too long');
 
 // ── Document Reference Number (for non-court docs) ──────────────────────────
-// NEW: For documents that aren't court records but still need a reference
 
 export const documentRefNoSchema = z.string()
   .min(2, 'Reference number must be at least 2 characters')
@@ -79,7 +77,7 @@ export const returnFileSchema = z.object({
   }).strict(),
 });
 
-// ── NEW: Direct Document Upload Schemas ──────────────────────────────────────
+// ── Direct Document Upload Schemas ──────────────────────────────────────────
 
 /**
  * Single direct document upload to a station
@@ -130,7 +128,7 @@ export const registryFiltersSchema = z.object({
     station_id:  z.string().uuid().optional(),
     status:      registryStatusEnum.optional(),
     priority:    registryPriorityEnum.optional(),
-    source:      documentSourceEnum.optional(), // NEW: Filter by source
+    source:      documentSourceEnum.optional(),
     page:        z.string().regex(/^\d+$/).transform(Number).pipe(z.number().int().min(1)).optional(),
     limit:       z.string().regex(/^\d+$/).transform(Number).pipe(z.number().int().min(1).max(100)).optional(),
     sort_by:     z.enum(['routed_at', 'received_at', 'created_at']).optional(),
@@ -243,7 +241,7 @@ export const folderFiltersSchema = z.object({
 export const searchQuerySchema = z.object({
   query: z.object({
     q: z.string().min(2, 'Search query must be at least 2 characters'),
-    source: documentSourceEnum.optional(), // NEW: Filter search by source
+    source: documentSourceEnum.optional(),
   }),
 });
 
@@ -256,7 +254,7 @@ export const getStationFolderDocumentsSchema = z.object({
   query: z.object({
     page:  z.string().regex(/^\d+$/).transform(Number).pipe(z.number().int().min(1)).optional(),
     limit: z.string().regex(/^\d+$/).transform(Number).pipe(z.number().int().min(1).max(100)).optional(),
-    source: documentSourceEnum.optional(), // NEW: Filter by source
+    source: documentSourceEnum.optional(),
   }),
 });
 
@@ -272,7 +270,7 @@ export const moveDocumentToFolderSchema = z.object({
   }).strict(),
 });
 
-// ── NEW: Update Document Metadata ────────────────────────────────────────────
+// ── Update Document Metadata ────────────────────────────────────────────────
 
 export const updateDocumentMetadataSchema = z.object({
   params: z.object({
@@ -286,23 +284,155 @@ export const updateDocumentMetadataSchema = z.object({
   }).strict(),
 });
 
-// ── NEW: Delete Document ─────────────────────────────────────────────────────
+// ── Delete Document ─────────────────────────────────────────────────────────
 
 export const deleteDocumentSchema = z.object({
   params: z.object({
     documentId: z.string().uuid('Document ID must be a valid UUID'),
   }),
   body: z.object({
-    delete_from_storage: z.boolean().default(false).optional(), // Also delete from Cloudinary?
+    delete_from_storage: z.boolean().default(false).optional(),
   }).strict(),
 });
 
-// ── NEW: Get Document Details ──────────────────────────────────────────────
+// ── Get Document Details ────────────────────────────────────────────────────
 
 export const getDocumentDetailsSchema = z.object({
   params: z.object({
     documentId: z.string().uuid('Document ID must be a valid UUID'),
   }),
+});
+
+// ── File Validation Schemas ─────────────────────────────────────────────────
+
+/**
+ * Cloudinary upload configuration validator
+ */
+export const cloudinaryUploadConfigSchema = z.object({
+  folder: z.string().min(1, 'Folder path is required'),
+  maxFileSize: z.number().int().positive('Max file size must be positive'),
+  allowedFormats: z.array(z.string().min(1)).min(1, 'At least one allowed format is required'),
+  allowedMimeTypes: z.array(z.string().min(1)).min(1, 'At least one allowed MIME type is required'),
+  maxFilesPerBatch: z.number().int().positive().optional(),
+  transformation: z.object({
+    width: z.number().int().positive().optional(),
+    height: z.number().int().positive().optional(),
+    crop: z.string().optional(),
+    quality: z.string().optional(),
+  }).optional(),
+});
+
+export type CloudinaryUploadConfigInput = z.infer<typeof cloudinaryUploadConfigSchema>;
+
+// ── NEW: File Validation Request Schema ─────────────────────────────────────
+
+/**
+ * Validate that files exist in the request
+ * This is for routes that expect files
+ */
+export const validateFilesExistSchema = (required: boolean = true) => {
+  return z.object({
+    files: z.custom<Express.Multer.File[]>().refine(
+      (files) => {
+        if (required && !files) return false;
+        if (required && files.length === 0) return false;
+        return true;
+      },
+      {
+        message: required 
+          ? 'At least one file is required' 
+          : 'No files provided',
+      }
+    ),
+  });
+};
+
+/**
+ * Validate file count for bulk uploads
+ */
+export const validateFileCountSchema = (maxFiles: number = 10) => {
+  return z.object({
+    files: z.custom<Express.Multer.File[]>().refine(
+      (files) => files.length <= maxFiles,
+      {
+        message: `Maximum ${maxFiles} files allowed per upload`,
+      }
+    ),
+  });
+};
+
+// ── Station Document Upload Schema ─────────────────────────────────────────
+
+/**
+ * Validates station ID for document uploads
+ */
+export const stationUploadSchema = z.object({
+  params: z.object({
+    stationId: z.string().uuid('Station ID must be a valid UUID'),
+  }),
+  body: z.object({
+    title:     z.string().min(1, 'Document title is required').max(200, 'Title is too long'),
+    ref_no:    documentRefNoSchema,
+    priority:  registryPriorityEnum.default('normal'),
+    note:      z.string().max(1000).trim().optional(),
+  }).strict(),
+});
+
+// ── Bulk Station Upload Schema ─────────────────────────────────────────────
+
+export const bulkStationUploadSchema = z.object({
+  params: z.object({
+    stationId: z.string().uuid('Station ID must be a valid UUID'),
+  }),
+  body: z.object({
+    priority:  registryPriorityEnum.default('normal'),
+    note:      z.string().max(1000).trim().optional(),
+  }).strict(),
+});
+
+// ── Document Replacement Schema ────────────────────────────────────────────
+
+/**
+ * Replace a document file with a new version
+ */
+export const replaceDocumentSchema = z.object({
+  params: z.object({
+    documentId: z.string().uuid('Document ID must be a valid UUID'),
+  }),
+  body: z.object({
+    title:     z.string().min(1, 'Document title is required').max(200, 'Title is too long').optional(),
+    ref_no:    documentRefNoSchema,
+    note:      z.string().max(1000).trim().optional(),
+  }).strict(),
+});
+
+// ── Document Transfer Schema ───────────────────────────────────────────────
+
+/**
+ * Transfer a document from one station to another
+ */
+export const transferDocumentSchema = z.object({
+  body: z.object({
+    target_station_id: z.string().uuid('Target station ID must be a valid UUID'),
+    priority:          registryPriorityEnum.default('normal'),
+    note:              z.string().max(1000).trim().optional(),
+  }).strict(),
+  params: z.object({
+    entryId: z.string().uuid('Registry entry ID must be a valid UUID'),
+  }),
+});
+
+// ── Bulk Document Transfer Schema ──────────────────────────────────────────
+
+export const bulkTransferDocumentsSchema = z.object({
+  body: z.object({
+    entry_ids: z.array(z.string().uuid('Entry ID must be a valid UUID'))
+      .min(1, 'At least one entry ID is required')
+      .max(50, 'Cannot transfer more than 50 documents at once'),
+    target_station_id: z.string().uuid('Target station ID must be a valid UUID'),
+    priority:          registryPriorityEnum.default('normal'),
+    note:              z.string().max(1000).trim().optional(),
+  }).strict(),
 });
 
 // ── Inferred types ────────────────────────────────────────────────────────────
@@ -320,9 +450,134 @@ export type SearchQuery              = z.infer<typeof searchQuerySchema>['query'
 export type GetStationFolderDocumentsQuery = z.infer<typeof getStationFolderDocumentsSchema>['query'];
 export type MoveDocumentToFolderBody = z.infer<typeof moveDocumentToFolderSchema>['body'];
 
-// NEW: Inferred types for direct uploads
 export type DirectUploadInput           = z.infer<typeof directUploadSchema>['body'];
 export type BulkDirectUploadInput       = z.infer<typeof bulkDirectUploadSchema>['body'];
 export type UploadDocumentToFolderInput = z.infer<typeof uploadDocumentToFolderSchema>['body'];
 export type UpdateDocumentMetadataInput = z.infer<typeof updateDocumentMetadataSchema>['body'];
 export type DeleteDocumentInput         = z.infer<typeof deleteDocumentSchema>['body'];
+
+export type StationUploadInput         = z.infer<typeof stationUploadSchema>['body'];
+export type BulkStationUploadInput     = z.infer<typeof bulkStationUploadSchema>['body'];
+export type ReplaceDocumentInput       = z.infer<typeof replaceDocumentSchema>['body'];
+export type TransferDocumentInput      = z.infer<typeof transferDocumentSchema>['body'];
+export type BulkTransferDocumentsInput = z.infer<typeof bulkTransferDocumentsSchema>['body'];
+
+// ── Helper Functions for File Validation ─────────────────────────────────
+
+/**
+ * Validate file size and format before Cloudinary upload
+ * Use this in middleware or service layer
+ */
+export const validateFileForUpload = (
+  file: Express.Multer.File,
+  allowedMimeTypes: string[],
+  maxSize: number
+): { valid: boolean; error?: string } => {
+  if (!allowedMimeTypes.includes(file.mimetype)) {
+    return {
+      valid: false,
+      error: `File type ${file.mimetype} is not allowed. Allowed types: ${allowedMimeTypes.join(', ')}`
+    };
+  }
+
+  if (file.size > maxSize) {
+    const maxMB = (maxSize / (1024 * 1024)).toFixed(1);
+    const fileMB = (file.size / (1024 * 1024)).toFixed(1);
+    return {
+      valid: false,
+      error: `File size ${fileMB}MB exceeds maximum allowed size of ${maxMB}MB`
+    };
+  }
+
+  return { valid: true };
+};
+
+/**
+ * Generate a human-friendly error message for upload validation
+ */
+export const getUploadValidationErrorMessage = (
+  files: Express.Multer.File[],
+  allowedMimeTypes: string[],
+  maxSize: number
+): string[] => {
+  const errors: string[] = [];
+
+  files.forEach((file) => {
+    const validation = validateFileForUpload(file, allowedMimeTypes, maxSize);
+    if (!validation.valid) {
+      errors.push(`File "${file.originalname}": ${validation.error}`);
+    }
+  });
+
+  return errors;
+};
+
+/**
+ * Validate multiple files against configuration
+ */
+export const validateMultipleFiles = (
+  files: Express.Multer.File[],
+  config: {
+    allowedMimeTypes: string[];
+    maxSize: number;
+    maxFiles?: number;
+  }
+): { valid: boolean; errors: string[] } => {
+  const errors: string[] = [];
+
+  if (config.maxFiles && files.length > config.maxFiles) {
+    errors.push(`Maximum ${config.maxFiles} files allowed, got ${files.length}`);
+  }
+
+  files.forEach((file) => {
+    const validation = validateFileForUpload(
+      file,
+      config.allowedMimeTypes,
+      config.maxSize
+    );
+    if (!validation.valid) {
+      errors.push(`File "${file.originalname}": ${validation.error}`);
+    }
+  });
+
+  return {
+    valid: errors.length === 0,
+    errors,
+  };
+};
+
+/**
+ * Check if a file type is an image
+ */
+export const isImageFile = (mimeType: string): boolean => {
+  return mimeType.startsWith('image/');
+};
+
+/**
+ * Check if a file type is a PDF
+ */
+export const isPdfFile = (mimeType: string): boolean => {
+  return mimeType === 'application/pdf';
+};
+
+/**
+ * Check if a file type is a document (Word, Excel, etc.)
+ */
+export const isDocumentFile = (mimeType: string): boolean => {
+  const docTypes = [
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-powerpoint',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  ];
+  return docTypes.includes(mimeType);
+};
+
+/**
+ * Get file extension from filename
+ */
+export const getFileExtensionFromName = (fileName: string): string => {
+  return fileName.split('.').pop()?.toLowerCase() || '';
+};

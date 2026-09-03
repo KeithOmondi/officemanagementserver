@@ -1,8 +1,6 @@
-// src/middleware/upload.ts
 import multer, { FileFilterCallback } from "multer";
 import { NextFunction, Request, Response } from "express";
 import { AppError } from "../utils/response";
-import { uploadToCloudinary } from "../config/cloudinary";
 
 /**
  * memoryStorage is fastest for processing but uses Server RAM.
@@ -61,6 +59,7 @@ const fileFilter = (
   if (allowedTypes[file.mimetype]) {
     cb(null, true);
   } else {
+    // Fixed: first argument is statusCode (number), second is message (string)
     cb(new AppError(400, "Unsupported file format. Please upload images, PDFs, Docs, or Videos.") as any, false);
   }
 };
@@ -99,9 +98,8 @@ export const requireFiles = (
   next();
 };
 
-// ───────────────────────────────────────────────────────────────────────────────
-// Template upload
-// ───────────────────────────────────────────────────────────────────────────────
+
+// src/middleware/upload.ts — add this export alongside the existing ones
 
 const templateFileFilter = (
   _req: Request,
@@ -122,19 +120,20 @@ const templateFileFilter = (
 
 export const uploadTemplate = multer({
   storage,
-  limits: { fileSize: 15 * 1024 * 1024, files: 1 },
+  limits: { fileSize: 15 * 1024 * 1024, files: 1 }, // 15MB is plenty for a letterhead doc
   fileFilter: templateFileFilter,
 }).single('file');
 
-// ───────────────────────────────────────────────────────────────────────────────
-// Signature upload
-// ───────────────────────────────────────────────────────────────────────────────
+// Add this to your existing src/middleware/upload.ts, alongside `uploadTemplate`.
+// It reuses the same `storage` (memoryStorage) already defined in that file.
 
 const signatureFileFilter = (
   _req: Request,
   file: Express.Multer.File,
   cb: FileFilterCallback
 ) => {
+  // PNG/WEBP with a transparent background gives the cleanest result when
+  // composited into a memo, but JPEG/SVG are accepted too.
   const allowedSignatureTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'];
   if (allowedSignatureTypes.includes(file.mimetype)) {
     cb(null, true);
@@ -145,150 +144,6 @@ const signatureFileFilter = (
 
 export const uploadSignature = multer({
   storage,
-  limits: { fileSize: 2 * 1024 * 1024, files: 1 },
+  limits: { fileSize: 2 * 1024 * 1024, files: 1 }, // 2MB is plenty for a signature image
   fileFilter: signatureFileFilter,
 }).single('signature');
-
-// ───────────────────────────────────────────────────────────────────────────────
-// Registry Document Upload with Cloudinary
-// ───────────────────────────────────────────────────────────────────────────────
-
-/**
- * Single document upload with Cloudinary integration
- * Handles the file, uploads to Cloudinary, and attaches fileInfo to request
- */
-export const uploadSingleDocument = async (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => {
-  // Use multer to handle the file
-  upload.single('document')(req, res, async (err) => {
-    if (err) {
-      return next(new AppError(400, err.message));
-    }
-
-    const file = (req as any).file as Express.Multer.File | undefined;
-    if (!file) {
-      return next(); // No file, continue to controller
-    }
-
-    try {
-      // Upload to Cloudinary
-      const result = await uploadToCloudinary(file, 'registry/documents');
-      
-      // Attach file info to request
-      (req as any).fileInfo = {
-        file_url: result.secure_url,
-        file_public_id: result.public_id,
-        file_name: file.originalname,
-        file_size: file.size,
-        mime_type: file.mimetype,
-      };
-
-      next();
-    } catch (uploadError) {
-      next(new AppError(500, `File upload failed: ${uploadError instanceof Error ? uploadError.message : 'Unknown error'}`));
-    }
-  });
-};
-
-/**
- * Multiple documents upload with Cloudinary integration
- * Handles multiple files, uploads each to Cloudinary, and attaches filesInfo to request
- */
-export const uploadMultipleDocuments = async (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => {
-  // Use multer to handle multiple files
-  upload.array('documents', 50)(req, res, async (err) => {
-    if (err) {
-      return next(new AppError(400, err.message));
-    }
-
-    const files = (req as any).files as Express.Multer.File[] | undefined;
-    if (!files || files.length === 0) {
-      return next(); // No files, continue to controller
-    }
-
-    try {
-      const filesInfo = [];
-
-      for (const file of files) {
-        // Upload each file to Cloudinary
-        const result = await uploadToCloudinary(file, 'registry/documents');
-        
-        filesInfo.push({
-          file_url: result.secure_url,
-          file_public_id: result.public_id,
-          file_name: file.originalname,
-          file_size: file.size,
-          mime_type: file.mimetype,
-        });
-      }
-
-      // Attach files info to request
-      (req as any).filesInfo = filesInfo;
-
-      next();
-    } catch (uploadError) {
-      next(new AppError(500, `File upload failed: ${uploadError instanceof Error ? uploadError.message : 'Unknown error'}`));
-    }
-  });
-};
-
-/**
- * Single document upload to a specific folder with Cloudinary integration
- */
-export const uploadSingleDocumentToFolder = async (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => {
-  upload.single('document')(req, res, async (err) => {
-    if (err) {
-      return next(new AppError(400, err.message));
-    }
-
-    const file = (req as any).file as Express.Multer.File | undefined;
-    if (!file) {
-      return next();
-    }
-
-    try {
-      // Upload to Cloudinary with folder-specific path
-      const folderPath = `registry/folders/${req.params.id}`;
-      const result = await uploadToCloudinary(file, folderPath);
-      
-      (req as any).fileInfo = {
-        file_url: result.secure_url,
-        file_public_id: result.public_id,
-        file_name: file.originalname,
-        file_size: file.size,
-        mime_type: file.mimetype,
-      };
-
-      next();
-    } catch (uploadError) {
-      next(new AppError(500, `File upload failed: ${uploadError instanceof Error ? uploadError.message : 'Unknown error'}`));
-    }
-  });
-};
-
-/**
- * Combined middleware for single document upload with validation
- */
-export const uploadSingleWithValidation = [
-  uploadSingleDocument,
-  requireFiles,
-];
-
-/**
- * Combined middleware for multiple documents upload with validation
- */
-export const uploadMultipleWithValidation = [
-  uploadMultipleDocuments,
-  requireFiles,
-];

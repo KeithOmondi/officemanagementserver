@@ -2,6 +2,7 @@
 import { Router } from 'express';
 import { registryController } from './registry.controller';
 import { protect, requireRole } from '../../middleware/auth.middleware';
+import { upload } from '../../middleware/upload';
 
 const router = Router();
 
@@ -18,12 +19,60 @@ router.get('/document/:documentId/history', registryController.getHistory);
 router.get('/entries',                      registryController.getAll);
 router.get('/entries/:id',                  registryController.getById);
 
+// ── Direct Upload Routes ─────────────────────────────────────────────────────
+// These must come before the generic /entries routes
+
+// Single file upload to a station
+router.post(
+  '/upload/direct',
+  requireRole('staff'),
+  upload.single('file'),
+  registryController.directUpload
+);
+
+// Bulk file upload to a station
+router.post(
+  '/upload/bulk',
+  requireRole('staff'),
+  upload.array('files', 10), // Max 10 files
+  registryController.bulkDirectUpload
+);
+
+// Upload document to a specific folder
+router.post(
+  '/folders/:id/upload',
+  requireRole('staff'),
+  upload.single('file'),
+  registryController.uploadDocumentToFolder
+);
+
+// ── Document Management Routes ──────────────────────────────────────────────
+// These must come before the /entries/:id routes
+
+// Get document details with history
+router.get('/documents/:documentId', registryController.getDocumentDetails);
+
+// Update document metadata
+router.patch(
+  '/documents/:documentId',
+  requireRole('staff'),
+  registryController.updateDocumentMetadata
+);
+
+// Delete document (soft delete or hard delete with Cloudinary)
+router.delete(
+  '/documents/:documentId',
+  requireRole('dept_head'),
+  registryController.deleteDocument
+);
+
+// Get documents by source (routed vs direct)
+router.get('/documents/source/:source', registryController.getDocumentsBySource);
+
 // ── Route a document to a station ───────────────────────────────────────────
 router.post('/entries', requireRole('dept_head'), registryController.routeFile);
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
-// Note: Order matters here - /entries/:id/receive and /entries/:id/return
-// should come before any generic /entries/:id routes (if any existed)
 router.post('/entries/:id/receive',  registryController.receiveFile);
 router.post('/entries/:id/return',   requireRole('staff'), registryController.returnFile);
 
@@ -39,7 +88,7 @@ router.get('/folders/active',               registryController.getActiveFolders)
 router.get('/folders/categories',           registryController.getFolderCategories);
 router.get('/folders/statistics',           registryController.getFolderStatistics);
 
-// ── NEW: Get folder documents by station ─────────────────────────────────────
+// Get folder documents by station
 router.get('/folders/station/:stationId',   registryController.getStationFolderDocuments);
 
 router.get('/folders',                      registryController.getAllFolders);
@@ -59,8 +108,6 @@ router.patch('/folders/:id', requireRole('dept_head'), registryController.update
 router.delete('/folders/:id', requireRole('super_admin'), registryController.deleteFolder);
 
 // ── Folder Operations ────────────────────────────────────────────────────────
-// Note: These should come after the specific folder routes but before
-// any generic /folders/:id routes (if they existed)
 router.post('/folders/:id/move', requireRole('dept_head'), registryController.moveFolder);
 router.post('/folders/:id/documents/bulk', requireRole('dept_head'), registryController.bulkAddDocumentsToFolder);
 router.post('/folders/:id/documents', requireRole('dept_head'), registryController.addDocumentToFolder);

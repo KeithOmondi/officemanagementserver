@@ -3,6 +3,7 @@ import { Request, Response } from 'express';
 import { asyncHandler } from '../../utils/asyncHandler';
 import { AppError, sendSuccess } from '../../utils/response';
 import { RegistryService } from './registry.service';
+import { uploadMultipleToCloudinary } from '../../config/cloudinary';
 import {
   routeFileSchema,
   receiveFileSchema,
@@ -73,16 +74,22 @@ export const registryController = {
       throw new AppError(400, 'File is required for upload');
     }
 
-    // File info should be set by upload middleware
-    const fileInfo = (req as any).fileInfo;
-    if (!fileInfo) {
-      throw new AppError(500, 'File processing failed');
+    // Upload to Cloudinary first
+    const cloudinaryResults = await uploadMultipleToCloudinary(
+      [file],
+      `registry/documents/${result.data.body.station_id}`
+    );
+
+    if (!cloudinaryResults || cloudinaryResults.length === 0) {
+      throw new AppError(500, 'Failed to upload file to Cloudinary');
     }
+
+    const cloudinaryResult = cloudinaryResults[0];
 
     const result_data = await RegistryService.directUpload(
       result.data.body as DirectUploadInput,
       req.user!.id,
-      fileInfo
+      cloudinaryResult
     );
 
     return sendSuccess(res, result_data, 'Document uploaded successfully', 201);
@@ -103,19 +110,23 @@ export const registryController = {
       throw new AppError(400, 'At least one file is required for upload');
     }
 
-    // File info should be set by upload middleware
-    const filesInfo = (req as any).filesInfo;
-    if (!filesInfo || filesInfo.length === 0) {
-      throw new AppError(500, 'File processing failed');
+    // Upload to Cloudinary
+    const cloudinaryResults = await uploadMultipleToCloudinary(
+      files,
+      `registry/documents/${result.data.body.station_id}`
+    );
+
+    if (!cloudinaryResults || cloudinaryResults.length === 0) {
+      throw new AppError(500, 'Failed to upload files to Cloudinary');
     }
 
     const results = await RegistryService.bulkDirectUpload(
       result.data.body as BulkDirectUploadInput,
       req.user!.id,
-      filesInfo
+      cloudinaryResults
     );
 
-    return sendSuccess(res, results, `${results.length} documents uploaded successfully`, 201);
+    return sendSuccess(res, results, `${results.data?.totalSuccess || 0} documents uploaded successfully`, 201);
   }),
 
   // ── NEW: Upload Document to Folder ──────────────────────────────────────────
@@ -136,11 +147,17 @@ export const registryController = {
       throw new AppError(400, 'File is required for upload');
     }
 
-    // File info should be set by upload middleware
-    const fileInfo = (req as any).fileInfo;
-    if (!fileInfo) {
-      throw new AppError(500, 'File processing failed');
+    // Upload to Cloudinary
+    const cloudinaryResults = await uploadMultipleToCloudinary(
+      [file],
+      `registry/folders/${result.data.params.id}`
+    );
+
+    if (!cloudinaryResults || cloudinaryResults.length === 0) {
+      throw new AppError(500, 'Failed to upload file to Cloudinary');
     }
+
+    const cloudinaryResult = cloudinaryResults[0];
 
     const result_data = await RegistryService.uploadDocumentToFolder(
       result.data.params.id,
@@ -151,7 +168,7 @@ export const registryController = {
         note: result.data.body.note,
       },
       req.user!.id,
-      fileInfo
+      cloudinaryResult
     );
 
     return sendSuccess(res, result_data, 'Document uploaded to folder successfully', 201);

@@ -10,14 +10,12 @@ export type RegistryPriority =
   | 'for_information_only';
 
 // ── Registry Status ──────────────────────────────────────────────────────────
-// Simplified status - only 'active' (currently at station) or 'returned' (sent back)
 
 export type RegistryStatus =
   | 'active'     // document is currently at this station
   | 'returned';  // document has been returned to the registry
 
 // ── Document Source ──────────────────────────────────────────────────────────
-// NEW: Track where the document originated
 
 export type DocumentSource = 
   | 'routed'      // Document came through routing (sent from another station)
@@ -35,8 +33,37 @@ export type FolderCategory =
   | 'administrative'
   | 'other';
 
-// ── Document File Info ──────────────────────────────────────────────────────
-// NEW: Store file metadata for direct uploads
+// ── Cloudinary Types ─────────────────────────────────────────────────────────
+
+export interface CloudinaryUploadResult {
+  public_id: string;
+  version: number;
+  format: string;
+  resource_type: string;
+  url: string;
+  secure_url: string;
+  bytes: number;
+  original_filename: string;
+  width?: number;
+  height?: number;
+  created_at?: string;
+}
+
+export interface CloudinaryFile {
+  url: string;
+  public_id: string;
+  version: number;
+  format: string;
+  resource_type: string;
+  bytes: number;
+  original_filename: string;
+  secure_url?: string;
+  width?: number;
+  height?: number;
+  uploaded_at: string;
+}
+
+// ── Document File (simplified for storage) ─────────────────────────────────
 
 export interface DocumentFile {
   file_url: string;
@@ -44,12 +71,12 @@ export interface DocumentFile {
   file_name: string;
   file_size: number;
   mime_type: string;
-  uploaded_at: Date;
+  uploaded_at: string;
+  format?: string;
+  cloudinary_version?: number;
 }
 
 // ── Registry Entry ───────────────────────────────────────────────────────────
-// One row = one "leg" of a document's journey through the registry OR
-// a direct upload to a station.
 
 export interface RegistryEntry {
   id:               string;
@@ -64,20 +91,19 @@ export interface RegistryEntry {
   priority:         RegistryPriority;
   note:             string | null;
   status:           RegistryStatus;
-  routed_at:        Date;
-  received_at:      Date | null;
+  routed_at:        string;
+  received_at:      string | null;
   received_by:      string | null;
   received_by_name: string | null;
   is_active:        boolean;
-  created_at:       Date;
-  // NEW: Fields for direct uploads
-  source:           DocumentSource;        // 'routed' or 'direct'
-  uploaded_by:      string | null;         // User who uploaded directly
-  uploaded_by_name: string | null;         // Name of uploader
-  file:             DocumentFile | null;   // File metadata if uploaded directly
+  created_at:       string;
+  source:           DocumentSource;
+  uploaded_by:      string | null;
+  uploaded_by_name: string | null;
+  file:             DocumentFile | null;
 }
 
-// ─── Folder Document Entry (for showing folder documents in Registry) ───────
+// ─── Folder Document Entry ─────────────────────────────────────────────────
 
 export interface FolderRegistryEntry {
   id:               string;
@@ -90,16 +116,15 @@ export interface FolderRegistryEntry {
   folder_id:        string;
   folder_ref_no:    string;
   folder_name:      string;
-  is_folder_document: boolean;  // Flag to distinguish from routed documents
-  created_at:       Date;
-  // NEW: File info for folder documents
+  is_folder_document: boolean;
+  created_at:       string;
   file_url:         string | null;
   file_name:        string | null;
   file_size:        number | null;
   mime_type:        string | null;
 }
 
-// ── Station file counts (for the registry dashboard grid) ───────────────────
+// ── Station file counts ─────────────────────────────────────────────────────
 
 export interface StationWithFileCount {
   id:         string;
@@ -108,8 +133,7 @@ export interface StationWithFileCount {
   type:       StationType;
   location:   string | null;
   is_active:  boolean;
-  file_count: number; // count of active (currently-on-record) registry entries
-  // NEW: Separate counts for routed vs direct uploads
+  file_count: number;
   routed_count?: number;
   direct_count?: number;
 }
@@ -124,8 +148,6 @@ export interface RegistryPaginationResponse {
   totalPages: number;
 }
 
-// ── Folder Pagination Response ──────────────────────────────────────────────
-
 export interface FolderRegistryPaginationResponse {
   data:       FolderRegistryEntry[];
   total:      number;
@@ -134,50 +156,33 @@ export interface FolderRegistryPaginationResponse {
   totalPages: number;
 }
 
-// ── Court Reference Number Format ────────────────────────────────────────────
-
-/**
- * Court reference number format: RHC/[CODE]/[NUMBER]
- * Examples:
- * - RHC/MSB/22  -> Marasabi High Court
- * - RHC/KAB/23  -> Kabarnet High Court
- * - RHC/GRN/24  -> Garsen High Court
- * - RHC/KMS/25  -> Machakos High Court
- * - RHC/KLD/26  -> Kailado High Court
- * - RHC/ELD/27  -> Eldoret High Court
- * - RHC/KSM/28  -> Kisumu High Court
- * - RHC/NYK/29  -> Nanyuki High Court
- * - RHC/SYA/30  -> Siaya High Court
- * - RHC/CHK/31  -> Chuka High Court
- */
+// ── Court Reference Types ──────────────────────────────────────────────────
 
 export interface CourtReference {
-  code: string;      // e.g., "MSB", "KAB", "GRN"
-  number: number;    // e.g., 22, 23, 24
-  fullRef: string;   // e.g., "RHC/MSB/22"
+  code: string;
+  number: number;
+  fullRef: string;
 }
-
-// ── Court Reference Configuration ────────────────────────────────────────────
 
 export interface CourtConfig {
   code: string;
   name: string;
-  refPrefix: string; // Always "RHC" for High Court
-  nextNumber: number; // The next available number for this court
+  refPrefix: string;
+  nextNumber: number;
 }
 
 // ── Folder Types ─────────────────────────────────────────────────────────────
 
 export interface RHCFolder {
   id: string;
-  ref_no: string;              // e.g., "RHC/MSB/22"
-  name: string;                // e.g., "Marasabi High Court"
+  ref_no: string;
+  name: string;
   category: FolderCategory;
   description: string | null;
   status: FolderStatus;
   parent_folder_id: string | null;
-  created_at: Date;
-  updated_at: Date;
+  created_at: string;
+  updated_at: string;
   sub_folder_count?: number;
   document_count?: number;
 }
@@ -189,38 +194,48 @@ export interface FolderDocument {
   format: string;
   file_url: string | null;
   file_public_id: string | null;
-  created_at: Date;
-  added_at: Date;
-  // NEW: Additional file metadata
+  created_at: string;
+  added_at: string;
   file_name?: string;
   file_size?: number;
   mime_type?: string;
   source?: DocumentSource;
 }
 
-// ── Folder Hierarchy ─────────────────────────────────────────────────────────
-
 export interface FolderHierarchy extends RHCFolder {
   parent_chain: RHCFolder[];
   children: RHCFolder[];
 }
 
+export interface DocumentInFolder {
+  id: string;
+  title: string;
+  ref: string | null;
+  format: string;
+  file_url: string | null;
+  file_public_id: string | null;
+  created_at: string;
+  added_at: string;
+  file_name?: string;
+  file_size?: number;
+  mime_type?: string;
+}
+
 // ── Create/Update Folder Request ─────────────────────────────────────────────
 
 export interface CreateRegistryFolderInput {
-  ref_no: string;              // e.g., "RHC/MSB/22"
-  name: string;                // e.g., "Marasabi High Court"
-  category?: FolderCategory;   // defaults to 'court'
+  ref_no: string;
+  name: string;
+  category?: FolderCategory;
   description?: string;
   parent_folder_id?: string;
-  status?: FolderStatus;       // defaults to 'active'
+  status?: FolderStatus;
 }
 
 export interface UpdateRegistryFolderInput {
   name?: string;
   description?: string;
   status?: FolderStatus;
-  // Note: ref_no should NOT be changeable once set
 }
 
 // ── Folder Statistics ────────────────────────────────────────────────────────
@@ -235,31 +250,10 @@ export interface FolderStatistics {
   }[];
 }
 
-// ── Folder Category Count ───────────────────────────────────────────────────
-
 export interface FolderCategoryCount {
   category: FolderCategory;
   count: number;
 }
-
-// ── Document in Folder ──────────────────────────────────────────────────────
-
-export interface DocumentInFolder {
-  id: string;
-  title: string;
-  ref: string | null;
-  format: string;
-  file_url: string | null;
-  file_public_id: string | null;
-  created_at: Date;
-  added_at: Date;
-  // NEW: Additional metadata
-  file_name?: string;
-  file_size?: number;
-  mime_type?: string;
-}
-
-// ── Bulk Add Documents Result ──────────────────────────────────────────────
 
 export interface BulkAddDocumentsResult {
   added: number;
@@ -267,32 +261,91 @@ export interface BulkAddDocumentsResult {
   errors: string[];
 }
 
-// ── NEW: Direct Document Upload Request ─────────────────────────────────────
+// ── Direct Document Upload Types ────────────────────────────────────────────
 
+// Frontend request payload (files are sent as FormData)
 export interface DirectDocumentUploadInput {
-  title: string;                // Document title
-  ref_no?: string;              // Optional reference number
-  station_id: string;           // Target station
-  priority?: RegistryPriority;  // Defaults to 'normal'
-  note?: string;                // Optional note
-  file: Express.Multer.File;    // The file to upload
+  title: string;
+  ref_no?: string;
+  station_id: string;
+  priority?: RegistryPriority;
+  note?: string;
 }
 
 export interface BulkDirectDocumentUploadInput {
-  station_id: string;           // Target station
+  station_id: string;
   priority?: RegistryPriority;
   note?: string;
-  files: Express.Multer.File[]; // Multiple files
 }
 
-// ── NEW: Direct Document Upload Response ───────────────────────────────────
+// ── Direct Document Upload Responses ───────────────────────────────────────
 
 export interface DirectDocumentUploadResponse {
-  entry: RegistryEntry;
-  file: DocumentFile;
+  success: boolean;
+  message: string;
+  data?: {
+    entry: RegistryEntry;
+    file: DocumentFile;
+    cloudinary_metadata?: CloudinaryUploadResult;
+  };
 }
 
-// ── NEW: Document Source Labels ────────────────────────────────────────────
+export interface BulkDirectDocumentUploadResponse {
+  success: boolean;
+  message: string;
+  data?: {
+    results: BulkDirectDocumentUploadResultItem[];
+    totalProcessed: number;
+    totalSuccess: number;
+    totalFailed: number;
+  };
+}
+
+export interface BulkDirectDocumentUploadResultItem {
+  success: boolean;
+  entry?: RegistryEntry;
+  file?: DocumentFile;
+  error?: string;
+  fileName?: string;
+  cloudinary_metadata?: CloudinaryUploadResult;
+}
+
+// ── File Upload Configuration ──────────────────────────────────────────────
+
+export interface CloudinaryUploadConfig {
+  folder: string;
+  maxFileSize: number;
+  allowedFormats: string[];
+  allowedMimeTypes: string[];
+  maxFilesPerBatch?: number;
+  transformation?: {
+    width?: number;
+    height?: number;
+    crop?: string;
+    quality?: string;
+  };
+}
+
+export interface FileValidationError {
+  fileName: string;
+  error: string;
+}
+
+// ── Helper Types for Backend Route Handlers ──────────────────────────────
+
+export interface UploadedFile {
+  fieldname: string;
+  originalname: string;
+  encoding: string;
+  mimetype: string;
+  size: number;
+  buffer: Buffer;
+  destination?: string;
+  filename?: string;
+  path?: string;
+}
+
+// ── Display Labels & Colors ──────────────────────────────────────────────────
 
 export const SOURCE_LABELS: Record<DocumentSource, string> = {
   routed: 'Routed',
@@ -304,7 +357,10 @@ export const SOURCE_COLORS: Record<DocumentSource, string> = {
   direct: 'bg-green-50 text-green-700',
 };
 
-// ── Display Labels ───────────────────────────────────────────────────────────
+export const SOURCE_ICONS: Record<DocumentSource, string> = {
+  routed: 'ArrowRightIcon',
+  direct: 'UploadIcon',
+};
 
 export const CATEGORY_LABELS: Record<FolderCategory, string> = {
   court: 'Court',
@@ -342,4 +398,26 @@ export const PRIORITY_COLORS: Record<RegistryPriority, string> = {
   urgent: 'bg-red-100 text-red-700',
   confidential: 'bg-amber-100 text-amber-700',
   for_information_only: 'bg-blue-100 text-blue-700',
+};
+
+// ── Utility Functions ──────────────────────────────────────────────────────
+
+export const getFileSizeDisplay = (bytes: number): string => {
+  if (bytes === 0) return '0 Bytes';
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+};
+
+export const getFileExtension = (fileName: string): string => {
+  return fileName.split('.').pop()?.toLowerCase() || '';
+};
+
+export const isValidFileFormat = (format: string, allowedFormats: string[]): boolean => {
+  return allowedFormats.includes(format.toLowerCase());
+};
+
+export const generateCloudinaryFolderPath = (category: FolderCategory, stationId: string): string => {
+  return `registry/${category}/${stationId}`;
 };

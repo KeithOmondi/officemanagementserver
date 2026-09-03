@@ -1,6 +1,7 @@
 // src/features/registry/registry.service.ts
 import { pool } from '../../config/db';
 import { AppError } from '../../utils/response';
+import { deleteFromCloudinary } from '../../config/cloudinary';
 import type {
   RegistryEntry,
   RegistryPaginationResponse,
@@ -11,10 +12,10 @@ import type {
   FolderHierarchy,
   FolderCategoryCount,
   BulkAddDocumentsResult,
-  FolderRegistryEntry,
-  FolderRegistryPaginationResponse,
   DocumentFile,
   DirectDocumentUploadResponse,
+  BulkDirectDocumentUploadResponse,
+  CloudinaryUploadResult,
 } from './registry.types';
 import type {
   RouteFileInput,
@@ -22,10 +23,6 @@ import type {
   RegistryFilters,
   CreateFolderInput,
   UpdateFolderInput,
-  MoveFolderInput,
-  AddDocumentToFolderInput,
-  BulkAddDocumentsInput,
-  GetStationFolderDocumentsQuery,
   DirectUploadInput,
   BulkDirectUploadInput,
   UpdateDocumentMetadataInput,
@@ -54,7 +51,9 @@ const REGISTRY_SELECT = `
   reg.file_public_id,
   reg.file_name,
   reg.file_size,
-  reg.mime_type
+  reg.mime_type,
+  reg.cloudinary_version,
+  reg.file_format
 `;
 
 const REGISTRY_JOIN = `
@@ -74,6 +73,28 @@ const FOLDER_SELECT = `
 `;
 
 const ALLOWED_SORT = new Set(['routed_at', 'received_at', 'created_at']);
+
+// ── Helper function to determine Cloudinary resource type ───────────────────
+
+function getResourceType(mimeType: string, fileName: string): 'image' | 'video' | 'raw' {
+  const extension = fileName.split('.').pop()?.toLowerCase() || '';
+  
+  // PDFs work best as image type in Cloudinary
+  if (mimeType === 'application/pdf' || extension === 'pdf') {
+    return 'image';
+  }
+  
+  if (mimeType.startsWith('video/')) {
+    return 'video';
+  }
+  
+  if (mimeType.startsWith('image/')) {
+    return 'image';
+  }
+  
+  // Word, Excel, and everything else
+  return 'raw';
+}
 
 // ── Service ───────────────────────────────────────────────────────────────────
 
@@ -134,134 +155,170 @@ export class RegistryService {
     }
   }
 
-  // ── NEW: Direct Upload Document to Station ─────────────────────────────────
 
-  static async directUpload(
-    input: DirectUploadInput,
-    uploadedBy: string,
-    fileInfo: {
-      file_url: string;
-      file_public_id: string;
-      file_name: string;
-      file_size: number;
-      mime_type: string;
-    }
-  ): Promise<DirectDocumentUploadResponse> {
-    const { title, ref_no, station_id, priority = 'normal', note } = input;
+// ── Direct Upload Document to Station ─────────────────────────────────
 
-    // Verify station exists and is active
-    const { rows: stationCheck } = await pool.query(
-      `SELECT id, name, type FROM stations WHERE id = $1 AND is_active = true`,
-      [station_id]
+static async directUpload(
+  input: DirectUploadInput,
+  uploadedBy: string,
+  cloudinaryResult: CloudinaryUploadResult
+): Promise<DirectDocumentUploadResponse> {
+  const { title, ref_no, station_id, priority = 'normal', note } = input;
+
+  // Verify station exists and is active
+  const { rows: stationCheck } = await pool.query(
+    `SELECT id, name, type FROM stations WHERE id = $1 AND is_active = true`,
+    [station_id]
+  );
+  if (!stationCheck.length) throw new AppError(404, 'Station not found or inactive');
+
+  // Determine mime type from cloudinary result
+  const mimeType = cloudinaryResult.resource_type === 'image' 
+    ? `image/${cloudinaryResult.format}`
+    : cloudinaryResult.resource_type === 'video'
+    ? `video/${cloudinaryResult.format}`
+    : 'application/octet-stream';
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Create a document record
+    const { rows: docRows } = await client.query(
+      `INSERT INTO documents (
+        title, type, reference_no, file_url, file_public_id, 
+        file_size_bytes, mime_type, original_name, 
+        created_by, is_active, status, priority
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, $10, $11)
+      RETURNING id`,
+      [
+        title,
+        'upload', // document_type enum
+        ref_no ?? null,
+        cloudinaryResult.secure_url || cloudinaryResult.url,
+        cloudinaryResult.public_id,
+        cloudinaryResult.bytes,
+        mimeType,
+        cloudinaryResult.original_filename || title,
+        uploadedBy,
+        'uploaded', // document_status enum - using 'uploaded' since it's just been uploaded
+        priority,
+      ]
     );
-    if (!stationCheck.length) throw new AppError(404, 'Station not found or inactive');
 
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
+    const documentId = docRows[0].id;
 
-      // Create a document record
-      const { rows: docRows } = await client.query(
-        `INSERT INTO documents (title, reference_no, format, file_url, file_public_id, is_active)
-         VALUES ($1, $2, $3, $4, $5, true)
-         RETURNING id`,
-        [
-          title,
-          ref_no ?? null,
-          fileInfo.mime_type.split('/').pop() || 'unknown',
-          fileInfo.file_url,
-          fileInfo.file_public_id,
-        ]
-      );
+    // Create registry entry with source = 'direct'
+    const { rows: registryRows } = await client.query(
+      `INSERT INTO document_registry (
+        document_id, station_id, routed_by, priority, note, status, 
+        is_active, source, uploaded_by, file_url, file_public_id, 
+        file_name, file_size, mime_type, cloudinary_version, 
+        file_format, routed_at
+      )
+      VALUES ($1, $2, $3, $4, $5, 'active', true, 'direct', $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+      RETURNING id`,
+      [
+        documentId,
+        station_id,
+        uploadedBy, // routed_by
+        priority,
+        note ?? null,
+        uploadedBy, // uploaded_by
+        cloudinaryResult.secure_url || cloudinaryResult.url,
+        cloudinaryResult.public_id,
+        cloudinaryResult.original_filename || title,
+        cloudinaryResult.bytes,
+        mimeType,
+        cloudinaryResult.version,
+        cloudinaryResult.format,
+      ]
+    );
 
-      const documentId = docRows[0].id;
+    await client.query('COMMIT');
 
-      // Create registry entry with source = 'direct'
-      const { rows: registryRows } = await client.query(
-        `INSERT INTO document_registry
-           (document_id, station_id, priority, note, status, is_active, source, 
-            uploaded_by, file_url, file_public_id, file_name, file_size, mime_type, routed_at)
-         VALUES ($1, $2, $3, $4, 'active', true, 'direct', $5, $6, $7, $8, $9, $10, NOW())
-         RETURNING id`,
-        [
-          documentId,
-          station_id,
-          priority,
-          note ?? null,
-          uploadedBy,
-          fileInfo.file_url,
-          fileInfo.file_public_id,
-          fileInfo.file_name,
-          fileInfo.file_size,
-          fileInfo.mime_type,
-        ]
-      );
-
-      await client.query('COMMIT');
-
-      const entry = (await this.findById(registryRows[0].id))!;
-      
-      return {
+    const entry = (await this.findById(registryRows[0].id))!;
+    
+    return {
+      success: true,
+      message: 'Document uploaded successfully',
+      data: {
         entry,
         file: {
-          file_url: fileInfo.file_url,
-          file_public_id: fileInfo.file_public_id,
-          file_name: fileInfo.file_name,
-          file_size: fileInfo.file_size,
-          mime_type: fileInfo.mime_type,
-          uploaded_at: new Date(),
+          file_url: cloudinaryResult.secure_url || cloudinaryResult.url,
+          file_public_id: cloudinaryResult.public_id,
+          file_name: cloudinaryResult.original_filename || title,
+          file_size: cloudinaryResult.bytes,
+          mime_type: mimeType,
+          uploaded_at: new Date().toISOString(),
+          format: cloudinaryResult.format,
+          cloudinary_version: cloudinaryResult.version,
         },
-      };
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
-    }
+        cloudinary_metadata: cloudinaryResult,
+      },
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
   }
+}
 
-  // ── NEW: Bulk Direct Upload ─────────────────────────────────────────────────
+// ── Bulk Direct Upload ─────────────────────────────────────────────────
 
-  static async bulkDirectUpload(
-    input: BulkDirectUploadInput,
-    uploadedBy: string,
-    filesInfo: Array<{
-      file_url: string;
-      file_public_id: string;
-      file_name: string;
-      file_size: number;
-      mime_type: string;
-    }>
-  ): Promise<DirectDocumentUploadResponse[]> {
-    const { station_id, priority = 'normal', note } = input;
+static async bulkDirectUpload(
+  input: BulkDirectUploadInput,
+  uploadedBy: string,
+  cloudinaryResults: CloudinaryUploadResult[]
+): Promise<BulkDirectDocumentUploadResponse> {
+  const { station_id, priority = 'normal', note } = input;
 
-    // Verify station exists and is active
-    const { rows: stationCheck } = await pool.query(
-      `SELECT id, name, type FROM stations WHERE id = $1 AND is_active = true`,
-      [station_id]
-    );
-    if (!stationCheck.length) throw new AppError(404, 'Station not found or inactive');
+  // Verify station exists and is active
+  const { rows: stationCheck } = await pool.query(
+    `SELECT id, name, type FROM stations WHERE id = $1 AND is_active = true`,
+    [station_id]
+  );
+  if (!stationCheck.length) throw new AppError(404, 'Station not found or inactive');
 
-    const results: DirectDocumentUploadResponse[] = [];
-    const client = await pool.connect();
+  type ResultItem = {
+    success: boolean;
+    entry?: RegistryEntry;
+    file?: DocumentFile;
+    error?: string;
+    fileName?: string;
+    cloudinary_metadata?: CloudinaryUploadResult;
+  };
 
-    try {
-      await client.query('BEGIN');
+  const results: ResultItem[] = [];
+  const client = await pool.connect();
 
-      for (const fileInfo of filesInfo) {
-        // Use filename as title if no title provided
-        const title = fileInfo.file_name.split('.').slice(0, -1).join('.') || 'Untitled';
+  try {
+    await client.query('BEGIN');
 
-        // Create a document record
+    for (const cloudinaryResult of cloudinaryResults) {
+      try {
+        // Use original filename as title
+        const title = cloudinaryResult.original_filename || 'Untitled';
+
+        // Determine mime type
+        const mimeType = cloudinaryResult.resource_type === 'image' 
+          ? `image/${cloudinaryResult.format}`
+          : cloudinaryResult.resource_type === 'video'
+          ? `video/${cloudinaryResult.format}`
+          : 'application/octet-stream';
+
+        // Create a document record - include 'type' column
         const { rows: docRows } = await client.query(
-          `INSERT INTO documents (title, format, file_url, file_public_id, is_active)
-           VALUES ($1, $2, $3, $4, true)
+          `INSERT INTO documents (title, file_url, file_public_id, is_active, type)
+           VALUES ($1, $2, $3, true, $4)
            RETURNING id`,
           [
             title,
-            fileInfo.mime_type.split('/').pop() || 'unknown',
-            fileInfo.file_url,
-            fileInfo.file_public_id,
+            cloudinaryResult.secure_url || cloudinaryResult.url,
+            cloudinaryResult.public_id,
+            'document',
           ]
         );
 
@@ -271,8 +328,9 @@ export class RegistryService {
         const { rows: registryRows } = await client.query(
           `INSERT INTO document_registry
              (document_id, station_id, priority, note, status, is_active, source,
-              uploaded_by, file_url, file_public_id, file_name, file_size, mime_type, routed_at)
-           VALUES ($1, $2, $3, $4, 'active', true, 'direct', $5, $6, $7, $8, $9, $10, NOW())
+              uploaded_by, file_url, file_public_id, file_name, file_size, mime_type,
+              cloudinary_version, file_format, routed_at)
+           VALUES ($1, $2, $3, $4, 'active', true, 'direct', $5, $6, $7, $8, $9, $10, $11, $12, NOW())
            RETURNING id`,
           [
             documentId,
@@ -280,147 +338,184 @@ export class RegistryService {
             priority,
             note ?? null,
             uploadedBy,
-            fileInfo.file_url,
-            fileInfo.file_public_id,
-            fileInfo.file_name,
-            fileInfo.file_size,
-            fileInfo.mime_type,
+            cloudinaryResult.secure_url || cloudinaryResult.url,
+            cloudinaryResult.public_id,
+            cloudinaryResult.original_filename || title,
+            cloudinaryResult.bytes,
+            mimeType,
+            cloudinaryResult.version,
+            cloudinaryResult.format,
           ]
         );
 
         const entry = (await this.findById(registryRows[0].id))!;
         results.push({
+          success: true,
           entry,
           file: {
-            file_url: fileInfo.file_url,
-            file_public_id: fileInfo.file_public_id,
-            file_name: fileInfo.file_name,
-            file_size: fileInfo.file_size,
-            mime_type: fileInfo.mime_type,
-            uploaded_at: new Date(),
+            file_url: cloudinaryResult.secure_url || cloudinaryResult.url,
+            file_public_id: cloudinaryResult.public_id,
+            file_name: cloudinaryResult.original_filename || title,
+            file_size: cloudinaryResult.bytes,
+            mime_type: mimeType,
+            uploaded_at: new Date().toISOString(),
+            format: cloudinaryResult.format,
+            cloudinary_version: cloudinaryResult.version,
           },
+          fileName: cloudinaryResult.original_filename,
+          cloudinary_metadata: cloudinaryResult,
+        });
+      } catch (err) {
+        results.push({
+          success: false,
+          fileName: cloudinaryResult.original_filename || 'Unknown',
+          error: err instanceof Error ? err.message : 'Unknown error',
         });
       }
-
-      await client.query('COMMIT');
-      return results;
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
     }
+
+    await client.query('COMMIT');
+    
+    const totalSuccess = results.filter((r: ResultItem) => r.success).length;
+    const totalFailed = results.filter((r: ResultItem) => !r.success).length;
+    
+    return {
+      success: true,
+      message: `Processed ${results.length} files. ${totalSuccess} succeeded, ${totalFailed} failed.`,
+      data: {
+        results,
+        totalProcessed: results.length,
+        totalSuccess,
+        totalFailed,
+      },
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// ── Upload Document to Folder ─────────────────────────────────────────
+
+static async uploadDocumentToFolder(
+  folderId: string,
+  input: { title: string; ref_no?: string | null; priority?: string; note?: string },
+  uploadedBy: string,
+  cloudinaryResult: CloudinaryUploadResult
+): Promise<DirectDocumentUploadResponse> {
+  const { title, ref_no, priority = 'normal', note } = input;
+
+  // Verify folder exists
+  const folder = await this.getFolderById(folderId);
+  if (!folder) {
+    throw new AppError(404, 'Folder not found');
   }
 
-  // ── NEW: Upload Document to Folder ─────────────────────────────────────────
+  // Get station from folder
+  const { rows: stationRows } = await pool.query(
+    `SELECT id FROM stations WHERE ref_no = $1 OR name ILIKE $2 LIMIT 1`,
+    [folder.ref_no, `%${folder.name}%`]
+  );
 
-  static async uploadDocumentToFolder(
-    folderId: string,
-    input: { title: string; ref_no?: string | null; priority?: string; note?: string },
-    uploadedBy: string,
-    fileInfo: {
-      file_url: string;
-      file_public_id: string;
-      file_name: string;
-      file_size: number;
-      mime_type: string;
-    }
-  ): Promise<DirectDocumentUploadResponse> {
-    const { title, ref_no, priority = 'normal', note } = input;
+  let stationId: string;
+  if (stationRows.length) {
+    stationId = stationRows[0].id;
+  } else {
+    throw new AppError(404, 'No matching station found for this folder');
+  }
 
-    // Verify folder exists
-    const folder = await this.getFolderById(folderId);
-    if (!folder) {
-      throw new AppError(404, 'Folder not found');
-    }
+  // Determine mime type
+  const mimeType = cloudinaryResult.resource_type === 'image' 
+    ? `image/${cloudinaryResult.format}`
+    : cloudinaryResult.resource_type === 'video'
+    ? `video/${cloudinaryResult.format}`
+    : 'application/octet-stream';
 
-    // Get station from folder
-    const { rows: stationRows } = await pool.query(
-      `SELECT id FROM stations WHERE ref_no = $1 OR name ILIKE $2 LIMIT 1`,
-      [folder.ref_no, `%${folder.name}%`]
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Create document - include 'type' column
+    const { rows: docRows } = await client.query(
+      `INSERT INTO documents (title, reference_no, file_url, file_public_id, is_active, folder_id, type)
+       VALUES ($1, $2, $3, $4, true, $5, $6)
+       RETURNING id`,
+      [
+        title,
+        ref_no ?? null,
+        cloudinaryResult.secure_url || cloudinaryResult.url,
+        cloudinaryResult.public_id,
+        folderId,
+        'document',
+      ]
     );
 
-    let stationId: string;
-    if (stationRows.length) {
-      stationId = stationRows[0].id;
-    } else {
-      // If no matching station, create a default station for this folder
-      // Or use a system station - we'll let the caller handle this
-      throw new AppError(404, 'No matching station found for this folder');
-    }
+    const documentId = docRows[0].id;
 
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
+    // Create registry entry
+    const { rows: registryRows } = await client.query(
+      `INSERT INTO document_registry
+         (document_id, station_id, priority, note, status, is_active, source,
+          uploaded_by, file_url, file_public_id, file_name, file_size, mime_type,
+          cloudinary_version, file_format, routed_at)
+       VALUES ($1, $2, $3, $4, 'active', true, 'direct', $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+       RETURNING id`,
+      [
+        documentId,
+        stationId,
+        priority,
+        note ?? null,
+        uploadedBy,
+        cloudinaryResult.secure_url || cloudinaryResult.url,
+        cloudinaryResult.public_id,
+        cloudinaryResult.original_filename || title,
+        cloudinaryResult.bytes,
+        mimeType,
+        cloudinaryResult.version,
+        cloudinaryResult.format,
+      ]
+    );
 
-      // Create document
-      const { rows: docRows } = await client.query(
-        `INSERT INTO documents (title, reference_no, format, file_url, file_public_id, is_active, folder_id)
-         VALUES ($1, $2, $3, $4, $5, true, $6)
-         RETURNING id`,
-        [
-          title,
-          ref_no ?? null,
-          fileInfo.mime_type.split('/').pop() || 'unknown',
-          fileInfo.file_url,
-          fileInfo.file_public_id,
-          folderId,
-        ]
-      );
+    // Link to folder
+    await client.query(
+      `INSERT INTO folder_documents (folder_id, document_id)
+       VALUES ($1, $2)`,
+      [folderId, documentId]
+    );
 
-      const documentId = docRows[0].id;
+    await client.query('COMMIT');
 
-      // Create registry entry
-      const { rows: registryRows } = await client.query(
-        `INSERT INTO document_registry
-           (document_id, station_id, priority, note, status, is_active, source,
-            uploaded_by, file_url, file_public_id, file_name, file_size, mime_type, routed_at)
-         VALUES ($1, $2, $3, $4, 'active', true, 'direct', $5, $6, $7, $8, $9, $10, NOW())
-         RETURNING id`,
-        [
-          documentId,
-          stationId,
-          priority,
-          note ?? null,
-          uploadedBy,
-          fileInfo.file_url,
-          fileInfo.file_public_id,
-          fileInfo.file_name,
-          fileInfo.file_size,
-          fileInfo.mime_type,
-        ]
-      );
-
-      // Link to folder
-      await client.query(
-        `INSERT INTO folder_documents (folder_id, document_id)
-         VALUES ($1, $2)`,
-        [folderId, documentId]
-      );
-
-      await client.query('COMMIT');
-
-      const entry = (await this.findById(registryRows[0].id))!;
-      return {
+    const entry = (await this.findById(registryRows[0].id))!;
+    return {
+      success: true,
+      message: 'Document uploaded to folder successfully',
+      data: {
         entry,
         file: {
-          file_url: fileInfo.file_url,
-          file_public_id: fileInfo.file_public_id,
-          file_name: fileInfo.file_name,
-          file_size: fileInfo.file_size,
-          mime_type: fileInfo.mime_type,
-          uploaded_at: new Date(),
+          file_url: cloudinaryResult.secure_url || cloudinaryResult.url,
+          file_public_id: cloudinaryResult.public_id,
+          file_name: cloudinaryResult.original_filename || title,
+          file_size: cloudinaryResult.bytes,
+          mime_type: mimeType,
+          uploaded_at: new Date().toISOString(),
+          format: cloudinaryResult.format,
+          cloudinary_version: cloudinaryResult.version,
         },
-      };
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
-    }
+        cloudinary_metadata: cloudinaryResult,
+      },
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
   }
+}
 
-  // ── Find all (paginated) ──────────────────────────────────────────────────────
+
+  // ── Find all (paginated) ──────────────────────────────────────────────────
 
   static async findAll(filters: RegistryFilters): Promise<RegistryPaginationResponse> {
     const {
@@ -465,7 +560,7 @@ export class RegistryService {
     };
   }
 
-  // ── Find single ────────────────────────────────────────────────────────────────
+  // ── Find single ────────────────────────────────────────────────────────────
 
   static async findById(id: string): Promise<RegistryEntry | null> {
     const { rows } = await pool.query(
@@ -475,7 +570,7 @@ export class RegistryService {
     return rows[0] ?? null;
   }
 
-  // ── Full routing history for one document ────────────────────────────────────
+  // ── Full routing history for one document ────────────────────────────────
 
   static async getHistoryForDocument(documentId: string): Promise<RegistryEntry[]> {
     const { rows } = await pool.query(
@@ -496,7 +591,7 @@ export class RegistryService {
     return rows[0] ?? null;
   }
 
-  // ── Receive (station acknowledges the file arrived) ──────────────────────────
+  // ── Receive (station acknowledges the file arrived) ──────────────────────
 
   static async receiveFile(id: string, receivedBy: string): Promise<RegistryEntry> {
     const entry = await this.findById(id);
@@ -514,7 +609,7 @@ export class RegistryService {
     return (await this.findById(id))!;
   }
 
-  // ── Return to registry (file leaves the station) ──────────────────────────────
+  // ── Return to registry (file leaves the station) ──────────────────────────
 
   static async returnFile(id: string, input: ReturnFileInput): Promise<RegistryEntry> {
     const entry = await this.findById(id);
@@ -536,7 +631,7 @@ export class RegistryService {
     return (await this.findById(id))!;
   }
 
-  // ── Station file counts (for the registry dashboard grid) ────────────────────
+  // ── Station file counts (for the registry dashboard grid) ────────────────
 
   static async getStationFileCounts(): Promise<StationWithFileCount[]> {
     const { rows } = await pool.query(
@@ -549,7 +644,7 @@ export class RegistryService {
        GROUP BY s.id, s.ref_no, s.name, s.type, s.location, s.is_active
        ORDER BY s.ref_no ASC NULLS LAST, s.name ASC`
     );
-    return rows.map((r) => ({ 
+    return rows.map((r: any) => ({ 
       ...r, 
       file_count: parseInt(r.file_count, 10),
       routed_count: parseInt(r.routed_count || '0', 10),
@@ -558,7 +653,7 @@ export class RegistryService {
     }));
   }
 
-  // ── NEW: Update Document Metadata ───────────────────────────────────────────
+  // ── Update Document Metadata ──────────────────────────────────────────────
 
   static async updateDocumentMetadata(
     documentId: string,
@@ -622,7 +717,7 @@ export class RegistryService {
     return (await this.findById(activeEntry.id))!;
   }
 
-  // ── NEW: Delete Document ────────────────────────────────────────────────────
+  // ── Delete Document ────────────────────────────────────────────────────────
 
   static async deleteDocument(
     documentId: string,
@@ -632,29 +727,40 @@ export class RegistryService {
     try {
       await client.query('BEGIN');
 
-      // Get all registry entries for this document
+      // Get all registry entries for this document with resource types
       const { rows: entries } = await client.query(
-        `SELECT id, file_public_id FROM document_registry WHERE document_id = $1`,
+        `SELECT id, file_public_id, file_name, mime_type FROM document_registry WHERE document_id = $1`,
         [documentId]
       );
 
       // Get document
       const { rows: docs } = await client.query(
-        `SELECT id, file_public_id FROM documents WHERE id = $1`,
+        `SELECT id, file_public_id, format FROM documents WHERE id = $1`,
         [documentId]
       );
 
-      const filePublicIds: string[] = [];
+      const filesToDelete: Array<{ publicId: string; resourceType: 'image' | 'video' | 'raw' }> = [];
 
-      // Collect all file public IDs
+      // Collect all file public IDs with resource types
       for (const entry of entries) {
         if (entry.file_public_id) {
-          filePublicIds.push(entry.file_public_id);
+          const resourceType = getResourceType(
+            entry.mime_type || '',
+            entry.file_name || ''
+          );
+          filesToDelete.push({
+            publicId: entry.file_public_id,
+            resourceType,
+          });
         }
       }
       for (const doc of docs) {
         if (doc.file_public_id) {
-          filePublicIds.push(doc.file_public_id);
+          const resourceType = doc.format === 'pdf' ? 'image' : 'raw';
+          filesToDelete.push({
+            publicId: doc.file_public_id,
+            resourceType: resourceType as 'image' | 'video' | 'raw',
+          });
         }
       }
 
@@ -672,9 +778,19 @@ export class RegistryService {
 
       await client.query('COMMIT');
 
+      // Delete from Cloudinary if requested
+      if (deleteFromStorage && filesToDelete.length > 0) {
+        const deletePromises = filesToDelete.map(({ publicId, resourceType }) =>
+          deleteFromCloudinary(publicId, resourceType).catch((err: any) => {
+            console.error(`Failed to delete ${publicId} from Cloudinary:`, err);
+          })
+        );
+        await Promise.all(deletePromises);
+      }
+
       return {
         deleted: true,
-        filePublicIds: deleteFromStorage ? filePublicIds : undefined,
+        filePublicIds: deleteFromStorage ? filesToDelete.map(f => f.publicId) : undefined,
       };
     } catch (err) {
       await client.query('ROLLBACK');
@@ -933,8 +1049,7 @@ export class RegistryService {
   static async getActiveFolders(): Promise<RHCFolder[]> {
     const { rows } = await pool.query(
       `SELECT ${FOLDER_SELECT}
-       FROM folders f
-       WHERE f.status = 'active'
+       FROM folders f       WHERE f.status = 'active'
        ORDER BY f.ref_no ASC`
     );
     return rows;
@@ -1125,7 +1240,8 @@ export class RegistryService {
          reg.file_name,
          reg.file_size,
          reg.mime_type,
-         reg.source
+         reg.source,
+         reg.cloudinary_version
        FROM folder_documents fd
        JOIN documents d ON d.id = fd.document_id
        LEFT JOIN document_registry reg ON reg.document_id = d.id AND reg.is_active = true
@@ -1299,7 +1415,7 @@ export class RegistryService {
     return rows[0];
   }
 
-  // ── NEW: Get Documents by Source ────────────────────────────────────────────
+  // ── Get Documents by Source ─────────────────────────────────────────────────
 
   static async getDocumentsBySource(
     source: 'routed' | 'direct',

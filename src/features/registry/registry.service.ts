@@ -13,6 +13,8 @@ import type {
   BulkAddDocumentsResult,
   FolderRegistryEntry,
   FolderRegistryPaginationResponse,
+  DocumentFile,
+  DirectDocumentUploadResponse,
 } from './registry.types';
 import type {
   RouteFileInput,
@@ -24,6 +26,9 @@ import type {
   AddDocumentToFolderInput,
   BulkAddDocumentsInput,
   GetStationFolderDocumentsQuery,
+  DirectUploadInput,
+  BulkDirectUploadInput,
+  UpdateDocumentMetadataInput,
 } from './registry.validator';
 
 // ── SELECT fragments ──────────────────────────────────────────────────────────
@@ -41,15 +46,24 @@ const REGISTRY_SELECT = `
   reg.routed_at, reg.received_at,
   reg.received_by,
   rcv.full_name   AS received_by_name,
-  reg.is_active, reg.created_at
+  reg.is_active, reg.created_at,
+  reg.source,
+  reg.uploaded_by,
+  ub.full_name    AS uploaded_by_name,
+  reg.file_url,
+  reg.file_public_id,
+  reg.file_name,
+  reg.file_size,
+  reg.mime_type
 `;
 
 const REGISTRY_JOIN = `
   FROM document_registry reg
   JOIN documents d     ON d.id  = reg.document_id
   JOIN stations  s     ON s.id  = reg.station_id
-  JOIN users     rb    ON rb.id = reg.routed_by
+  LEFT JOIN users rb   ON rb.id = reg.routed_by
   LEFT JOIN users rcv  ON rcv.id = reg.received_by
+  LEFT JOIN users ub   ON ub.id = reg.uploaded_by
 `;
 
 const FOLDER_SELECT = `
@@ -98,8 +112,8 @@ export class RegistryService {
 
       const { rows } = await client.query(
         `INSERT INTO document_registry
-           (document_id, station_id, routed_by, priority, note, status, is_active)
-         VALUES ($1,$2,$3,$4,$5,'active', true)
+           (document_id, station_id, routed_by, priority, note, status, is_active, source)
+         VALUES ($1,$2,$3,$4,$5,'active', true, 'routed')
          RETURNING id`,
         [
           input.document_id,
@@ -120,11 +134,297 @@ export class RegistryService {
     }
   }
 
+  // ── NEW: Direct Upload Document to Station ─────────────────────────────────
+
+  static async directUpload(
+    input: DirectUploadInput,
+    uploadedBy: string,
+    fileInfo: {
+      file_url: string;
+      file_public_id: string;
+      file_name: string;
+      file_size: number;
+      mime_type: string;
+    }
+  ): Promise<DirectDocumentUploadResponse> {
+    const { title, ref_no, station_id, priority = 'normal', note } = input;
+
+    // Verify station exists and is active
+    const { rows: stationCheck } = await pool.query(
+      `SELECT id, name, type FROM stations WHERE id = $1 AND is_active = true`,
+      [station_id]
+    );
+    if (!stationCheck.length) throw new AppError(404, 'Station not found or inactive');
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Create a document record
+      const { rows: docRows } = await client.query(
+        `INSERT INTO documents (title, reference_no, format, file_url, file_public_id, is_active)
+         VALUES ($1, $2, $3, $4, $5, true)
+         RETURNING id`,
+        [
+          title,
+          ref_no ?? null,
+          fileInfo.mime_type.split('/').pop() || 'unknown',
+          fileInfo.file_url,
+          fileInfo.file_public_id,
+        ]
+      );
+
+      const documentId = docRows[0].id;
+
+      // Create registry entry with source = 'direct'
+      const { rows: registryRows } = await client.query(
+        `INSERT INTO document_registry
+           (document_id, station_id, priority, note, status, is_active, source, 
+            uploaded_by, file_url, file_public_id, file_name, file_size, mime_type, routed_at)
+         VALUES ($1, $2, $3, $4, 'active', true, 'direct', $5, $6, $7, $8, $9, $10, NOW())
+         RETURNING id`,
+        [
+          documentId,
+          station_id,
+          priority,
+          note ?? null,
+          uploadedBy,
+          fileInfo.file_url,
+          fileInfo.file_public_id,
+          fileInfo.file_name,
+          fileInfo.file_size,
+          fileInfo.mime_type,
+        ]
+      );
+
+      await client.query('COMMIT');
+
+      const entry = (await this.findById(registryRows[0].id))!;
+      
+      return {
+        entry,
+        file: {
+          file_url: fileInfo.file_url,
+          file_public_id: fileInfo.file_public_id,
+          file_name: fileInfo.file_name,
+          file_size: fileInfo.file_size,
+          mime_type: fileInfo.mime_type,
+          uploaded_at: new Date(),
+        },
+      };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  // ── NEW: Bulk Direct Upload ─────────────────────────────────────────────────
+
+  static async bulkDirectUpload(
+    input: BulkDirectUploadInput,
+    uploadedBy: string,
+    filesInfo: Array<{
+      file_url: string;
+      file_public_id: string;
+      file_name: string;
+      file_size: number;
+      mime_type: string;
+    }>
+  ): Promise<DirectDocumentUploadResponse[]> {
+    const { station_id, priority = 'normal', note } = input;
+
+    // Verify station exists and is active
+    const { rows: stationCheck } = await pool.query(
+      `SELECT id, name, type FROM stations WHERE id = $1 AND is_active = true`,
+      [station_id]
+    );
+    if (!stationCheck.length) throw new AppError(404, 'Station not found or inactive');
+
+    const results: DirectDocumentUploadResponse[] = [];
+    const client = await pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      for (const fileInfo of filesInfo) {
+        // Use filename as title if no title provided
+        const title = fileInfo.file_name.split('.').slice(0, -1).join('.') || 'Untitled';
+
+        // Create a document record
+        const { rows: docRows } = await client.query(
+          `INSERT INTO documents (title, format, file_url, file_public_id, is_active)
+           VALUES ($1, $2, $3, $4, true)
+           RETURNING id`,
+          [
+            title,
+            fileInfo.mime_type.split('/').pop() || 'unknown',
+            fileInfo.file_url,
+            fileInfo.file_public_id,
+          ]
+        );
+
+        const documentId = docRows[0].id;
+
+        // Create registry entry with source = 'direct'
+        const { rows: registryRows } = await client.query(
+          `INSERT INTO document_registry
+             (document_id, station_id, priority, note, status, is_active, source,
+              uploaded_by, file_url, file_public_id, file_name, file_size, mime_type, routed_at)
+           VALUES ($1, $2, $3, $4, 'active', true, 'direct', $5, $6, $7, $8, $9, $10, NOW())
+           RETURNING id`,
+          [
+            documentId,
+            station_id,
+            priority,
+            note ?? null,
+            uploadedBy,
+            fileInfo.file_url,
+            fileInfo.file_public_id,
+            fileInfo.file_name,
+            fileInfo.file_size,
+            fileInfo.mime_type,
+          ]
+        );
+
+        const entry = (await this.findById(registryRows[0].id))!;
+        results.push({
+          entry,
+          file: {
+            file_url: fileInfo.file_url,
+            file_public_id: fileInfo.file_public_id,
+            file_name: fileInfo.file_name,
+            file_size: fileInfo.file_size,
+            mime_type: fileInfo.mime_type,
+            uploaded_at: new Date(),
+          },
+        });
+      }
+
+      await client.query('COMMIT');
+      return results;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  // ── NEW: Upload Document to Folder ─────────────────────────────────────────
+
+  static async uploadDocumentToFolder(
+    folderId: string,
+    input: { title: string; ref_no?: string | null; priority?: string; note?: string },
+    uploadedBy: string,
+    fileInfo: {
+      file_url: string;
+      file_public_id: string;
+      file_name: string;
+      file_size: number;
+      mime_type: string;
+    }
+  ): Promise<DirectDocumentUploadResponse> {
+    const { title, ref_no, priority = 'normal', note } = input;
+
+    // Verify folder exists
+    const folder = await this.getFolderById(folderId);
+    if (!folder) {
+      throw new AppError(404, 'Folder not found');
+    }
+
+    // Get station from folder
+    const { rows: stationRows } = await pool.query(
+      `SELECT id FROM stations WHERE ref_no = $1 OR name ILIKE $2 LIMIT 1`,
+      [folder.ref_no, `%${folder.name}%`]
+    );
+
+    let stationId: string;
+    if (stationRows.length) {
+      stationId = stationRows[0].id;
+    } else {
+      // If no matching station, create a default station for this folder
+      // Or use a system station - we'll let the caller handle this
+      throw new AppError(404, 'No matching station found for this folder');
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Create document
+      const { rows: docRows } = await client.query(
+        `INSERT INTO documents (title, reference_no, format, file_url, file_public_id, is_active, folder_id)
+         VALUES ($1, $2, $3, $4, $5, true, $6)
+         RETURNING id`,
+        [
+          title,
+          ref_no ?? null,
+          fileInfo.mime_type.split('/').pop() || 'unknown',
+          fileInfo.file_url,
+          fileInfo.file_public_id,
+          folderId,
+        ]
+      );
+
+      const documentId = docRows[0].id;
+
+      // Create registry entry
+      const { rows: registryRows } = await client.query(
+        `INSERT INTO document_registry
+           (document_id, station_id, priority, note, status, is_active, source,
+            uploaded_by, file_url, file_public_id, file_name, file_size, mime_type, routed_at)
+         VALUES ($1, $2, $3, $4, 'active', true, 'direct', $5, $6, $7, $8, $9, $10, NOW())
+         RETURNING id`,
+        [
+          documentId,
+          stationId,
+          priority,
+          note ?? null,
+          uploadedBy,
+          fileInfo.file_url,
+          fileInfo.file_public_id,
+          fileInfo.file_name,
+          fileInfo.file_size,
+          fileInfo.mime_type,
+        ]
+      );
+
+      // Link to folder
+      await client.query(
+        `INSERT INTO folder_documents (folder_id, document_id)
+         VALUES ($1, $2)`,
+        [folderId, documentId]
+      );
+
+      await client.query('COMMIT');
+
+      const entry = (await this.findById(registryRows[0].id))!;
+      return {
+        entry,
+        file: {
+          file_url: fileInfo.file_url,
+          file_public_id: fileInfo.file_public_id,
+          file_name: fileInfo.file_name,
+          file_size: fileInfo.file_size,
+          mime_type: fileInfo.mime_type,
+          uploaded_at: new Date(),
+        },
+      };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
   // ── Find all (paginated) ──────────────────────────────────────────────────────
 
   static async findAll(filters: RegistryFilters): Promise<RegistryPaginationResponse> {
     const {
-      document_id, station_id, status, priority,
+      document_id, station_id, status, priority, source,
       page = 1, limit = 20,
       sort_by = 'routed_at', sort_order = 'DESC',
     } = filters;
@@ -141,6 +441,7 @@ export class RegistryService {
     if (station_id)  { conditions.push(`reg.station_id = $${p}`);  values.push(station_id);  p++; }
     if (status)       { conditions.push(`reg.status = $${p}`);     values.push(status);      p++; }
     if (priority)     { conditions.push(`reg.priority = $${p}`);   values.push(priority);    p++; }
+    if (source)       { conditions.push(`reg.source = $${p}`);     values.push(source);      p++; }
 
     const where = `WHERE ${conditions.join(' AND ')}`;
 
@@ -240,7 +541,9 @@ export class RegistryService {
   static async getStationFileCounts(): Promise<StationWithFileCount[]> {
     const { rows } = await pool.query(
       `SELECT s.id, s.ref_no, s.name, s.type, s.location, s.is_active,
-              COUNT(reg.id) FILTER (WHERE reg.is_active = true) AS file_count
+              COUNT(reg.id) FILTER (WHERE reg.is_active = true) AS file_count,
+              COUNT(reg.id) FILTER (WHERE reg.is_active = true AND reg.source = 'routed') AS routed_count,
+              COUNT(reg.id) FILTER (WHERE reg.is_active = true AND reg.source = 'direct') AS direct_count
        FROM stations s
        LEFT JOIN document_registry reg ON reg.station_id = s.id
        GROUP BY s.id, s.ref_no, s.name, s.type, s.location, s.is_active
@@ -249,29 +552,155 @@ export class RegistryService {
     return rows.map((r) => ({ 
       ...r, 
       file_count: parseInt(r.file_count, 10),
+      routed_count: parseInt(r.routed_count || '0', 10),
+      direct_count: parseInt(r.direct_count || '0', 10),
       ref_no: r.ref_no || null 
     }));
   }
 
+  // ── NEW: Update Document Metadata ───────────────────────────────────────────
+
+  static async updateDocumentMetadata(
+    documentId: string,
+    input: UpdateDocumentMetadataInput,
+    userId: string
+  ): Promise<RegistryEntry> {
+    // Find the active registry entry for this document
+    const activeEntry = await this.getActiveForDocument(documentId);
+    if (!activeEntry) {
+      throw new AppError(404, 'Active registry entry not found for this document');
+    }
+
+    // Update document
+    const docUpdates: string[] = [];
+    const docValues: unknown[] = [];
+    let p = 1;
+
+    if (input.title !== undefined) {
+      docUpdates.push(`title = $${p}`);
+      docValues.push(input.title);
+      p++;
+    }
+    if (input.ref_no !== undefined) {
+      docUpdates.push(`reference_no = $${p}`);
+      docValues.push(input.ref_no);
+      p++;
+    }
+
+    if (docUpdates.length > 0) {
+      docValues.push(documentId);
+      await pool.query(
+        `UPDATE documents SET ${docUpdates.join(', ')} WHERE id = $${p}`,
+        docValues
+      );
+    }
+
+    // Update registry entry
+    const regUpdates: string[] = [];
+    const regValues: unknown[] = [];
+    let q = 1;
+
+    if (input.priority !== undefined) {
+      regUpdates.push(`priority = $${q}`);
+      regValues.push(input.priority);
+      q++;
+    }
+    if (input.note !== undefined) {
+      regUpdates.push(`note = $${q}`);
+      regValues.push(input.note);
+      q++;
+    }
+
+    if (regUpdates.length > 0) {
+      regValues.push(activeEntry.id);
+      await pool.query(
+        `UPDATE document_registry SET ${regUpdates.join(', ')} WHERE id = $${q}`,
+        regValues
+      );
+    }
+
+    return (await this.findById(activeEntry.id))!;
+  }
+
+  // ── NEW: Delete Document ────────────────────────────────────────────────────
+
+  static async deleteDocument(
+    documentId: string,
+    deleteFromStorage: boolean = false
+  ): Promise<{ deleted: boolean; filePublicIds?: string[] }> {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Get all registry entries for this document
+      const { rows: entries } = await client.query(
+        `SELECT id, file_public_id FROM document_registry WHERE document_id = $1`,
+        [documentId]
+      );
+
+      // Get document
+      const { rows: docs } = await client.query(
+        `SELECT id, file_public_id FROM documents WHERE id = $1`,
+        [documentId]
+      );
+
+      const filePublicIds: string[] = [];
+
+      // Collect all file public IDs
+      for (const entry of entries) {
+        if (entry.file_public_id) {
+          filePublicIds.push(entry.file_public_id);
+        }
+      }
+      for (const doc of docs) {
+        if (doc.file_public_id) {
+          filePublicIds.push(doc.file_public_id);
+        }
+      }
+
+      // Delete registry entries
+      await client.query(
+        `DELETE FROM document_registry WHERE document_id = $1`,
+        [documentId]
+      );
+
+      // Delete document
+      await client.query(
+        `DELETE FROM documents WHERE id = $1`,
+        [documentId]
+      );
+
+      await client.query('COMMIT');
+
+      return {
+        deleted: true,
+        filePublicIds: deleteFromStorage ? filePublicIds : undefined,
+      };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
   // ── Get Folder Documents for a Station ─────────────────────────────────────
 
-// ── Get Folder Documents for a Station ─────────────────────────────────────
-
-static async getStationFolderDocuments(
+  static async getStationFolderDocuments(
     stationId: string,
-    filters: { page?: number; limit?: number } = {}
-): Promise<{ data: any[]; total: number; page: number; limit: number; totalPages: number }> {
-    const { page = 1, limit = 20 } = filters;
+    filters: { page?: number; limit?: number; source?: string } = {}
+  ): Promise<{ data: any[]; total: number; page: number; limit: number; totalPages: number }> {
+    const { page = 1, limit = 20, source } = filters;
     const offset = (page - 1) * limit;
 
     // First, find the folder that belongs to this station
     const { rows: station } = await pool.query(
-        `SELECT id, ref_no, name FROM stations WHERE id = $1 AND is_active = true`,
-        [stationId]
+      `SELECT id, ref_no, name FROM stations WHERE id = $1 AND is_active = true`,
+      [stationId]
     );
 
     if (!station.length) {
-        throw new AppError(404, 'Station not found');
+      throw new AppError(404, 'Station not found');
     }
 
     // Find folder that matches this station (by ref_no or name)
@@ -279,26 +708,26 @@ static async getStationFolderDocuments(
     const stationName = station[0].name;
 
     let folderQuery = `
-        SELECT id, ref_no, name FROM rhc_folders 
-        WHERE is_active = true 
+      SELECT id, ref_no, name FROM folders 
+      WHERE status = 'active'
     `;
     const folderParams: unknown[] = [];
     let p = 1;
 
     if (stationRef) {
-        folderQuery += ` AND (ref_no = $${p} OR ref_no ILIKE $${p})`;
-        folderParams.push(stationRef);
-        p++;
+      folderQuery += ` AND (ref_no = $${p} OR ref_no ILIKE $${p})`;
+      folderParams.push(stationRef);
+      p++;
     }
 
     if (stationName) {
-        if (stationRef) {
-            folderQuery += ` OR name ILIKE $${p}`;
-        } else {
-            folderQuery += ` AND name ILIKE $${p}`;
-        }
-        folderParams.push(`%${stationName}%`);
-        p++;
+      if (stationRef) {
+        folderQuery += ` OR name ILIKE $${p}`;
+      } else {
+        folderQuery += ` AND name ILIKE $${p}`;
+      }
+      folderParams.push(`%${stationName}%`);
+      p++;
     }
 
     folderQuery += ` LIMIT 1`;
@@ -306,69 +735,92 @@ static async getStationFolderDocuments(
     const { rows: folders } = await pool.query(folderQuery, folderParams);
 
     if (!folders.length) {
-        return {
-            data: [],
-            total: 0,
-            page,
-            limit,
-            totalPages: 0,
-        };
+      return {
+        data: [],
+        total: 0,
+        page,
+        limit,
+        totalPages: 0,
+      };
     }
 
     const folder = folders[0];
 
-    // Now get documents from this folder
+    // Build source filter for documents
+    let sourceFilter = '';
+    const queryParams: unknown[] = [folder.id];
+    let q = 2;
+
+    if (source) {
+      sourceFilter = ` AND reg.source = $${q}`;
+      queryParams.push(source);
+      q++;
+    }
+
+    // Now get documents from this folder with source info
     const countQuery = `
-        SELECT COUNT(*) as total
-        FROM documents d
-        WHERE d.folder_id = $1 AND d.is_active = true
+      SELECT COUNT(DISTINCT d.id) as total
+      FROM documents d
+      LEFT JOIN document_registry reg ON reg.document_id = d.id AND reg.is_active = true
+      WHERE d.folder_id = $1 AND d.is_active = true
+      ${sourceFilter}
     `;
 
-    const countResult = await pool.query(countQuery, [folder.id]);
+    const countResult = await pool.query(countQuery, queryParams);
     const total = parseInt(countResult.rows[0]?.total ?? '0', 10);
 
     const dataQuery = `
-        SELECT 
-            d.id AS id,
-            d.id AS document_id,
-            d.title AS document_title,
-            d.reference_no AS document_ref_no,
-            $1::uuid AS station_id,
-            $2::text AS station_name,
-            s.type AS station_type,
-            $3::uuid AS folder_id,
-            $4::text AS folder_ref_no,
-            $5::text AS folder_name,
-            true AS is_folder_document,
-            d.created_at
-        FROM documents d
-        CROSS JOIN stations s
-        WHERE d.folder_id = $1 
-            AND d.is_active = true
-            AND s.id = $6
-        ORDER BY d.created_at DESC
-        LIMIT $7 OFFSET $8
+      SELECT 
+        d.id AS id,
+        d.id AS document_id,
+        d.title AS document_title,
+        d.reference_no AS document_ref_no,
+        d.file_url,
+        d.file_public_id,
+        $2::uuid AS station_id,
+        $3::text AS station_name,
+        s.type AS station_type,
+        $4::uuid AS folder_id,
+        $5::text AS folder_ref_no,
+        $6::text AS folder_name,
+        true AS is_folder_document,
+        d.created_at,
+        reg.source,
+        reg.file_name,
+        reg.file_size,
+        reg.mime_type
+      FROM documents d
+      CROSS JOIN stations s
+      LEFT JOIN document_registry reg ON reg.document_id = d.id AND reg.is_active = true
+      WHERE d.folder_id = $1 
+        AND d.is_active = true
+        AND s.id = $7
+        ${sourceFilter}
+      ORDER BY d.created_at DESC
+      LIMIT $8 OFFSET $9
     `;
 
     const { rows: documents } = await pool.query(dataQuery, [
-        folder.id,
-        station[0].name,
-        folder.id,
-        folder.ref_no,
-        folder.name,
-        stationId,
-        limit,
-        offset,
+      folder.id,
+      station[0].id,
+      station[0].name,
+      folder.id,
+      folder.ref_no,
+      folder.name,
+      stationId,
+      limit,
+      offset,
+      ...(source ? [source] : []),
     ]);
 
     return {
-        data: documents,
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
+      data: documents,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
     };
-}
+  }
 
   // ═══════════════════════════════════════════════════════════════════════════
   //  FOLDER/COURT RECORD OPERATIONS
@@ -669,9 +1121,14 @@ static async getStationFolderDocuments(
       `SELECT 
          d.id, d.title, d.reference_no as ref, d.format, 
          d.file_url, d.created_at, d.file_public_id,
-         fd.added_at
+         fd.added_at,
+         reg.file_name,
+         reg.file_size,
+         reg.mime_type,
+         reg.source
        FROM folder_documents fd
        JOIN documents d ON d.id = fd.document_id
+       LEFT JOIN document_registry reg ON reg.document_id = d.id AND reg.is_active = true
        WHERE fd.folder_id = $1
        ORDER BY fd.added_at DESC`,
       [folderId]
@@ -706,6 +1163,13 @@ static async getStationFolderDocuments(
       throw new AppError(409, 'Document already in this folder');
     }
 
+    // Update document's folder_id
+    await pool.query(
+      `UPDATE documents SET folder_id = $1 WHERE id = $2`,
+      [folderId, documentId]
+    );
+
+    // Add to folder_documents junction
     await pool.query(
       `INSERT INTO folder_documents (folder_id, document_id)
        VALUES ($1, $2)`,
@@ -725,6 +1189,12 @@ static async getStationFolderDocuments(
     if (!rows.length) {
       throw new AppError(404, 'Document not found in this folder');
     }
+
+    // Update document's folder_id to null
+    await pool.query(
+      `UPDATE documents SET folder_id = NULL WHERE id = $1`,
+      [documentId]
+    );
   }
 
   // ── Get Folder Statistics ───────────────────────────────────────────────────
@@ -827,5 +1297,30 @@ static async getStationFolderDocuments(
     );
 
     return rows[0];
+  }
+
+  // ── NEW: Get Documents by Source ────────────────────────────────────────────
+
+  static async getDocumentsBySource(
+    source: 'routed' | 'direct',
+    stationId?: string
+  ): Promise<RegistryEntry[]> {
+    let query = `
+      SELECT ${REGISTRY_SELECT} ${REGISTRY_JOIN}
+      WHERE reg.source = $1 AND reg.is_active = true
+    `;
+    const params: unknown[] = [source];
+    let p = 2;
+
+    if (stationId) {
+      query += ` AND reg.station_id = $${p}`;
+      params.push(stationId);
+      p++;
+    }
+
+    query += ` ORDER BY reg.routed_at DESC`;
+
+    const { rows } = await pool.query(query, params);
+    return rows;
   }
 }

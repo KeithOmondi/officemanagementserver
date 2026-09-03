@@ -11,6 +11,11 @@ import {
   reportFiltersSchema,
   getQuestionsSchema,
   generatePdfSchema,
+  createSensitizationSchema,
+  updateSensitizationSchema,
+  getSensitizationSchema,
+  listSensitizationsSchema,
+  generateSensitizationPdfSchema,
 } from './principal-registry-report.validator';
 import { ZodError } from 'zod';
 
@@ -298,5 +303,198 @@ export const principalRegistryReportController = {
     }
     
     return sendSuccess(res, null, 'Weekly report deleted successfully');
+  }),
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  SENSITIZATION CONTROLLERS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // ── Create Sensitization ────────────────────────────────────────────────────
+
+  createSensitization: asyncHandler(async (req: Request, res: Response) => {
+    const result = createSensitizationSchema.safeParse({ body: req.body });
+    if (!result.success) {
+      throw new AppError(400, formatZodError(result.error));
+    }
+
+    const sensitization = await PrincipalRegistryReportService.createSensitization(
+      result.data.body,
+      req.user!.id
+    );
+
+    return sendSuccess(res, sensitization, 'Sensitization created successfully', 201);
+  }),
+
+  // ── Get All Sensitizations ──────────────────────────────────────────────────
+
+// principal-registry-report.controller.ts
+
+// ── Get All Sensitizations ──────────────────────────────────────────────────
+
+getAllSensitizations: asyncHandler(async (req: Request, res: Response) => {
+  const result = listSensitizationsSchema.safeParse({ query: req.query });
+  if (!result.success) {
+    throw new AppError(400, formatZodError(result.error));
+  }
+
+  const query = result.data.query;
+  const sensitizations = await PrincipalRegistryReportService.findAllSensitizations({
+    status: query.status,
+    location: query.location,
+    page: query.page,
+    pageSize: query.pageSize,
+  });
+
+  return sendSuccess(res, sensitizations, 'Sensitizations retrieved successfully');
+}),
+
+  // ── Get Sensitization by ID ────────────────────────────────────────────────
+
+  getSensitizationById: asyncHandler(async (req: Request, res: Response) => {
+    const result = getSensitizationSchema.safeParse({ params: req.params });
+    if (!result.success) {
+      throw new AppError(400, formatZodError(result.error));
+    }
+
+    const sensitization = await PrincipalRegistryReportService.findSensitizationById(
+      result.data.params.id
+    );
+
+    if (!sensitization) {
+      throw new AppError(404, 'Sensitization not found');
+    }
+
+    return sendSuccess(res, sensitization, 'Sensitization retrieved successfully');
+  }),
+
+  // ── Update Sensitization ────────────────────────────────────────────────────
+
+  updateSensitization: asyncHandler(async (req: Request, res: Response) => {
+    const result = updateSensitizationSchema.safeParse({ params: req.params, body: req.body });
+    if (!result.success) {
+      throw new AppError(400, formatZodError(result.error));
+    }
+
+    try {
+      const sensitization = await PrincipalRegistryReportService.updateSensitization(
+        result.data.params.id,
+        result.data.body
+      );
+
+      if (!sensitization) {
+        throw new AppError(404, 'Sensitization not found');
+      }
+
+      return sendSuccess(res, sensitization, 'Sensitization updated successfully');
+    } catch (error: any) {
+      if (error.message?.includes('Cannot update')) {
+        throw new AppError(400, error.message);
+      }
+      throw error;
+    }
+  }),
+
+  // ── Delete Sensitization ────────────────────────────────────────────────────
+
+  deleteSensitization: asyncHandler(async (req: Request, res: Response) => {
+    const result = getSensitizationSchema.safeParse({ params: req.params });
+    if (!result.success) {
+      throw new AppError(400, formatZodError(result.error));
+    }
+
+    try {
+      const deleted = await PrincipalRegistryReportService.deleteSensitization(
+        result.data.params.id
+      );
+
+      if (!deleted) {
+        throw new AppError(404, 'Sensitization not found');
+      }
+
+      return sendSuccess(res, null, 'Sensitization deleted successfully');
+    } catch (error: any) {
+      if (error.message?.includes('Cannot delete')) {
+        throw new AppError(400, error.message);
+      }
+      throw error;
+    }
+  }),
+
+  // ── Submit Sensitization ────────────────────────────────────────────────────
+
+  submitSensitization: asyncHandler(async (req: Request, res: Response) => {
+    const result = getSensitizationSchema.safeParse({ params: req.params });
+    if (!result.success) {
+      throw new AppError(400, formatZodError(result.error));
+    }
+
+    try {
+      const sensitization = await PrincipalRegistryReportService.submitSensitization(
+        result.data.params.id
+      );
+
+      if (!sensitization) {
+        throw new AppError(404, 'Sensitization not found');
+      }
+
+      return sendSuccess(res, sensitization, 'Sensitization submitted successfully');
+    } catch (error: any) {
+      if (error.message?.includes('already submitted')) {
+        throw new AppError(400, error.message);
+      }
+      throw error;
+    }
+  }),
+
+  // ── Approve Sensitization ───────────────────────────────────────────────────
+
+  approveSensitization: asyncHandler(async (req: Request, res: Response) => {
+    const result = getSensitizationSchema.safeParse({ params: req.params });
+    if (!result.success) {
+      throw new AppError(400, formatZodError(result.error));
+    }
+
+    try {
+      const sensitization = await PrincipalRegistryReportService.approveSensitization(
+        result.data.params.id
+      );
+
+      if (!sensitization) {
+        throw new AppError(404, 'Sensitization not found');
+      }
+
+      return sendSuccess(res, sensitization, 'Sensitization approved successfully');
+    } catch (error: any) {
+      if (error.message?.includes('Only submitted')) {
+        throw new AppError(400, error.message);
+      }
+      throw error;
+    }
+  }),
+
+  // ── Reject Sensitization ────────────────────────────────────────────────────
+
+  rejectSensitization: asyncHandler(async (req: Request, res: Response) => {
+    const result = getSensitizationSchema.safeParse({ params: req.params });
+    if (!result.success) {
+      throw new AppError(400, formatZodError(result.error));
+    }
+
+    try {
+      const sensitization = await PrincipalRegistryReportService.rejectSensitization(
+        result.data.params.id
+      );
+
+      if (!sensitization) {
+        throw new AppError(404, 'Sensitization not found');
+      }
+
+      return sendSuccess(res, sensitization, 'Sensitization rejected successfully');
+    } catch (error: any) {
+      if (error.message?.includes('Only submitted')) {
+        throw new AppError(400, error.message);
+      }
+      throw error;
+    }
   }),
 };

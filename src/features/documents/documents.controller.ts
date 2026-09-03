@@ -1200,4 +1200,55 @@ export const documentController = {
 
     return sendSuccess(res, updated, 'Document file updated successfully');
   }),
+
+  // ─── Sign without OTP (Department Head) ──────────────────────────────────────
+
+signNoOtp: asyncHandler(async (req: Request, res: Response) => {
+  const paramsResult = documentIdSchema.safeParse({ params: req.params });
+  if (!paramsResult.success) {
+    throw new AppError(400, paramsResult.error.issues[0]?.message ?? 'Invalid ID');
+  }
+
+  // Check if user has permission
+  if (req.user!.role !== 'dept_head' && req.user!.role !== 'super_admin') {
+    throw new AppError(403, 'Only Department Heads and Super Administrators can sign documents without OTP');
+  }
+
+  const doc = await DocumentService.findById(paramsResult.data.params.id);
+  if (!doc) throw new AppError(404, 'Document not found');
+
+  // Check if document is already signed
+  if (doc.is_signed) throw new AppError(409, 'Document is already signed');
+
+  // Get position from request body (optional)
+  const positionX = req.body?.position_x as number | undefined;
+  const positionY = req.body?.position_y as number | undefined;
+  const positionWidth = req.body?.position_width as number | undefined;
+  const positionHeight = req.body?.position_height as number | undefined;
+
+  const position = (positionX !== undefined && positionY !== undefined)
+    ? {
+        x: positionX,
+        y: positionY,
+        width: positionWidth || 200,
+        height: positionHeight || 80,
+      }
+    : undefined;
+
+  // Sign without OTP
+  const signedDoc = await DocumentService.signNoOtp(
+    paramsResult.data.params.id,
+    req.user!.id,
+    position
+  );
+
+  safeDocumentUpdated(req, signedDoc);
+  safeEmitToRoom(req, `document:${paramsResult.data.params.id}`, 'document_signed', {
+    document_id: signedDoc.id,
+    signed_by: req.user!.full_name,
+    signed_at: new Date().toISOString(),
+  });
+
+  return sendSuccess(res, signedDoc, 'Document signed successfully.');
+}),
 };

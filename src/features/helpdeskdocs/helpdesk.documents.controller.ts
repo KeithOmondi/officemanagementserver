@@ -19,7 +19,7 @@ import type {
     SendBackToRequesterBody,
     ResubmitDocumentBody,
 } from './helpdesk.documents.schema';
-import type { CreateHelpdeskDocumentInput } from './helpdesk.documents.types';
+import type { CreateHelpdeskDocumentInput, DocumentDepartment } from './helpdesk.documents.types';
 import { sendSuccess } from '../../utils/response';
 import { AppError } from '../../utils/response';
 
@@ -31,7 +31,9 @@ const VALID_ENTITY_TYPES = [
     'generalRequest', 'securityRequest',
     'visa', 'protocol', 'club', 'utility_memo', 
     'consolidated_utility_memo', 'consolidated_fuel_memo',
-    'aide', 'sentry', 'conference'
+    'aide', 'sentry', 'conference',
+    // ─── OTHER DEPARTMENT ENTITY TYPES ──────────────────────────────────────
+    'principalregistry', 'procurement', 'sensitization' // ← ADDED: sensitization
 ] as const;
 
 const VALID_FORMATS = ['pdf', 'docx', 'xlsx'] as const;
@@ -62,6 +64,10 @@ const VALID_CONFERENCE_TYPES = [
 const VALID_CONFERENCE_STATUSES = [
     'draft', 'pending', 'approved', 'rejected', 'completed', 'cancelled'
 ] as const;
+
+// ─── Department constants ─────────────────────────────────────────────────────
+
+const VALID_DEPARTMENTS = ['helpdesk', 'principalregistry', 'procurement'] as const;
 
 // ─── Helper Functions ─────────────────────────────────────────────────────────
 
@@ -433,7 +439,7 @@ export class HelpdeskDocumentsController {
             const entity_type = getQueryEnum(req, 'entity_type', VALID_ENTITY_TYPES);
             const entity_id = getQueryParam(req, 'entity_id');
             const format = getQueryEnum(req, 'format', VALID_FORMATS);
-            const status = getQueryEnum(req, 'status', VALID_STATUSES);  // ← Now includes 'ready_to_send'
+            const status = getQueryEnum(req, 'status', VALID_STATUSES);
             const search = getQueryParam(req, 'search');
             const limit = getQueryNumber(req, 'limit');
             const offset = getQueryNumber(req, 'offset');
@@ -453,6 +459,16 @@ export class HelpdeskDocumentsController {
             const pending_internal_approval = getQueryBoolean(req, 'pending_internal_approval');
             const ready_to_send_back = getQueryBoolean(req, 'ready_to_send_back');
             const my_requester_documents = getQueryBoolean(req, 'my_requester_documents');
+            
+            // ─── Department filters ──────────────────────────────────────────────
+            const department = getQueryEnum(req, 'department', VALID_DEPARTMENTS);
+            const exclude_departments = req.query.exclude_departments 
+                ? (Array.isArray(req.query.exclude_departments) 
+                    ? req.query.exclude_departments 
+                    : [req.query.exclude_departments]
+                  ).filter((d): d is string => typeof d === 'string' && VALID_DEPARTMENTS.includes(d as any)) as DocumentDepartment[]
+                : undefined;
+            const include_helpdesk = getQueryBoolean(req, 'include_helpdesk');
             
             const officer_rank = getQueryParam(req, 'officer_rank');
             const officer_name = getQueryParam(req, 'officer_name');
@@ -498,6 +514,10 @@ export class HelpdeskDocumentsController {
                 pending_internal_approval,
                 ready_to_send_back,
                 my_requester_documents,
+                // ─── Department filters ────────────────────────────────────────
+                department,
+                exclude_departments,
+                include_helpdesk,
                 officer_rank,
                 officer_name,
                 employment_number,
@@ -568,11 +588,13 @@ export class HelpdeskDocumentsController {
     static async getStats(req: Request, res: Response, next: NextFunction) {
         try {
             const entityType = getQueryParam(req, 'entityType') as any;
+            const department = getQueryEnum(req, 'department', VALID_DEPARTMENTS);
             const dateFrom = getQueryParam(req, 'date_from');
             const dateTo = getQueryParam(req, 'date_to');
 
             const stats = await HelpdeskDocumentsService.getStats({
                 entity_type: entityType,
+                department,
                 date_from: dateFrom,
                 date_to: dateTo,
             });
@@ -588,9 +610,11 @@ export class HelpdeskDocumentsController {
     static async getSummary(req: Request, res: Response, next: NextFunction) {
         try {
             const entityType = getQueryParam(req, 'entityType') as any;
+            const department = getQueryEnum(req, 'department', VALID_DEPARTMENTS);
 
             const summary = await HelpdeskDocumentsService.getSummary({
                 entity_type: entityType,
+                department,
             });
 
             return sendSuccess(res, summary, 'Document summary retrieved.');
@@ -874,6 +898,7 @@ static async internalApprove(req: Request, res: Response, next: NextFunction) {
 static async getPendingInternalApprovals(req: Request, res: Response, next: NextFunction) {
     try {
         const entity_type = getQueryEnum(req, 'entity_type', VALID_ENTITY_TYPES);
+        const department = getQueryEnum(req, 'department', VALID_DEPARTMENTS);
         const internal_approval_status = getQueryEnum(req, 'internal_approval_status', VALID_INTERNAL_STATUSES);
         const search = getQueryParam(req, 'search');
         const limit = getQueryNumber(req, 'limit');
@@ -881,6 +906,7 @@ static async getPendingInternalApprovals(req: Request, res: Response, next: Next
 
         const docs = await HelpdeskDocumentsService.getPendingInternalApprovals({
             entity_type,
+            department,
             internal_approval_status,
             search,
             limit,
@@ -903,6 +929,7 @@ static async getPendingInternalApprovals(req: Request, res: Response, next: Next
 
         const summary = await HelpdeskDocumentsService.getPendingInternalApprovalsSummary({
             entity_type,
+            department,
         });
 
         return sendSuccess(res, {
@@ -921,9 +948,11 @@ static async getPendingInternalApprovals(req: Request, res: Response, next: Next
     static async getPendingInternalSummary(req: Request, res: Response, next: NextFunction) {
         try {
             const entity_type = getQueryParam(req, 'entity_type') as any;
+            const department = getQueryEnum(req, 'department', VALID_DEPARTMENTS);
 
             const summary = await HelpdeskDocumentsService.getPendingInternalApprovalsSummary({
                 entity_type,
+                department,
             });
 
             return sendSuccess(res, summary, 'Pending internal approvals summary retrieved.');
@@ -946,6 +975,7 @@ static async getPendingInternalApprovals(req: Request, res: Response, next: Next
 
             const requester_status = getQueryEnum(req, 'requester_status', VALID_REQUESTER_STATUSES);
             const entity_type = getQueryEnum(req, 'entity_type', VALID_ENTITY_TYPES);
+            const department = getQueryEnum(req, 'department', VALID_DEPARTMENTS);
             const search = getQueryParam(req, 'search');
             const limit = getQueryNumber(req, 'limit');
             const offset = getQueryNumber(req, 'offset');
@@ -953,6 +983,7 @@ static async getPendingInternalApprovals(req: Request, res: Response, next: Next
             const docs = await HelpdeskDocumentsService.getRequesterDocuments(userId, {
                 requester_status,
                 entity_type,
+                department,
                 search,
                 limit,
                 offset,
@@ -961,12 +992,17 @@ static async getPendingInternalApprovals(req: Request, res: Response, next: Next
             const allDocs = await HelpdeskDocumentsService.getRequesterDocuments(userId, {
                 requester_status,
                 entity_type,
+                department,
             });
 
             const summary = {
                 total: allDocs.length,
                 by_status: allDocs.reduce((acc, doc) => {
                     acc[doc.status] = (acc[doc.status] || 0) + 1;
+                    return acc;
+                }, {} as Record<string, number>),
+                by_department: allDocs.reduce((acc, doc) => {
+                    acc[doc.department] = (acc[doc.department] || 0) + 1;
                     return acc;
                 }, {} as Record<string, number>),
                 can_resubmit: allDocs.filter(doc => doc.can_resubmit).length,

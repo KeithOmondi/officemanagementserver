@@ -3853,4 +3853,197 @@ static async completeBringUp(
 
     return (await this.findById(documentId))!;
   }
+
+
+  // ─── Sign Document without OTP (for Department Heads) ──────────────────────────
+
+static async signNoOtp(
+  id: string, 
+  signedBy: string,
+  position?: { x: number; y: number; width: number; height: number }
+): Promise<Document> {
+  const doc = await this.findById(id);
+  if (!doc) throw new AppError(404, 'Document not found');
+  if (doc.is_signed) throw new AppError(409, 'Document is already signed');
+
+  // Get the user's signature
+  const { rows: userRows } = await pool.query(
+    `SELECT full_name, signature_url FROM users 
+     WHERE id = $1 AND is_active = true`,
+    [signedBy]
+  );
+  const signer = userRows[0];
+  
+  if (!signer?.signature_url) {
+    throw new AppError(400, 'No signature found. Please upload your signature first.');
+  }
+
+  const signatoryName = doc.signature_name || signer.full_name;
+
+  const isTemplatedDocument = doc.type === 'memo' || doc.type === 'letter' || doc.type === 'certificate';
+
+  const signaturePosition = position || (
+    (!isTemplatedDocument && doc.signature_position_x !== null && doc.signature_position_x !== undefined)
+    ? {
+        x: doc.signature_position_x,
+        y: doc.signature_position_y || 0,
+        width: doc.signature_position_width || 200,
+        height: doc.signature_position_height || 80,
+      }
+    : null
+  );
+
+  const isCertificate = doc.type === 'certificate';
+  const certificateAnchorMaxHeight = 35;
+
+  // ─── Handle HTML body (no file) ──────────────────────────────────────────
+  if (doc.body && !doc.file_url) {
+    const signedBody = embedSignatureIntoHTML(
+      doc.body,
+      signer.signature_url,
+      signatoryName,
+      isCertificate
+    );
+
+    await pool.query(
+      `UPDATE documents
+       SET body = $1, 
+           is_signed = true, 
+           signed_by = $2, 
+           signed_by_name = $3,
+           signed_at = NOW(), 
+           status = 'ready_to_release',
+           updated_at = NOW()
+       WHERE id = $4`,
+      [signedBody, signedBy, signer.full_name, id]
+    );
+
+    await this.logFlow(
+      pool,
+      id,
+      'signed',
+      signedBy,
+      null,
+      'Document signed (no OTP) by Department Head. Ready for release.'
+    );
+
+    return (await this.findById(id))!;
+  }
+
+  // ─── Handle PDF file ──────────────────────────────────────────────────────
+  if (doc.file_url) {
+    if (doc.mime_type !== 'application/pdf') {
+      // Non-PDF files - just mark as signed
+      await pool.query(
+        `UPDATE documents
+         SET is_signed = true, 
+             signed_by = $1, 
+             signed_by_name = $2,
+             signed_at = NOW(), 
+             status = 'ready_to_release',
+             updated_at = NOW()
+         WHERE id = $3`,
+        [signedBy, signer.full_name, id]
+      );
+
+      await this.logFlow(
+        pool,
+        id,
+        'signed',
+        signedBy,
+        null,
+        'Document signed (no OTP) by Department Head. Ready for release.'
+      );
+
+      return (await this.findById(id))!;
+    }
+
+    // ─── PDF signing ──────────────────────────────────────────────────────
+    try {
+      const response = await axios.get<ArrayBuffer>(doc.file_url, { responseType: 'arraybuffer' });
+      const originalPdf = Buffer.from(response.data);
+
+      const signedPdf = await embedSignatureIntoPDF(
+        originalPdf,
+        signer.signature_url,
+        signaturePosition,
+        signatoryName,
+        isCertificate,
+        { anchorMaxHeight: certificateAnchorMaxHeight }
+      );
+
+      // Delete old file
+      if (doc.file_public_id) {
+        await deleteFromCloudinary(doc.file_public_id).catch(console.error);
+      }
+
+      const multerFile: Express.Multer.File = {
+        buffer: signedPdf,
+        mimetype: 'application/pdf',
+        originalname: doc.original_name ?? 'signed-document.pdf',
+        size: signedPdf.length,
+        fieldname: 'file',
+        encoding: '7bit',
+        stream: null as any,
+        destination: '',
+        filename: '',
+        path: '',
+      };
+      const uploaded = await uploadToCloudinary(multerFile, 'registrar/documents');
+
+      await pool.query(
+        `UPDATE documents
+         SET file_url = $1, 
+             file_public_id = $2, 
+             file_size_bytes = $3,
+             is_signed = true, 
+             signed_by = $4, 
+             signed_by_name = $5,
+             signed_at = NOW(), 
+             status = 'ready_to_release',
+             updated_at = NOW()
+         WHERE id = $6`,
+        [uploaded.secure_url, uploaded.public_id, signedPdf.length, signedBy, signer.full_name, id]
+      );
+
+      await this.logFlow(
+        pool,
+        id,
+        'signed',
+        signedBy,
+        null,
+        'Document signed (no OTP) by Department Head. Ready for release.'
+      );
+
+      return (await this.findById(id))!;
+    } catch (error) {
+      console.error('[SignNoOtp] Error signing PDF:', error);
+      throw new AppError(500, 'Failed to sign PDF document');
+    }
+  }
+
+  // ─── No body and no file ─────────────────────────────────────────────────
+  await pool.query(
+    `UPDATE documents
+     SET is_signed = true, 
+         signed_by = $1, 
+         signed_by_name = $2,
+         signed_at = NOW(), 
+         status = 'ready_to_release',
+         updated_at = NOW()
+     WHERE id = $3`,
+    [signedBy, signer.full_name, id]
+  );
+
+  await this.logFlow(
+    pool,
+    id,
+    'signed',
+    signedBy,
+    null,
+    'Document signed (no OTP) by Department Head. Ready for release.'
+  );
+
+  return (await this.findById(id))!;
+}
 }

@@ -1,4 +1,4 @@
-// src/features/helpdesk/helpdesk.documents.types.ts
+// helpdesk-documents.types.ts
 
 export type DocumentFormat = 'pdf' | 'docx' | 'xlsx';
 
@@ -20,7 +20,11 @@ export type DocumentEntityType =
     | 'consolidated_fuel_memo'     // Consolidated memo covering fuel only
     | 'aide'             // Aide request documents
     | 'sentry'           // Sentry request documents
-    | 'conference';      // Conference request documents
+    | 'conference'       // Conference request documents
+    // ─── OTHER DEPARTMENT ENTITY TYPES ──────────────────────────────────────
+    | 'principalregistry' // Principal Registry documents
+    | 'procurement'      // Procurement department documents
+    | 'sensitization';   // Sensitization documents (Principal Registry)
 
 // ─── Document Status ──────────────────────────────────────────────────────────
 // These are the main statuses that determine where a document appears
@@ -56,6 +60,16 @@ export type ConferenceType =
 // ─── Stamp Types ──────────────────────────────────────────────────────────────
 
 export type StampType = 'approved' | 'received' | 'official';
+
+// ─── Department Types ─────────────────────────────────────────────────────────
+
+/**
+ * Department categories for access control
+ */
+export type DocumentDepartment = 
+    | 'helpdesk'
+    | 'principalregistry'
+    | 'procurement';
 
 // ─── Two-Step Approval Status Types ──────────────────────────────────────────
 
@@ -151,6 +165,9 @@ export interface HelpdeskDocument {
     // Additional fields for better tracking
     request_type?: string;      // For general requests - Driver, Bodyguard, etc.
     judge_name?: string;        // Associated judge name
+
+    // ─── Department Field ────────────────────────────────────────────────────
+    department: DocumentDepartment; // Derived from entity_type
 
     // ─── Two-Step Approval Workflow Fields ────────────────────────────────────
     // Internal tracking (super admin only)
@@ -492,6 +509,11 @@ export interface HelpdeskDocumentFilters {
     date_from?: string;
     date_to?: string;
     
+    // ─── Department Filters ──────────────────────────────────────────────────
+    department?: DocumentDepartment;
+    exclude_departments?: DocumentDepartment[];
+    include_helpdesk?: boolean;
+    
     // ─── Two-Step Approval Filters ──────────────────────────────────────────
     internal_approval_status?: InternalApprovalStatus;
     requester_status?: RequesterVisibleStatus;
@@ -596,6 +618,9 @@ export interface PendingInternalApprovalsSummary {
     oldest_pending_days: number;     // Age of oldest pending document
     average_review_time_hours?: number;
     pending_utility_sync: number;    // Documents waiting for utility sync
+    
+    // ─── Department Breakdown ────────────────────────────────────────────────
+    by_department: Record<DocumentDepartment, number>;
 }
 
 /**
@@ -611,6 +636,7 @@ export interface RequesterDocumentView {
     comments?: string;
     entity_type: DocumentEntityType;
     entity_id?: string;
+    department: DocumentDepartment;
     
     // Only show these if status is 'approved' or 'rejected'
     approved_rejected_at?: string;
@@ -681,9 +707,11 @@ export interface DocumentStats {
         pending: number;
         failed: number;
     };
+    // Department stats
+    by_department: Record<DocumentDepartment, number>;
 }
 
-// ─── Find the DocumentSummary interface and update it ──────────────────────
+// ─── Document Summary ──────────────────────────────────────────────────────
 
 export interface DocumentSummary {
     total: number;
@@ -692,7 +720,7 @@ export interface DocumentSummary {
     by_format: Record<DocumentFormat, number>;
     pending_approval: number;
     draft: number;
-    ready_to_send: number;    // ← ADD THIS - missing property
+    ready_to_send: number;
     approved: number;
     rejected: number;
     returned: number;
@@ -717,6 +745,8 @@ export interface DocumentSummary {
         failed: number;
         not_applicable: number;
     };
+    // Department summary
+    by_department: Record<DocumentDepartment, number>;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -740,6 +770,10 @@ export const DOCUMENT_ENTITY_LABELS: Record<DocumentEntityType, string> = {
     aide: 'Aide Request',
     sentry: 'Sentry Request',
     conference: 'Conference Request',
+    // ─── OTHER DEPARTMENT LABELS ─────────────────────────────────────────────
+    principalregistry: 'Principal Registry',
+    procurement: 'Procurement',
+    sensitization: 'Sensitization',
 };
 
 export const DOCUMENT_ENTITY_ICONS: Record<DocumentEntityType, string> = {
@@ -761,6 +795,10 @@ export const DOCUMENT_ENTITY_ICONS: Record<DocumentEntityType, string> = {
     aide: 'Shield',
     sentry: 'Home',
     conference: 'Calendar',
+    // ─── OTHER DEPARTMENT ICONS ──────────────────────────────────────────────
+    principalregistry: 'Building',
+    procurement: 'ShoppingCart',
+    sensitization: 'Users',
 };
 
 export const DOCUMENT_ENTITY_COLORS: Record<DocumentEntityType, string> = {
@@ -782,6 +820,57 @@ export const DOCUMENT_ENTITY_COLORS: Record<DocumentEntityType, string> = {
     aide: 'text-blue-600 bg-blue-50',
     sentry: 'text-emerald-600 bg-emerald-50',
     conference: 'text-purple-600 bg-purple-50',
+    // ─── OTHER DEPARTMENT COLORS ─────────────────────────────────────────────
+    principalregistry: 'text-indigo-600 bg-indigo-50',
+    procurement: 'text-amber-600 bg-amber-50',
+    sensitization: 'text-emerald-600 bg-emerald-50',
+};
+
+// ─── Department Constants ────────────────────────────────────────────────────
+
+export const DEPARTMENT_LABELS: Record<DocumentDepartment, string> = {
+    helpdesk: 'Helpdesk',
+    principalregistry: 'Principal Registry',
+    procurement: 'Procurement',
+};
+
+export const DEPARTMENT_COLORS: Record<DocumentDepartment, string> = {
+    helpdesk: 'bg-blue-50 text-blue-700',
+    principalregistry: 'bg-indigo-50 text-indigo-700',
+    procurement: 'bg-amber-50 text-amber-700',
+};
+
+export const DEPARTMENT_ICONS: Record<DocumentDepartment, string> = {
+    helpdesk: 'LifeBuoy',
+    principalregistry: 'Building',
+    procurement: 'ShoppingCart',
+};
+
+// ─── Entity to Department Mapping ────────────────────────────────────────────
+
+export const ENTITY_TO_DEPARTMENT: Record<DocumentEntityType, DocumentDepartment> = {
+    circuit: 'helpdesk',
+    bench: 'helpdesk',
+    partHeard: 'helpdesk',
+    serviceWeek: 'helpdesk',
+    otherPayment: 'helpdesk',
+    ticket: 'helpdesk',
+    medicalClaim: 'helpdesk',
+    generalRequest: 'helpdesk',
+    securityRequest: 'helpdesk',
+    visa: 'helpdesk',
+    protocol: 'helpdesk',
+    club: 'helpdesk',
+    utility_memo: 'helpdesk',
+    consolidated_utility_memo: 'helpdesk',
+    consolidated_fuel_memo: 'helpdesk',
+    aide: 'helpdesk',
+    sentry: 'helpdesk',
+    conference: 'helpdesk',
+    // ─── OTHER DEPARTMENT MAPPINGS ───────────────────────────────────────────
+    principalregistry: 'principalregistry',
+    procurement: 'procurement',
+    sensitization: 'principalregistry',
 };
 
 // ─── Conference Status Constants ─────────────────────────────────────────────
@@ -975,7 +1064,10 @@ export function isDocumentEntityType(value: string): value is DocumentEntityType
         'consolidated_fuel_memo',
         'aide',
         'sentry',
-        'conference'
+        'conference',
+        'principalregistry',
+        'procurement',
+        'sensitization'
     ].includes(value);
 }
 
@@ -1026,6 +1118,113 @@ export function isUtilityDocument(entityType: DocumentEntityType): boolean {
 
 export function isConsolidatedUtilityDocument(entityType: DocumentEntityType): boolean {
     return ['consolidated_utility_memo', 'consolidated_fuel_memo'].includes(entityType);
+}
+
+export function isDocumentDepartment(value: string): value is DocumentDepartment {
+    return ['helpdesk', 'principalregistry', 'procurement'].includes(value);
+}
+
+// ─── Department Helper Functions ─────────────────────────────────────────────
+
+export function getEntityDepartment(entityType: DocumentEntityType): DocumentDepartment {
+    return ENTITY_TO_DEPARTMENT[entityType] || 'helpdesk';
+}
+
+export function isEntityInDepartment(
+    entityType: DocumentEntityType, 
+    department: DocumentDepartment
+): boolean {
+    return getEntityDepartment(entityType) === department;
+}
+
+export function isHelpdeskEntityType(entityType: DocumentEntityType): boolean {
+    return getEntityDepartment(entityType) === 'helpdesk';
+}
+
+export function isPrincipalRegistryEntityType(entityType: DocumentEntityType): boolean {
+    return getEntityDepartment(entityType) === 'principalregistry';
+}
+
+export function isProcurementEntityType(entityType: DocumentEntityType): boolean {
+    return getEntityDepartment(entityType) === 'procurement';
+}
+
+export function getDepartmentLabel(department: DocumentDepartment): string {
+    return DEPARTMENT_LABELS[department] || department;
+}
+
+export function getDepartmentColor(department: DocumentDepartment): string {
+    return DEPARTMENT_COLORS[department] || '';
+}
+
+export function getDepartmentIcon(department: DocumentDepartment): string {
+    return DEPARTMENT_ICONS[department] || 'File';
+}
+
+export function getEntityDepartmentLabel(entityType: DocumentEntityType): string {
+    const department = getEntityDepartment(entityType);
+    return getDepartmentLabel(department);
+}
+
+// ─── Access Control Helper Functions ─────────────────────────────────────────
+
+/**
+ * Check if a user has access to a document based on their role and department
+ */
+export function hasDocumentAccess(
+    document: HelpdeskDocument,
+    userRole: string,
+    userDepartment: DocumentDepartment
+): boolean {
+    // Super admins have access to everything
+    if (userRole === 'super_admin') {
+        return true;
+    }
+    
+    // Helpdesk team can only access helpdesk documents
+    if (userDepartment === 'helpdesk' && document.department === 'helpdesk') {
+        return true;
+    }
+    
+    // Users can access documents from their own department
+    if (userDepartment === document.department) {
+        return true;
+    }
+    
+    return false;
+}
+
+/**
+ * Get accessible entity types for a user based on their role and department
+ */
+export function getAccessibleEntityTypes(
+    userRole: string,
+    userDepartment: DocumentDepartment
+): DocumentEntityType[] {
+    const allTypes = Object.keys(ENTITY_TO_DEPARTMENT) as DocumentEntityType[];
+    
+    if (userRole === 'super_admin') {
+        return allTypes;
+    }
+    
+    return allTypes.filter(type => 
+        getEntityDepartment(type) === userDepartment
+    );
+}
+
+/**
+ * Check if a user can access a specific entity type
+ */
+export function canAccessEntityType(
+    entityType: DocumentEntityType,
+    userRole: string,
+    userDepartment: DocumentDepartment
+): boolean {
+    if (userRole === 'super_admin') {
+        return true;
+    }
+    
+    return getEntityDepartment(entityType) === userDepartment;
 }
 
 // ─── Conference Helper Functions ─────────────────────────────────────────────
@@ -1442,6 +1641,11 @@ export function buildDocumentFilters(filters: HelpdeskDocumentFilters): Record<s
     if (filters.unlinked !== undefined) result.unlinked = filters.unlinked;
     if (filters.pending_my_approval !== undefined) result.pending_my_approval = filters.pending_my_approval;
     
+    // Department filters
+    if (filters.department) result.department = filters.department;
+    if (filters.exclude_departments) result.exclude_departments = filters.exclude_departments;
+    if (filters.include_helpdesk !== undefined) result.include_helpdesk = filters.include_helpdesk;
+    
     // Two-step approval filters
     if (filters.internal_approval_status) result.internal_approval_status = filters.internal_approval_status;
     if (filters.requester_status) result.requester_status = filters.requester_status;
@@ -1509,8 +1713,8 @@ export function validateDocumentStatusTransition(
 ): boolean {
     const validTransitions: Record<DocumentStatus, DocumentStatus[]> = {
         draft: ['pending_approval', 'returned', 'approved'],
-        pending_approval: ['ready_to_send', 'approved', 'rejected', 'returned', 'draft'],  // ← ADD ready_to_send
-        ready_to_send: ['approved', 'rejected', 'returned'],  // ← ADD THIS
+        pending_approval: ['ready_to_send', 'approved', 'rejected', 'returned', 'draft'],
+        ready_to_send: ['approved', 'rejected', 'returned'],
         approved: ['returned'],
         rejected: ['draft', 'pending_approval'],
         returned: ['draft', 'pending_approval'],
@@ -1522,8 +1726,8 @@ export function validateDocumentStatusTransition(
 export function getAvailableStatusTransitions(currentStatus: DocumentStatus): DocumentStatus[] {
     const transitions: Record<DocumentStatus, DocumentStatus[]> = {
         draft: ['pending_approval'],
-        pending_approval: ['ready_to_send', 'approved', 'rejected', 'returned'],  // ← ADD ready_to_send
-        ready_to_send: ['approved', 'rejected', 'returned'],  // ← ADD THIS
+        pending_approval: ['ready_to_send', 'approved', 'rejected', 'returned'],
+        ready_to_send: ['approved', 'rejected', 'returned'],
         approved: ['returned'],
         rejected: ['draft'],
         returned: ['draft'],
@@ -1535,6 +1739,9 @@ export function getAvailableStatusTransitions(currentStatus: DocumentStatus): Do
 // ─── Database Migration Helpers ─────────────────────────────────────────────
 
 export const TWO_STEP_APPROVAL_TABLE_COLUMNS = `
+    -- Department column
+    department VARCHAR(50) DEFAULT 'helpdesk',
+    
     -- Internal approval tracking (super admin only)
     internal_approval_status VARCHAR(50) DEFAULT 'pending',
     internal_approved_by UUID,

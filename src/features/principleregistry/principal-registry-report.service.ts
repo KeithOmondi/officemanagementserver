@@ -13,6 +13,9 @@ import {
   ReportSubmission,
   PDFReportMetadata,
   PDFGenerationResult,
+  SensitizationInput,
+  SensitizationResponse,
+  SensitizationTeamMember,
 } from './principal-registry-report.types';
 import { CreateReportInput, GeneratePdfInput, ReviewReportInput, UpdateReportInput } from './principal-registry-report.validator';
 
@@ -20,6 +23,8 @@ const TABLE = 'principal_registry_weekly_reports';
 const QUESTIONS_TABLE = 'principal_registry_report_questions';
 const SUBMISSIONS_TABLE = 'principal_registry_report_submissions';
 const PDF_METADATA_TABLE = 'principal_registry_report_pdfs';
+const SENSITIZATION_TABLE = 'principal_registry_sensitizations';
+const SENSITIZATION_TEAM_TABLE = 'principal_registry_sensitization_team';
 
 // ─── Helper Functions ──────────────────────────────────────────────────────────
 
@@ -185,6 +190,30 @@ function mapRowToPdfMetadata(row: any): PDFReportMetadata {
     status: row.status,
     downloadCount: row.download_count,
     lastDownloadedAt: row.last_downloaded_at,
+  };
+}
+
+function mapRowToSensitization(row: any): SensitizationResponse {
+  return {
+    id: row.id,
+    memoNumber: row.memo_number,
+    data: {
+      date: row.date,
+      from: row.from_person,
+      to: row.to_person,
+      subject: row.subject,
+      location: row.location,
+      travelStartDate: row.travel_start_date,
+      travelEndDate: row.travel_end_date,
+      sensitizationPeriod: row.sensitization_period,
+      teamMembers: row.team_members || [],
+      preparedBy: row.prepared_by,
+      title: row.title,
+    },
+    status: row.status,
+    pdfUrl: row.pdf_url,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -687,6 +716,464 @@ class PrincipalRegistryReportServiceImpl {
     if (!report) return false;
     return !!(report.pdfSecureUrl && report.pdfPublicId);
   }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // SENSITIZATION CRUD OPERATIONS
+  // ═══════════════════════════════════════════════════════════════════
+
+/**
+ * Create a new sensitization memo
+ */
+async createSensitization(
+  input: SensitizationInput,
+  createdBy: string
+): Promise<SensitizationResponse> {
+  // Generate memo number: SENS-YYYY-MM-XXX
+  const memoNumber = await this.generateSensitizationMemoNumber();
+
+  // Generate serial numbers for team members
+  const teamMembers = input.teamMembers.map((member, index) => ({
+    ...member,
+    s_no: index + 1,
+  }));
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Insert the sensitization record
+    const query = `
+      INSERT INTO ${SENSITIZATION_TABLE} (
+        memo_number, date, from_person, to_person, subject,
+        location, travel_start_date, travel_end_date, sensitization_period,
+        prepared_by, title, status, created_by
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      RETURNING *;
+    `;
+
+    const values = [
+      memoNumber,
+      normalizeDate(input.date),
+      input.from,
+      input.to,
+      input.subject,
+      input.location,
+      normalizeDate(input.travelStartDate),
+      normalizeDate(input.travelEndDate),
+      input.sensitizationPeriod,
+      input.preparedBy,
+      input.title,
+      'draft',
+      createdBy,
+    ];
+
+    const { rows } = await client.query(query, values);
+    const sensitization = rows[0];
+
+    // Insert team members
+    for (const member of teamMembers) {
+      const teamQuery = `
+        INSERT INTO ${SENSITIZATION_TEAM_TABLE} (
+          sensitization_id, s_no, name, pj_number, rank, days, dsa_rate, total, is_driver
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
+      `;
+
+      await client.query(teamQuery, [
+        sensitization.id,
+        member.s_no,
+        member.name,
+        member.pjNumber,
+        member.rank,
+        member.days,
+        member.dsaRate,
+        member.total,
+        member.isDriver || false,
+      ]);
+    }
+
+    await client.query('COMMIT');
+
+    // Fetch the complete record with team members
+    const result = await this.findSensitizationById(sensitization.id);
+    // Assert non-null since we just created it
+    return result as SensitizationResponse;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+  /**
+   * Generate a unique memo number for sensitization
+   * Format: SENS-YYYY-MM-XXX
+   */
+  private async generateSensitizationMemoNumber(): Promise<string> {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    
+    const { rows } = await pool.query(
+      `SELECT COUNT(*)::int as count FROM ${SENSITIZATION_TABLE} 
+       WHERE EXTRACT(YEAR FROM created_at) = $1 AND EXTRACT(MONTH FROM created_at) = $2`,
+      [year, now.getMonth() + 1]
+    );
+    
+    const count = rows[0].count + 1;
+    const seq = String(count).padStart(3, '0');
+    
+    return `SENS-${year}-${month}-${seq}`;
+  }
+
+  /**
+   * Find a sensitization by ID with team members
+   */
+  async findSensitizationById(id: string): Promise<SensitizationResponse | null> {
+    const { rows } = await pool.query(
+      `SELECT * FROM ${SENSITIZATION_TABLE} WHERE id = $1`,
+      [id]
+    );
+    
+    if (!rows[0]) return null;
+    
+    // Fetch team members
+    const teamRows = await pool.query(
+      `SELECT * FROM ${SENSITIZATION_TEAM_TABLE} 
+       WHERE sensitization_id = $1 
+       ORDER BY s_no ASC`,
+      [id]
+    );
+    
+    const teamMembers: SensitizationTeamMember[] = teamRows.rows.map(row => ({
+      s_no: row.s_no,
+      name: row.name,
+      pjNumber: row.pj_number,
+      rank: row.rank,
+      days: row.days,
+      dsaRate: row.dsa_rate,
+      total: row.total,
+      isDriver: row.is_driver,
+    }));
+    
+    return {
+      id: rows[0].id,
+      memoNumber: rows[0].memo_number,
+      data: {
+        date: rows[0].date,
+        from: rows[0].from_person,
+        to: rows[0].to_person,
+        subject: rows[0].subject,
+        location: rows[0].location,
+        travelStartDate: rows[0].travel_start_date,
+        travelEndDate: rows[0].travel_end_date,
+        sensitizationPeriod: rows[0].sensitization_period,
+        teamMembers,
+        preparedBy: rows[0].prepared_by,
+        title: rows[0].title,
+      },
+      status: rows[0].status,
+      pdfUrl: rows[0].pdf_url,
+      createdAt: rows[0].created_at,
+      updatedAt: rows[0].updated_at,
+    };
+  }
+
+  /**
+   * Get all sensitizations with filtering
+   */
+  async findAllSensitizations(filters: {
+    status?: string;
+    location?: string;
+    page?: number;
+    pageSize?: number;
+  }): Promise<{ items: SensitizationResponse[]; total: number; page: number; pageSize: number }> {
+    const conditions: string[] = [];
+    const values: any[] = [];
+    let idx = 1;
+
+    if (filters.status) {
+      conditions.push(`status = $${idx++}`);
+      values.push(filters.status);
+    }
+    if (filters.location) {
+      conditions.push(`location ILIKE $${idx++}`);
+      values.push(`%${filters.location}%`);
+    }
+
+    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const page = filters.page && filters.page > 0 ? filters.page : 1;
+    const pageSize = filters.pageSize && filters.pageSize > 0 ? filters.pageSize : 20;
+    const offset = (page - 1) * pageSize;
+
+    const dataQuery = `
+      SELECT * FROM ${SENSITIZATION_TABLE} ${whereClause}
+      ORDER BY created_at DESC
+      LIMIT $${idx++} OFFSET $${idx++};
+    `;
+    const countQuery = `SELECT COUNT(*)::int AS total FROM ${SENSITIZATION_TABLE} ${whereClause};`;
+
+    const { rows } = await pool.query(dataQuery, [...values, pageSize, offset]);
+    const { rows: countRows } = await pool.query(countQuery, values);
+
+    // Fetch team members for each sensitization
+    const items: SensitizationResponse[] = [];
+    for (const row of rows) {
+      const teamRows = await pool.query(
+        `SELECT * FROM ${SENSITIZATION_TEAM_TABLE} 
+         WHERE sensitization_id = $1 
+         ORDER BY s_no ASC`,
+        [row.id]
+      );
+      
+      const teamMembers: SensitizationTeamMember[] = teamRows.rows.map(r => ({
+        s_no: r.s_no,
+        name: r.name,
+        pjNumber: r.pj_number,
+        rank: r.rank,
+        days: r.days,
+        dsaRate: r.dsa_rate,
+        total: r.total,
+        isDriver: r.is_driver,
+      }));
+      
+      items.push({
+        id: row.id,
+        memoNumber: row.memo_number,
+        data: {
+          date: row.date,
+          from: row.from_person,
+          to: row.to_person,
+          subject: row.subject,
+          location: row.location,
+          travelStartDate: row.travel_start_date,
+          travelEndDate: row.travel_end_date,
+          sensitizationPeriod: row.sensitization_period,
+          teamMembers,
+          preparedBy: row.prepared_by,
+          title: row.title,
+        },
+        status: row.status,
+        pdfUrl: row.pdf_url,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      });
+    }
+
+    return {
+      items,
+      total: countRows[0].total,
+      page,
+      pageSize,
+    };
+  }
+
+  /**
+   * Update a sensitization
+   */
+  async updateSensitization(
+    id: string,
+    input: Partial<SensitizationInput>
+  ): Promise<SensitizationResponse | null> {
+    const existing = await this.findSensitizationById(id);
+    if (!existing) return null;
+
+    // Can't update if submitted or approved
+    if (existing.status === 'submitted' || existing.status === 'approved') {
+      throw new Error('Cannot update a submitted or approved sensitization');
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const setClauses: string[] = [];
+      const values: any[] = [];
+      let idx = 1;
+
+      // Build update query for main table
+      const fieldMap: Record<string, string> = {
+        date: 'date',
+        from: 'from_person',
+        to: 'to_person',
+        subject: 'subject',
+        location: 'location',
+        travelStartDate: 'travel_start_date',
+        travelEndDate: 'travel_end_date',
+        sensitizationPeriod: 'sensitization_period',
+        preparedBy: 'prepared_by',
+        title: 'title',
+      };
+
+      for (const [key, column] of Object.entries(fieldMap)) {
+        if (key in input) {
+          let val = (input as any)[key];
+          if (key === 'date' || key === 'travelStartDate' || key === 'travelEndDate') {
+            val = normalizeDate(val);
+          }
+          setClauses.push(`${column} = $${idx++}`);
+          values.push(val);
+        }
+      }
+
+      if (setClauses.length > 0) {
+        setClauses.push(`updated_at = NOW()`);
+        values.push(id);
+
+        const query = `
+          UPDATE ${SENSITIZATION_TABLE}
+          SET ${setClauses.join(', ')}
+          WHERE id = $${idx}
+        `;
+        await client.query(query, values);
+      }
+
+      // Update team members if provided
+      if (input.teamMembers) {
+        // Delete existing team members
+        await client.query(
+          `DELETE FROM ${SENSITIZATION_TEAM_TABLE} WHERE sensitization_id = $1`,
+          [id]
+        );
+
+        // Insert new team members
+        for (const member of input.teamMembers) {
+          const teamQuery = `
+            INSERT INTO ${SENSITIZATION_TEAM_TABLE} (
+              sensitization_id, s_no, name, pj_number, rank, days, dsa_rate, total, is_driver
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
+          `;
+
+          await client.query(teamQuery, [
+            id,
+            member.s_no,
+            member.name,
+            member.pjNumber,
+            member.rank,
+            member.days,
+            member.dsaRate,
+            member.total,
+            member.isDriver || false,
+          ]);
+        }
+      }
+
+      await client.query('COMMIT');
+
+      return await this.findSensitizationById(id);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Delete a sensitization
+   */
+  async deleteSensitization(id: string): Promise<boolean> {
+    const existing = await this.findSensitizationById(id);
+    if (!existing) return false;
+
+    // Can't delete if submitted or approved
+    if (existing.status === 'submitted' || existing.status === 'approved') {
+      throw new Error('Cannot delete a submitted or approved sensitization');
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Delete team members first
+      await client.query(
+        `DELETE FROM ${SENSITIZATION_TEAM_TABLE} WHERE sensitization_id = $1`,
+        [id]
+      );
+
+      // Delete sensitization
+      const result = await client.query(
+        `DELETE FROM ${SENSITIZATION_TABLE} WHERE id = $1`,
+        [id]
+      );
+
+      await client.query('COMMIT');
+      return (result.rowCount ?? 0) > 0;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Submit a sensitization for approval
+   */
+  async submitSensitization(id: string): Promise<SensitizationResponse | null> {
+    const existing = await this.findSensitizationById(id);
+    if (!existing) return null;
+
+    if (existing.status === 'submitted' || existing.status === 'approved') {
+      throw new Error('Sensitization is already submitted or approved');
+    }
+
+    const query = `
+      UPDATE ${SENSITIZATION_TABLE}
+      SET status = 'submitted', updated_at = NOW()
+      WHERE id = $1
+      RETURNING *;
+    `;
+
+    await pool.query(query, [id]);
+    return await this.findSensitizationById(id);
+  }
+
+  /**
+   * Approve a sensitization
+   */
+  async approveSensitization(id: string): Promise<SensitizationResponse | null> {
+    const existing = await this.findSensitizationById(id);
+    if (!existing) return null;
+
+    if (existing.status !== 'submitted') {
+      throw new Error('Only submitted sensitizations can be approved');
+    }
+
+    const query = `
+      UPDATE ${SENSITIZATION_TABLE}
+      SET status = 'approved', updated_at = NOW()
+      WHERE id = $1
+      RETURNING *;
+    `;
+
+    await pool.query(query, [id]);
+    return await this.findSensitizationById(id);
+  }
+
+  /**
+   * Reject a sensitization
+   */
+  async rejectSensitization(id: string): Promise<SensitizationResponse | null> {
+    const existing = await this.findSensitizationById(id);
+    if (!existing) return null;
+
+    if (existing.status !== 'submitted') {
+      throw new Error('Only submitted sensitizations can be rejected');
+    }
+
+    const query = `
+      UPDATE ${SENSITIZATION_TABLE}
+      SET status = 'draft', updated_at = NOW()
+      WHERE id = $1
+      RETURNING *;
+    `;
+
+    await pool.query(query, [id]);
+    return await this.findSensitizationById(id);
+  }
+
+
 }
 
 // Exported capitalized, matching the RegistryService.methodName() calling convention.

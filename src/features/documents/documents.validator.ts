@@ -683,6 +683,24 @@ export const addFollowUpCommentSchema = z.object({
     .strict(),
 });
 
+
+// ─── Sign without OTP (Department Head) ──────────────────────────────────────
+
+export const signNoOtpSchema = z.object({
+  params: z.object({
+    id: z.string().uuid('Document ID must be a valid UUID'),
+  }),
+  body: z.object({
+    position_x: z.number().optional(),
+    position_y: z.number().optional(),
+    position_width: z.number().optional(),
+    position_height: z.number().optional(),
+  }),
+});
+
+// ─── Inferred type ─────────────────────────────────────────────────────────
+
+export type SignNoOtpInput = z.infer<typeof signNoOtpSchema>['body'];
 export const followUpFiltersSchema = z.object({
   query: z.object({
     document_id: z.string().uuid('Document ID must be a valid UUID').optional(),

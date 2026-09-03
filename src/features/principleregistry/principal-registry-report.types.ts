@@ -36,6 +36,67 @@ export interface ReportQuestion {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// DOCUMENT TYPE
+// ═══════════════════════════════════════════════════════════════════
+
+export type DocumentType = 'sensitization';
+
+// ═══════════════════════════════════════════════════════════════════
+// SENSITIZATION TYPES (for management/CRUD)
+// ═══════════════════════════════════════════════════════════════════
+
+export interface SensitizationTeamMember {
+  s_no: number;                    // Auto-generated serial number
+  name: string;                    // Full name
+  pjNumber: string;                // PJ Number
+  rank: string;                    // Rank/Designation (DR, JSG 6, JSG 7, etc.)
+  days: number;                    // Number of days
+  dsaRate: number;                 // DSA rate per day
+  total: number;                   // Calculated: days × dsaRate
+  isDriver?: boolean;              // Optional: if it's a pool driver
+}
+
+export interface SensitizationInput {
+  // Memo Header
+  date: string;                    // Date of memo
+  from: string;                    // Deputy Registrar (auto-set)
+  to: string;                      // Registrar High Court (auto-set)
+  subject: string;                 // Subject line
+  
+  // Visit Details
+  location: string;                // Station to visit (e.g., Kakamega)
+  travelStartDate: string;         // Start of travel (e.g., 2026-08-02)
+  travelEndDate: string;           // End of travel (e.g., 2026-08-05)
+  sensitizationPeriod: string;     // Period description (e.g., "August 2026 to 5th August 2026")
+  
+  // Team Members
+  teamMembers: SensitizationTeamMember[];
+  
+  // Footer
+  preparedBy: string;              // Name of person preparing
+  title: string;                   // Title (Deputy Registrar, Principal Registry)
+}
+
+export interface SensitizationResponse {
+  id: string;
+  memoNumber: string;              // Auto-generated memo reference number
+  data: SensitizationInput;
+  status: 'draft' | 'submitted' | 'approved' | 'rejected';
+  pdfUrl?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ─── Sensitization Filters ─────────────────────────────────────────
+
+export interface SensitizationFilters {
+  status?: 'draft' | 'submitted' | 'approved' | 'rejected';
+  location?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // REPORT DATA STRUCTURES (Sections 1-6)
 // ═══════════════════════════════════════════════════════════════════
 

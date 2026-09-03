@@ -268,6 +268,178 @@ export const otherInformationUpdateSchema = z.object({
   signOff: signOffUpdateSchema.optional(),
 });
 
+// ═══════════════════════════════════════════════════════════════════
+// PDF GENERATION OPTIONS SCHEMA (Moved BEFORE Sensitization schemas)
+// ═══════════════════════════════════════════════════════════════════
+
+export const pdfGenerationOptionsSchema = z.object({
+  title: z.string().optional(),
+  showWatermark: z.boolean().optional(),
+  watermarkText: z.string().optional(),
+  includeFooter: z.boolean().optional(),
+  footerText: z.string().optional(),
+  pageSize: z.enum(['A4', 'A3', 'Legal', 'Letter']).optional(),
+  orientation: z.enum(['portrait', 'landscape']).optional(),
+  margin: z.object({
+    top: z.number().optional(),
+    bottom: z.number().optional(),
+    left: z.number().optional(),
+    right: z.number().optional(),
+  }).optional(),
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// DOCUMENT TYPE SCHEMA
+// ═══════════════════════════════════════════════════════════════════
+
+export const documentTypeSchema = z.enum(['sensitization']);
+
+export type DocumentType = z.infer<typeof documentTypeSchema>;
+
+// ═══════════════════════════════════════════════════════════════════
+// SENSITIZATION SCHEMAS
+// ═══════════════════════════════════════════════════════════════════
+
+// Sensitization Team Member Schema
+export const sensitizationTeamMemberSchema = z.object({
+  s_no: z.number().int().nonnegative(),           // Auto-generated serial number
+  name: z.string().min(1, 'Name is required'),    // Full name
+  pjNumber: z.string().min(1, 'PJ Number is required'), // PJ Number
+  rank: z.string().min(1, 'Rank is required'),    // Rank/Designation (DR, JSG 6, JSG 7, etc.)
+  days: z.number().int().positive('Days must be greater than 0'), // Number of days
+  dsaRate: z.number().positive('DSA rate must be greater than 0'), // DSA rate per day
+  total: z.number().nonnegative(),                // Calculated: days × dsaRate
+  isDriver: z.boolean().optional(),               // Optional: if it's a pool driver
+});
+
+// Sensitization Input Schema
+export const sensitizationInputSchema = z
+  .object({
+    // Memo Header
+    date: dateStringSchema,                         // Date of memo
+    from: z.string().min(1, 'From is required'),    // Deputy Registrar (auto-set)
+    to: z.string().min(1, 'To is required'),        // Registrar High Court (auto-set)
+    subject: z.string().min(1, 'Subject is required'), // Subject line
+    
+    // Visit Details
+    location: z.string().min(1, 'Location is required'), // Station to visit (e.g., Kakamega)
+    travelStartDate: dateStringSchema,              // Start of travel (e.g., 2026-08-02)
+    travelEndDate: dateStringSchema,                // End of travel (e.g., 2026-08-05)
+    sensitizationPeriod: z.string().min(1, 'Sensitization period is required'), // Period description
+    
+    // Team Members
+    teamMembers: z.array(sensitizationTeamMemberSchema)
+      .min(1, 'At least one team member is required'),
+    
+    // Footer
+    preparedBy: z.string().min(1, 'Prepared by name is required'), // Name of person preparing
+    title: z.string().min(1, 'Title is required'),   // Title (Deputy Registrar, Principal Registry)
+  })
+  .refine((data) => new Date(data.travelEndDate) >= new Date(data.travelStartDate), {
+    message: 'travelEndDate must be on or after travelStartDate',
+    path: ['travelEndDate'],
+  });
+
+// Sensitization Response Schema
+export const sensitizationResponseSchema = z.object({
+  id: z.string().uuid(),
+  memoNumber: z.string().min(1),
+  data: sensitizationInputSchema,
+  status: z.enum(['draft', 'submitted', 'approved', 'rejected']),
+  pdfUrl: z.string().url().optional(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+
+// Create Sensitization Request Schema
+export const createSensitizationSchema = z.object({
+  body: sensitizationInputSchema,
+});
+
+// Update Sensitization Request Schema - manually create partial schema
+// Since Zod v4 doesn't allow .partial() on schemas with refinements
+export const updateSensitizationSchema = z.object({
+  params: z.object({
+    id: z.string().uuid('Invalid sensitization ID. Must be a valid UUID.'),
+  }),
+  body: z.object({
+    // Memo Header - all optional
+    date: dateStringSchema.optional(),
+    from: z.string().min(1, 'From is required').optional(),
+    to: z.string().min(1, 'To is required').optional(),
+    subject: z.string().min(1, 'Subject is required').optional(),
+    
+    // Visit Details - all optional
+    location: z.string().min(1, 'Location is required').optional(),
+    travelStartDate: dateStringSchema.optional(),
+    travelEndDate: dateStringSchema.optional(),
+    sensitizationPeriod: z.string().min(1, 'Sensitization period is required').optional(),
+    
+    // Team Members - all optional
+    teamMembers: z.array(sensitizationTeamMemberSchema).min(1, 'At least one team member is required').optional(),
+    
+    // Footer - all optional
+    preparedBy: z.string().min(1, 'Prepared by name is required').optional(),
+    title: z.string().min(1, 'Title is required').optional(),
+  })
+  // Only validate date range if both dates are provided
+  .superRefine((data, ctx) => {
+    if (data.travelStartDate && data.travelEndDate) {
+      const start = new Date(data.travelStartDate);
+      const end = new Date(data.travelEndDate);
+      if (end < start) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'travelEndDate must be on or after travelStartDate',
+          path: ['travelEndDate'],
+        });
+      }
+    }
+  }),
+});
+
+// Get Sensitization Request Schema
+export const getSensitizationSchema = z.object({
+  params: z.object({
+    id: z.string().uuid('Invalid sensitization ID. Must be a valid UUID.'),
+  }),
+});
+
+// List Sensitizations Query Schema
+// List Sensitizations Query Schema
+export const listSensitizationsQuerySchema = z.object({
+  status: z.preprocess(
+    (val) => (val === '' ? undefined : val),
+    z.enum(['draft', 'submitted', 'approved', 'rejected']).optional()
+  ),
+  location: optionalStringQuerySchema,
+  page: z.coerce.number().int().positive().optional().default(1),
+  pageSize: z.coerce.number().int().positive().max(100).optional().default(20),
+});
+
+export const listSensitizationsSchema = z.object({
+  query: listSensitizationsQuerySchema,
+});
+
+// Generate Sensitization PDF Request Schema
+export const generateSensitizationPdfSchema = z.object({
+  params: z.object({
+    id: z.string().uuid('Invalid sensitization ID. Must be a valid UUID.'),
+  }),
+  body: z.object({
+    options: pdfGenerationOptionsSchema.optional(),
+  }),
+});
+
+// ─── Inferred Sensitization Types ────────────────────────────────────────────
+
+export type SensitizationTeamMember = z.infer<typeof sensitizationTeamMemberSchema>;
+export type SensitizationInput = z.infer<typeof sensitizationInputSchema>;
+export type SensitizationResponse = z.infer<typeof sensitizationResponseSchema>;
+export type CreateSensitizationInput = z.infer<typeof sensitizationInputSchema>;
+export type UpdateSensitizationInput = z.infer<typeof sensitizationInputSchema>;
+export type ListSensitizationsQuery = z.infer<typeof listSensitizationsQuerySchema>;
+
 // ── Body & Query schemas ──────────────────────────────────────────────────────
 
 const createReportBodySchema = z
@@ -335,29 +507,6 @@ const reviewReportBodySchema = z.object({
   action: z.enum(['approve', 'reject']),
 });
 
-// ─── PDF Generation Schemas ──────────────────────────────────────────────────
-
-const pdfGenerationOptionsSchema = z.object({
-  title: z.string().optional(),
-  showWatermark: z.boolean().optional(),
-  watermarkText: z.string().optional(),
-  includeFooter: z.boolean().optional(),
-  footerText: z.string().optional(),
-  pageSize: z.enum(['A4', 'A3', 'Legal', 'Letter']).optional(),
-  orientation: z.enum(['portrait', 'landscape']).optional(),
-  margin: z.object({
-    top: z.number().optional(),
-    bottom: z.number().optional(),
-    left: z.number().optional(),
-    right: z.number().optional(),
-  }).optional(),
-});
-
-const generatePdfBodySchema = z.object({
-  reportId: z.string().uuid('Report ID must be a valid UUID'),
-  options: pdfGenerationOptionsSchema.optional(),
-});
-
 // ─── ID Schemas ──────────────────────────────────────────────────────────────
 
 const reportIdSchema = z.object({
@@ -411,7 +560,10 @@ export const getQuestionsSchema = z.object({
 // ─── PDF Generation Schemas ──────────────────────────────────────────────────
 
 export const generatePdfSchema = z.object({
-  body: generatePdfBodySchema,
+  body: z.object({
+    reportId: z.string().uuid('Report ID must be a valid UUID'),
+    options: pdfGenerationOptionsSchema.optional(),
+  }),
 });
 
 // ─── Inferred types ────────────────────────────────────────────────────────────
@@ -421,5 +573,5 @@ export type UpdateReportInput = z.infer<typeof updateReportBodySchema>;
 export type ReviewReportInput = z.infer<typeof reviewReportBodySchema>;
 export type ReportListQuery = z.infer<typeof reportListQuerySchema>;
 export type GetQuestionsQuery = z.infer<typeof getQuestionsQuerySchema>;
-export type GeneratePdfInput = z.infer<typeof generatePdfBodySchema>;
+export type GeneratePdfInput = z.infer<typeof generatePdfSchema>['body'];
 export type PdfGenerationOptions = z.infer<typeof pdfGenerationOptionsSchema>;

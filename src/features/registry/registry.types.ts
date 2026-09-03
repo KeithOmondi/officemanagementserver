@@ -16,6 +16,13 @@ export type RegistryStatus =
   | 'active'     // document is currently at this station
   | 'returned';  // document has been returned to the registry
 
+// ── Document Source ──────────────────────────────────────────────────────────
+// NEW: Track where the document originated
+
+export type DocumentSource = 
+  | 'routed'      // Document came through routing (sent from another station)
+  | 'direct';     // Document was uploaded directly to this station
+
 // ── Folder Status ────────────────────────────────────────────────────────────
 
 export type FolderStatus = 'active' | 'archived';
@@ -28,10 +35,21 @@ export type FolderCategory =
   | 'administrative'
   | 'other';
 
+// ── Document File Info ──────────────────────────────────────────────────────
+// NEW: Store file metadata for direct uploads
+
+export interface DocumentFile {
+  file_url: string;
+  file_public_id: string;
+  file_name: string;
+  file_size: number;
+  mime_type: string;
+  uploaded_at: Date;
+}
+
 // ── Registry Entry ───────────────────────────────────────────────────────────
-// One row = one "leg" of a document's journey through the registry.
-// Only one entry per document should have is_active = true at a time —
-// that's the document's current location.
+// One row = one "leg" of a document's journey through the registry OR
+// a direct upload to a station.
 
 export interface RegistryEntry {
   id:               string;
@@ -52,6 +70,11 @@ export interface RegistryEntry {
   received_by_name: string | null;
   is_active:        boolean;
   created_at:       Date;
+  // NEW: Fields for direct uploads
+  source:           DocumentSource;        // 'routed' or 'direct'
+  uploaded_by:      string | null;         // User who uploaded directly
+  uploaded_by_name: string | null;         // Name of uploader
+  file:             DocumentFile | null;   // File metadata if uploaded directly
 }
 
 // ─── Folder Document Entry (for showing folder documents in Registry) ───────
@@ -69,6 +92,11 @@ export interface FolderRegistryEntry {
   folder_name:      string;
   is_folder_document: boolean;  // Flag to distinguish from routed documents
   created_at:       Date;
+  // NEW: File info for folder documents
+  file_url:         string | null;
+  file_name:        string | null;
+  file_size:        number | null;
+  mime_type:        string | null;
 }
 
 // ── Station file counts (for the registry dashboard grid) ───────────────────
@@ -81,6 +109,9 @@ export interface StationWithFileCount {
   location:   string | null;
   is_active:  boolean;
   file_count: number; // count of active (currently-on-record) registry entries
+  // NEW: Separate counts for routed vs direct uploads
+  routed_count?: number;
+  direct_count?: number;
 }
 
 // ── Pagination ────────────────────────────────────────────────────────────────
@@ -160,6 +191,11 @@ export interface FolderDocument {
   file_public_id: string | null;
   created_at: Date;
   added_at: Date;
+  // NEW: Additional file metadata
+  file_name?: string;
+  file_size?: number;
+  mime_type?: string;
+  source?: DocumentSource;
 }
 
 // ── Folder Hierarchy ─────────────────────────────────────────────────────────
@@ -217,6 +253,10 @@ export interface DocumentInFolder {
   file_public_id: string | null;
   created_at: Date;
   added_at: Date;
+  // NEW: Additional metadata
+  file_name?: string;
+  file_size?: number;
+  mime_type?: string;
 }
 
 // ── Bulk Add Documents Result ──────────────────────────────────────────────
@@ -226,6 +266,43 @@ export interface BulkAddDocumentsResult {
   skipped: number;
   errors: string[];
 }
+
+// ── NEW: Direct Document Upload Request ─────────────────────────────────────
+
+export interface DirectDocumentUploadInput {
+  title: string;                // Document title
+  ref_no?: string;              // Optional reference number
+  station_id: string;           // Target station
+  priority?: RegistryPriority;  // Defaults to 'normal'
+  note?: string;                // Optional note
+  file: Express.Multer.File;    // The file to upload
+}
+
+export interface BulkDirectDocumentUploadInput {
+  station_id: string;           // Target station
+  priority?: RegistryPriority;
+  note?: string;
+  files: Express.Multer.File[]; // Multiple files
+}
+
+// ── NEW: Direct Document Upload Response ───────────────────────────────────
+
+export interface DirectDocumentUploadResponse {
+  entry: RegistryEntry;
+  file: DocumentFile;
+}
+
+// ── NEW: Document Source Labels ────────────────────────────────────────────
+
+export const SOURCE_LABELS: Record<DocumentSource, string> = {
+  routed: 'Routed',
+  direct: 'Direct Upload',
+};
+
+export const SOURCE_COLORS: Record<DocumentSource, string> = {
+  routed: 'bg-blue-50 text-blue-700',
+  direct: 'bg-green-50 text-green-700',
+};
 
 // ── Display Labels ───────────────────────────────────────────────────────────
 

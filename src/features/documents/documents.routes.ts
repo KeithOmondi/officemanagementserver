@@ -601,4 +601,8 @@ router.put(
   documentController.updateDocumentFile
 );
 
+// ─── Sign without OTP (Department Head) ──────────────────────────────────────
+
+router.post('/:id/sign-no-otp', requireRole('dept_head'), documentController.signNoOtp);
+
 export default router;

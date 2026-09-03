@@ -25,6 +25,18 @@ const documentEntityEnum = z.enum([
     'aide',
     'sentry',
     'conference',
+    // ─── OTHER DEPARTMENT ENTITY TYPES ──────────────────────────────────────
+    'principalregistry',
+    'procurement',
+    'sensitization',  // ← ADDED: Sensitization documents (Principal Registry)
+]);
+
+// ─── Department Enum ─────────────────────────────────────────────────────────
+
+const departmentEnum = z.enum([
+    'helpdesk',
+    'principalregistry',
+    'procurement',
 ]);
 
 // ─── DIAGNOSTIC: confirm which copy of this module the running server loaded ──
@@ -36,6 +48,9 @@ console.log('[SCHEMA-LOAD] helpdesk.documents.schema.ts', {
     hasConsolidatedUtility: documentEntityEnum.options.includes('consolidated_utility_memo'),
     hasConsolidatedFuel: documentEntityEnum.options.includes('consolidated_fuel_memo'),
     hasConference: documentEntityEnum.options.includes('conference'),
+    hasPrincipalRegistry: documentEntityEnum.options.includes('principalregistry'),
+    hasProcurement: documentEntityEnum.options.includes('procurement'),
+    hasSensitization: documentEntityEnum.options.includes('sensitization'),  // ← ADDED
 });
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -298,6 +313,11 @@ export const listHelpdeskDocumentsSchema = z.object({
         judge_name: z.string().optional(),
         date_from: dateStringSchema.optional(),
         date_to: dateStringSchema.optional(),
+        
+        // ─── Department Filters ──────────────────────────────────────────────
+        department: departmentEnum.optional(),
+        exclude_departments: z.array(departmentEnum).optional(),
+        include_helpdesk: z.string().transform((val) => val === 'true').optional(),
         
         // ─── Two-Step Approval Filters ──────────────────────────────────────────
         internal_approval_status: internalApprovalStatusEnum.optional(),
@@ -631,6 +651,7 @@ export const linkDocumentSchema = z.object({
 export const documentStatsSchema = z.object({
     query: z.object({
         entity_type: documentEntityEnum.optional(),
+        department: departmentEnum.optional(),
         date_from: dateStringSchema.optional(),
         date_to: dateStringSchema.optional(),
     }).optional(),
@@ -1014,6 +1035,7 @@ export const resubmitDocumentSchema = z.object({
 export const pendingInternalApprovalsSchema = z.object({
     query: z.object({
         entity_type: documentEntityEnum.optional(),
+        department: departmentEnum.optional(),
         internal_approval_status: internalApprovalStatusEnum.optional(),
         priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),
         date_from: dateStringSchema.optional(),
@@ -1033,6 +1055,7 @@ export const requesterDashboardSchema = z.object({
     query: z.object({
         requester_status: requesterVisibleStatusEnum.optional(),
         entity_type: documentEntityEnum.optional(),
+        department: departmentEnum.optional(),
         search: z.string().optional(),
         limit: z.string().regex(/^\d+$/).optional().transform(Number),
         offset: z.string().regex(/^\d+$/).optional().transform(Number),
@@ -1047,6 +1070,7 @@ export const requesterDashboardSchema = z.object({
 export const internalApprovalSummarySchema = z.object({
     query: z.object({
         entity_type: documentEntityEnum.optional(),
+        department: departmentEnum.optional(),
     }).optional(),
 });
 
@@ -1114,6 +1138,9 @@ export type RequesterDashboardQuery = z.infer<typeof requesterDashboardSchema>['
 export type UtilitySyncStatus = z.infer<typeof utilitySyncStatusEnum>;
 export type SyncUtilitiesBody = z.infer<typeof syncUtilitiesSchema>['body'];
 
+// Department Type
+export type DocumentDepartment = z.infer<typeof departmentEnum>;
+
 // Stamp Type
 export type StampType = z.infer<typeof stampTypeEnum>;
 
@@ -1138,4 +1165,5 @@ export {
     officerRankEnum,
     unitTypeEnum,
     dateStringSchema,
+    departmentEnum,
 };

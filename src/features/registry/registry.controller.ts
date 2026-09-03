@@ -21,6 +21,13 @@ import {
   folderFiltersSchema,
   searchQuerySchema,
   getStationFolderDocumentsSchema,
+  // NEW: Direct upload schemas
+  directUploadSchema,
+  bulkDirectUploadSchema,
+  uploadDocumentToFolderSchema,
+  updateDocumentMetadataSchema,
+  deleteDocumentSchema,
+  getDocumentDetailsSchema,
 } from './registry.validator';
 import type { 
   CreateFolderInput, 
@@ -29,6 +36,11 @@ import type {
   AddDocumentToFolderInput,
   BulkAddDocumentsInput,
   GetStationFolderDocumentsQuery,
+  DirectUploadInput,
+  BulkDirectUploadInput,
+  UploadDocumentToFolderInput,
+  UpdateDocumentMetadataInput,
+  DeleteDocumentInput,
 } from './registry.validator';
 
 export const registryController = {
@@ -44,6 +56,175 @@ export const registryController = {
     if (!result.success) throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid routing data');
     const entry = await RegistryService.routeFile(result.data.body, req.user!.id);
     return sendSuccess(res, entry, 'Document routed to station successfully', 201);
+  }),
+
+  // ── NEW: Direct Upload Document to Station ──────────────────────────────────
+
+  directUpload: asyncHandler(async (req: Request, res: Response) => {
+    // Validate body
+    const result = directUploadSchema.safeParse({ body: req.body });
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid upload data');
+    }
+
+    // Check if file was uploaded
+    const file = (req as any).file as Express.Multer.File | undefined;
+    if (!file) {
+      throw new AppError(400, 'File is required for upload');
+    }
+
+    // File info should be set by upload middleware
+    const fileInfo = (req as any).fileInfo;
+    if (!fileInfo) {
+      throw new AppError(500, 'File processing failed');
+    }
+
+    const result_data = await RegistryService.directUpload(
+      result.data.body as DirectUploadInput,
+      req.user!.id,
+      fileInfo
+    );
+
+    return sendSuccess(res, result_data, 'Document uploaded successfully', 201);
+  }),
+
+  // ── NEW: Bulk Direct Upload ─────────────────────────────────────────────────
+
+  bulkDirectUpload: asyncHandler(async (req: Request, res: Response) => {
+    // Validate body
+    const result = bulkDirectUploadSchema.safeParse({ body: req.body });
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid upload data');
+    }
+
+    // Check if files were uploaded
+    const files = (req as any).files as Express.Multer.File[] | undefined;
+    if (!files || files.length === 0) {
+      throw new AppError(400, 'At least one file is required for upload');
+    }
+
+    // File info should be set by upload middleware
+    const filesInfo = (req as any).filesInfo;
+    if (!filesInfo || filesInfo.length === 0) {
+      throw new AppError(500, 'File processing failed');
+    }
+
+    const results = await RegistryService.bulkDirectUpload(
+      result.data.body as BulkDirectUploadInput,
+      req.user!.id,
+      filesInfo
+    );
+
+    return sendSuccess(res, results, `${results.length} documents uploaded successfully`, 201);
+  }),
+
+  // ── NEW: Upload Document to Folder ──────────────────────────────────────────
+
+  uploadDocumentToFolder: asyncHandler(async (req: Request, res: Response) => {
+    // Validate params and body
+    const result = uploadDocumentToFolderSchema.safeParse({ 
+      params: req.params, 
+      body: req.body 
+    });
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid data');
+    }
+
+    // Check if file was uploaded
+    const file = (req as any).file as Express.Multer.File | undefined;
+    if (!file) {
+      throw new AppError(400, 'File is required for upload');
+    }
+
+    // File info should be set by upload middleware
+    const fileInfo = (req as any).fileInfo;
+    if (!fileInfo) {
+      throw new AppError(500, 'File processing failed');
+    }
+
+    const result_data = await RegistryService.uploadDocumentToFolder(
+      result.data.params.id,
+      {
+        title: result.data.body.title,
+        ref_no: result.data.body.ref_no,
+        priority: result.data.body.priority,
+        note: result.data.body.note,
+      },
+      req.user!.id,
+      fileInfo
+    );
+
+    return sendSuccess(res, result_data, 'Document uploaded to folder successfully', 201);
+  }),
+
+  // ── NEW: Get Document Details ───────────────────────────────────────────────
+
+  getDocumentDetails: asyncHandler(async (req: Request, res: Response) => {
+    const result = getDocumentDetailsSchema.safeParse({ params: req.params });
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid document ID');
+    }
+
+    const { documentId } = result.data.params;
+    const activeEntry = await RegistryService.getActiveForDocument(documentId);
+    if (!activeEntry) {
+      throw new AppError(404, 'Document not found or not active');
+    }
+
+    const history = await RegistryService.getHistoryForDocument(documentId);
+    
+    return sendSuccess(res, {
+      current: activeEntry,
+      history,
+    }, 'Document details retrieved successfully');
+  }),
+
+  // ── NEW: Update Document Metadata ───────────────────────────────────────────
+
+  updateDocumentMetadata: asyncHandler(async (req: Request, res: Response) => {
+    const result = updateDocumentMetadataSchema.safeParse({ 
+      params: req.params, 
+      body: req.body 
+    });
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid update data');
+    }
+
+    const { documentId } = result.data.params;
+    const entry = await RegistryService.updateDocumentMetadata(
+      documentId,
+      result.data.body as UpdateDocumentMetadataInput,
+      req.user!.id
+    );
+
+    return sendSuccess(res, entry, 'Document metadata updated successfully');
+  }),
+
+  // ── NEW: Delete Document ────────────────────────────────────────────────────
+
+  deleteDocument: asyncHandler(async (req: Request, res: Response) => {
+    const result = deleteDocumentSchema.safeParse({ 
+      params: req.params, 
+      body: req.body 
+    });
+    if (!result.success) {
+      throw new AppError(400, result.error.issues[0]?.message ?? 'Invalid delete data');
+    }
+
+    const { documentId } = result.data.params;
+    const { delete_from_storage } = result.data.body as DeleteDocumentInput;
+
+    const result_data = await RegistryService.deleteDocument(
+      documentId,
+      delete_from_storage ?? false
+    );
+
+    let message = 'Document deleted successfully';
+    if (result_data.filePublicIds && result_data.filePublicIds.length > 0) {
+      message += ` (${result_data.filePublicIds.length} file(s) removed from storage)`;
+    }
+
+    return sendSuccess(res, result_data, message);
   }),
 
   // ── Read ──────────────────────────────────────────────────────────────────────
@@ -73,6 +254,24 @@ export const registryController = {
   getStationCounts: asyncHandler(async (_req: Request, res: Response) => {
     const counts = await RegistryService.getStationFileCounts();
     return sendSuccess(res, counts, 'Station file counts retrieved');
+  }),
+
+  // ── NEW: Get Documents by Source ────────────────────────────────────────────
+
+  getDocumentsBySource: asyncHandler(async (req: Request, res: Response) => {
+    const { source, stationId } = req.query;
+    
+    if (!source || (source !== 'routed' && source !== 'direct')) {
+      throw new AppError(400, 'Source must be "routed" or "direct"');
+    }
+
+    const entries = await RegistryService.getDocumentsBySource(
+      source as 'routed' | 'direct',
+      stationId as string | undefined
+    );
+
+    const label = source === 'routed' ? 'Routed' : 'Direct Upload';
+    return sendSuccess(res, entries, `${label} documents retrieved successfully`);
   }),
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────────
@@ -265,12 +464,13 @@ export const registryController = {
     }
 
     const { stationId } = result.data.params;
-    const { page, limit } = result.data.query;
+    const { page, limit, source } = result.data.query;
 
     const documents = await RegistryService.getStationFolderDocuments(stationId, {
       page,
       limit,
-    } as GetStationFolderDocumentsQuery);
+      source,
+    });
 
     return sendSuccess(res, documents, 'Folder documents for station retrieved successfully');
   }),

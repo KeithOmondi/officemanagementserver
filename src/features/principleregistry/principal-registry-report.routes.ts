@@ -16,6 +16,70 @@ router.get(
   principalRegistryReportController.getQuestions
 );
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  ⚠️ SENSITIZATION ROUTES - MUST COME BEFORE /:id ROUTES
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Sensitization CRUD Operations ──────────────────────────────────────────
+
+// Create a new sensitization
+router.post(
+  '/sensitizations',
+  requireRole('staff', 'dept_head', 'super_admin'),
+  principalRegistryReportController.createSensitization
+);
+
+// Get all sensitizations (with filters)
+router.get(
+  '/sensitizations',
+  requireRole('staff', 'dept_head', 'super_admin', 'viewer'),
+  principalRegistryReportController.getAllSensitizations
+);
+
+// Get a specific sensitization by ID
+router.get(
+  '/sensitizations/:id',
+  requireRole('staff', 'dept_head', 'super_admin', 'viewer'),
+  principalRegistryReportController.getSensitizationById
+);
+
+// Update a sensitization (draft only)
+router.patch(
+  '/sensitizations/:id',
+  requireRole('staff', 'dept_head', 'super_admin'),
+  principalRegistryReportController.updateSensitization
+);
+
+// Delete a sensitization (draft only)
+router.delete(
+  '/sensitizations/:id',
+  requireRole('staff', 'dept_head', 'super_admin'),
+  principalRegistryReportController.deleteSensitization
+);
+
+// ── Sensitization Lifecycle Transitions ─────────────────────────────────────
+
+// Submit a sensitization for approval (draft → submitted)
+router.post(
+  '/sensitizations/:id/submit',
+  requireRole('staff', 'dept_head', 'super_admin'),
+  principalRegistryReportController.submitSensitization
+);
+
+// Approve a sensitization (submitted → approved)
+router.post(
+  '/sensitizations/:id/approve',
+  requireRole('dept_head', 'super_admin'),
+  principalRegistryReportController.approveSensitization
+);
+
+// Reject a sensitization (submitted → draft)
+router.post(
+  '/sensitizations/:id/reject',
+  requireRole('dept_head', 'super_admin'),
+  principalRegistryReportController.rejectSensitization
+);
+
 // ── CRUD Operations ──────────────────────────────────────────────────────────
 
 // Create
@@ -32,6 +96,7 @@ router.get(
   principalRegistryReportController.getAll
 );
 
+// ⚠️ These :id routes must come AFTER the sensitization routes
 router.get(
   '/:id',
   requireRole('staff', 'dept_head', 'super_admin'),

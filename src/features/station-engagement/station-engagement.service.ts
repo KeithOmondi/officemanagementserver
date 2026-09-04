@@ -513,6 +513,10 @@ export class StationEngagementService {
       throw new AppError(400, `Report with status '${existing.status}' cannot be submitted`);
     }
 
+      if (!existing.pdfSecureUrl) {
+    throw new AppError(400, 'Cannot submit report without an attached PDF. Please generate and upload a PDF first.');
+  }
+
     const engagements = existing.engagements || [];
     const unengagedStations = existing.unengaged_stations || [];
 

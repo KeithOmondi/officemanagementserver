@@ -879,94 +879,103 @@ async createSensitization(
     };
   }
 
-  /**
-   * Get all sensitizations with filtering
-   */
-  async findAllSensitizations(filters: {
+// In principal-registry-report.service.ts
+
+/**
+ * Get all sensitizations with filtering - filtered by the authenticated user
+ */
+async findAllSensitizations(
+  filters: {
     status?: string;
     location?: string;
     page?: number;
     pageSize?: number;
-  }): Promise<{ items: SensitizationResponse[]; total: number; page: number; pageSize: number }> {
-    const conditions: string[] = [];
-    const values: any[] = [];
-    let idx = 1;
+  },
+  userId: string // Add userId parameter
+): Promise<{ items: SensitizationResponse[]; total: number; page: number; pageSize: number }> {
+  const conditions: string[] = [];
+  const values: any[] = [];
+  let idx = 1;
 
-    if (filters.status) {
-      conditions.push(`status = $${idx++}`);
-      values.push(filters.status);
-    }
-    if (filters.location) {
-      conditions.push(`location ILIKE $${idx++}`);
-      values.push(`%${filters.location}%`);
-    }
+  // Always filter by the authenticated user
+  conditions.push(`created_by = $${idx++}`);
+  values.push(userId);
 
-    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-    const page = filters.page && filters.page > 0 ? filters.page : 1;
-    const pageSize = filters.pageSize && filters.pageSize > 0 ? filters.pageSize : 20;
-    const offset = (page - 1) * pageSize;
-
-    const dataQuery = `
-      SELECT * FROM ${SENSITIZATION_TABLE} ${whereClause}
-      ORDER BY created_at DESC
-      LIMIT $${idx++} OFFSET $${idx++};
-    `;
-    const countQuery = `SELECT COUNT(*)::int AS total FROM ${SENSITIZATION_TABLE} ${whereClause};`;
-
-    const { rows } = await pool.query(dataQuery, [...values, pageSize, offset]);
-    const { rows: countRows } = await pool.query(countQuery, values);
-
-    // Fetch team members for each sensitization
-    const items: SensitizationResponse[] = [];
-    for (const row of rows) {
-      const teamRows = await pool.query(
-        `SELECT * FROM ${SENSITIZATION_TEAM_TABLE} 
-         WHERE sensitization_id = $1 
-         ORDER BY s_no ASC`,
-        [row.id]
-      );
-      
-      const teamMembers: SensitizationTeamMember[] = teamRows.rows.map(r => ({
-        s_no: r.s_no,
-        name: r.name,
-        pjNumber: r.pj_number,
-        rank: r.rank,
-        days: r.days,
-        dsaRate: r.dsa_rate,
-        total: r.total,
-        isDriver: r.is_driver,
-      }));
-      
-      items.push({
-        id: row.id,
-        memoNumber: row.memo_number,
-        data: {
-          date: row.date,
-          from: row.from_person,
-          to: row.to_person,
-          subject: row.subject,
-          location: row.location,
-          travelStartDate: row.travel_start_date,
-          travelEndDate: row.travel_end_date,
-          sensitizationPeriod: row.sensitization_period,
-          teamMembers,
-          preparedBy: row.prepared_by,
-          title: row.title,
-        },
-        status: row.status,
-        pdfUrl: row.pdf_url,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      });
-    }
-
-    return {
-      items,
-      total: countRows[0].total,
-      page,
-      pageSize,
-    };
+  if (filters.status) {
+    conditions.push(`status = $${idx++}`);
+    values.push(filters.status);
   }
+  if (filters.location) {
+    conditions.push(`location ILIKE $${idx++}`);
+    values.push(`%${filters.location}%`);
+  }
+
+  const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const page = filters.page && filters.page > 0 ? filters.page : 1;
+  const pageSize = filters.pageSize && filters.pageSize > 0 ? filters.pageSize : 20;
+  const offset = (page - 1) * pageSize;
+
+  const dataQuery = `
+    SELECT * FROM ${SENSITIZATION_TABLE} ${whereClause}
+    ORDER BY created_at DESC
+    LIMIT $${idx++} OFFSET $${idx++};
+  `;
+  const countQuery = `SELECT COUNT(*)::int AS total FROM ${SENSITIZATION_TABLE} ${whereClause};`;
+
+  const { rows } = await pool.query(dataQuery, [...values, pageSize, offset]);
+  const { rows: countRows } = await pool.query(countQuery, values);
+
+  // Fetch team members for each sensitization
+  const items: SensitizationResponse[] = [];
+  for (const row of rows) {
+    const teamRows = await pool.query(
+      `SELECT * FROM ${SENSITIZATION_TEAM_TABLE} 
+       WHERE sensitization_id = $1 
+       ORDER BY s_no ASC`,
+      [row.id]
+    );
+    
+    const teamMembers: SensitizationTeamMember[] = teamRows.rows.map(r => ({
+      s_no: r.s_no,
+      name: r.name,
+      pjNumber: r.pj_number,
+      rank: r.rank,
+      days: r.days,
+      dsaRate: r.dsa_rate,
+      total: r.total,
+      isDriver: r.is_driver,
+    }));
+    
+    items.push({
+      id: row.id,
+      memoNumber: row.memo_number,
+      data: {
+        date: row.date,
+        from: row.from_person,
+        to: row.to_person,
+        subject: row.subject,
+        location: row.location,
+        travelStartDate: row.travel_start_date,
+        travelEndDate: row.travel_end_date,
+        sensitizationPeriod: row.sensitization_period,
+        teamMembers,
+        preparedBy: row.prepared_by,
+        title: row.title,
+      },
+      status: row.status,
+      pdfUrl: row.pdf_url,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    });
+  }
+
+  return {
+    items,
+    total: countRows[0].total,
+    page,
+    pageSize,
+  };
+}
 
   /**
    * Update a sensitization

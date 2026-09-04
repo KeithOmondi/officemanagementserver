@@ -327,7 +327,7 @@ export const principalRegistryReportController = {
 
   // ── Get All Sensitizations ──────────────────────────────────────────────────
 
-// principal-registry-report.controller.ts
+// In principal-registry-report.controller.ts
 
 // ── Get All Sensitizations ──────────────────────────────────────────────────
 
@@ -338,12 +338,15 @@ getAllSensitizations: asyncHandler(async (req: Request, res: Response) => {
   }
 
   const query = result.data.query;
-  const sensitizations = await PrincipalRegistryReportService.findAllSensitizations({
-    status: query.status,
-    location: query.location,
-    page: query.page,
-    pageSize: query.pageSize,
-  });
+  const sensitizations = await PrincipalRegistryReportService.findAllSensitizations(
+    {
+      status: query.status,
+      location: query.location,
+      page: query.page,
+      pageSize: query.pageSize,
+    },
+    req.user!.id // Pass the authenticated user ID
+  );
 
   return sendSuccess(res, sensitizations, 'Sensitizations retrieved successfully');
 }),
